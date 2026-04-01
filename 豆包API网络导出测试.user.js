@@ -298,7 +298,8 @@
     }
 
     function extractRecentConversations(respJson) {
-        const direct = respJson?.downlink_body?.pull_recent_conv_downlink_body;
+        const direct = respJson?.downlink_body?.pull_recent_conv_chain_downlink_body
+            || respJson?.downlink_body?.pull_recent_conv_downlink_body;
         const arr = [
             ...(Array.isArray(direct?.conversation_list) ? direct.conversation_list : []),
             ...(Array.isArray(direct?.conversations) ? direct.conversations : []),
@@ -373,6 +374,63 @@
         const errors = [];
         const candidates = getWebTabIdCandidates(baseUrl);
 
+        // 优先按真实抓包体 POST，请求体结构来自页面实际 recent_conv 调用。
+        for (const tabId of candidates) {
+            const url = ensureRecentConvQuery(baseUrl, tabId, keepOriginalQuery);
+            const postBody = {
+                cmd: 3200,
+                uplink_body: {
+                    pull_recent_conv_chain_uplink_body: {
+                        limit: 20,
+                        message_count_per_conv: 10,
+                        api_version: 1,
+                        conv_version: 0,
+                        direction: 3,
+                        option: {
+                            not_need_message: true,
+                            need_complete_conversation: true,
+                            need_coco_conversation: true,
+                            need_coco_bot: true,
+                            need_pc_pin_chain: true,
+                            pc_pin_query_type: 0
+                        }
+                    }
+                },
+                sequence_id: createUuid(),
+                channel: 2,
+                version: '1'
+            };
+
+            const postHeaders = {
+                ...headers,
+                'content-type': 'application/json; encoding=utf-8',
+                'agw-js-conv': 'str'
+            };
+
+            const resp = await fetch(url, {
+                method: 'POST',
+                credentials: 'include',
+                headers: postHeaders,
+                body: JSON.stringify(postBody)
+            });
+
+            const text = await resp.text();
+            const json = safeParseJson(text);
+            if (!resp.ok) {
+                errors.push(`POST(main) ${tabId}: HTTP ${resp.status}`);
+                continue;
+            }
+            if (!json) {
+                errors.push(`POST(main) ${tabId}: non-json`);
+                continue;
+            }
+            if (Number(json.status_code || 0) === 0) {
+                rememberWebTabId(tabId);
+                return { url, rawText: text, json, conversations: extractRecentConversations(json) };
+            }
+            errors.push(`POST(main) ${tabId}: code=${json.status_code}, msg=${json.status_desc || 'unknown'}`);
+        }
+
         for (const tabId of candidates) {
             const url = ensureRecentConvQuery(baseUrl, tabId, keepOriginalQuery);
             const resp = await fetch(url, {
@@ -398,7 +456,7 @@
             errors.push(`GET ${tabId}: code=${json.status_code}, msg=${json.status_desc || 'unknown'}`);
         }
 
-        // 部分账号 recent_conv 可能只接受 POST 形态，增加兜底。
+        // 旧 POST 体兜底（兼容历史结构）。
         for (const tabId of candidates) {
             const url = ensureRecentConvQuery(baseUrl, tabId, keepOriginalQuery);
             const postBody = {
