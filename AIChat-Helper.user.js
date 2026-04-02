@@ -20,7 +20,6 @@
 
     const host = window.location.hostname;
     const pathname = window.location.pathname;
-    const search = window.location.search;
 
     const isChatGPTHost = /(^|\.)chatgpt\.com$/i.test(host);
     const isQwenHost = /^www\.qianwen\.com$/i.test(host);
@@ -28,7 +27,7 @@
     const isDeepSeekHost = /^chat\.deepseek\.com$/i.test(host);
 
     const isChatGPTPath = /^\/c\/[a-z0-9-]+\/?$/i.test(pathname);
-    const isQwenPath = /^\/chat\/[a-f0-9]{32}\/?$/i.test(pathname) && (!search || /^\?ch=[^&]+$/i.test(search));
+    const isQwenPath = /^\/chat\/[a-f0-9]{32}\/?$/i.test(pathname);
     const isDoubaoPath = /^\/chat\/\d+\/?$/i.test(pathname);
     const isDeepSeekPath = /^\/a\/chat\/s\/[0-9a-f-]{36}\/?$/i.test(pathname);
 
@@ -39,6 +38,21 @@
     const AI_NAME = isChatGPT ? 'ChatGPT' : (isDeepSeek ? 'DeepSeek' : (isDoubao ? '豆包' : (isQwen ? '通义千问' : 'AI 助手')));
 
     if (!isChatGPT && !isQwen && !isDoubao && !isDeepSeek) return;
+
+    function getPlatformIconUrl() {
+        const iconEl = document.querySelector('link[rel="icon"], link[rel="shortcut icon"], link[rel="apple-touch-icon"], link[rel*="icon"]');
+        const href = iconEl?.href || iconEl?.getAttribute('href') || '';
+        if (href) {
+            try {
+                return new URL(href, window.location.origin).href;
+            } catch (_) {}
+        }
+        if (isChatGPT) return 'https://chatgpt.com/favicon.ico';
+        if (isQwen) return 'https://www.qianwen.com/favicon.ico';
+        if (isDoubao) return 'https://www.doubao.com/favicon.ico';
+        if (isDeepSeek) return 'https://chat.deepseek.com/favicon.ico';
+        return `${window.location.origin}/favicon.ico`;
+    }
 
     let nodes = [];
     let nodesMap = new Map(); // 用于持久化记录节点，防止虚拟列表回收导致消失
@@ -53,6 +67,13 @@
     let activeNodeId = null; // 存储 ID 而非 DOM 引用，防止重绘后状态失效
     let searchIntervalId = null; // 独立计时器驱动的自动搜寻 ID
     let isNodeSearching = false;
+    const WHEEL_VISIBLE_LIMIT = 10;
+    const WHEEL_FADE_MARGIN = 1;
+    const WHEEL_HIDE_THRESHOLD = 0.55;
+    let wheelScrollOffset = 0;
+    let wheelTargetScrollOffset = 0;
+    let wheelAnimationFrame = 0;
+    let wheelLastInteractionAt = 0;
     let qwenInitUnlockInProgress = false;
     let qwenVirtualNodesCache = [];
     let qwenVirtualNodesSessionId = '';
@@ -388,6 +409,9 @@
             storageKey = `ai-nodes-history-${currentConvId}`;
             isHistoryFullyLoaded = false; // 切换对话时重置加载状态
             activeNodeId = null;
+            stopWheelAnimation();
+            wheelScrollOffset = 0;
+            wheelTargetScrollOffset = 0;
             if (isQwen) {
                 qwenInitUnlockInProgress = false;
                 try {
@@ -431,6 +455,8 @@
     let autoCollapse = localStorage.getItem(COLLAPSE_KEY) === 'true';
     let removeAds = localStorage.getItem(ADS_KEY) === 'true';
     let hideDeepSeekNativeNav = localStorage.getItem(DEEPSEEK_NATIVE_NAV_KEY) === 'true';
+    const TRACK_STYLE_KEY = 'ai-nodes-track-style';
+    let trackStyle = localStorage.getItem(TRACK_STYLE_KEY) === 'wheel' ? 'wheel' : 'line';
 
     const CONFIG = {
         topGap: 80,
@@ -438,10 +464,13 @@
         right: 10,
         panelWidth: 80,
         scrollWidth: 64,
+        wheelPanelWidth: 150,
+        wheelScrollWidth: 132,
         trackWidth: 4,
         dotSize: 11,
         dotBorder: 2,
         dotGap: 36,
+        wheelRightInset: 12,
         maxVisibleDotsBeforeScroll: 12,
         maxTrackViewportRatio: 0.4
     };
@@ -497,6 +526,13 @@
     container.style.paddingTop = '10px';
     if (document.body) document.body.appendChild(container);
 
+    function applyTrackStyleLayout() {
+        const panelWidth = trackStyle === 'wheel' ? CONFIG.wheelPanelWidth : CONFIG.panelWidth;
+        const scrollWidth = trackStyle === 'wheel' ? CONFIG.wheelScrollWidth : CONFIG.scrollWidth;
+        container.style.width = panelWidth + 'px';
+        scrollArea.style.width = scrollWidth + 'px';
+    }
+
     // ===== 滚动条样式优化 =====
     const styleTag = document.createElement('style');
     styleTag.innerHTML = `
@@ -543,6 +579,10 @@
         .ai-dot-session { 
             opacity: 1;
             filter: drop-shadow(0 2px 4px rgba(0,0,0,0.15));
+        }
+        .ai-dot-wheel {
+            opacity: 1;
+            filter: drop-shadow(0 2px 6px rgba(56, 89, 131, 0.18));
         }
         .ai-dot-new-badge {
             position: absolute;
@@ -640,6 +680,17 @@
         container.style.maxHeight = `calc(100vh - ${savedPos.top + CONFIG.bottomGap}px)`;
     }
 
+    function handleWheelTrackScroll(e) {
+        if (trackStyle !== 'wheel' || nodes.length <= 1) return;
+        e.preventDefault();
+        e.stopPropagation();
+        wheelLastInteractionAt = Date.now();
+        const bounds = getWheelScrollBounds(nodes.length);
+        wheelTargetScrollOffset += e.deltaY * 0.0065;
+        wheelTargetScrollOffset = Math.max(bounds.min, Math.min(bounds.max, wheelTargetScrollOffset));
+        runWheelAnimation();
+    }
+
     // ===== 滚动层：只负责垂直滚动，不裁切圆点横向空间 =====
     const scrollArea = document.createElement('div');
     scrollArea.className = 'ai-navigator-scroll';
@@ -654,7 +705,10 @@
     scrollArea.addEventListener('scroll', () => {
         updateFixedScrollIndicator();
     }, { passive: true });
+    container.addEventListener('wheel', handleWheelTrackScroll, { passive: false });
+    scrollArea.addEventListener('wheel', handleWheelTrackScroll, { passive: false });
     container.appendChild(scrollArea);
+    applyTrackStyleLayout();
 
     // ===== 内容层：给轨道和圆点留完整空间 =====
     const content = document.createElement('div');
@@ -662,6 +716,7 @@
     content.style.width = '100%';
     content.style.minHeight = '100%';
     content.style.overflow = 'visible';
+    content.addEventListener('wheel', handleWheelTrackScroll, { passive: false });
     scrollArea.appendChild(content);
 
     // ===== 轨道 =====
@@ -677,6 +732,32 @@
     track.style.boxShadow = 'inset 0 0 1px rgba(255, 255, 255, 0.2)';
     content.appendChild(track);
 
+    const wheelTrackSvg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    wheelTrackSvg.setAttribute('aria-hidden', 'true');
+    wheelTrackSvg.style.position = 'absolute';
+    wheelTrackSvg.style.left = '0';
+    wheelTrackSvg.style.top = '0';
+    wheelTrackSvg.style.width = '100%';
+    wheelTrackSvg.style.height = '100%';
+    wheelTrackSvg.style.overflow = 'visible';
+    wheelTrackSvg.style.pointerEvents = 'none';
+    wheelTrackSvg.style.display = 'none';
+    wheelTrackSvg.addEventListener('wheel', handleWheelTrackScroll, { passive: false });
+    const wheelTrackPath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    wheelTrackPath.setAttribute('fill', 'none');
+    wheelTrackPath.setAttribute('stroke', 'rgba(180, 180, 180, 0.32)');
+    wheelTrackPath.setAttribute('stroke-width', String(CONFIG.trackWidth));
+    wheelTrackPath.setAttribute('stroke-linecap', 'round');
+    wheelTrackPath.setAttribute('filter', 'drop-shadow(0 1px 2px rgba(255,255,255,0.18))');
+    wheelTrackSvg.appendChild(wheelTrackPath);
+    const wheelTrackInnerPath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    wheelTrackInnerPath.setAttribute('fill', 'none');
+    wheelTrackInnerPath.setAttribute('stroke', 'rgba(180, 180, 180, 0.16)');
+    wheelTrackInnerPath.setAttribute('stroke-width', '2');
+    wheelTrackInnerPath.setAttribute('stroke-linecap', 'round');
+    wheelTrackSvg.appendChild(wheelTrackInnerPath);
+    content.appendChild(wheelTrackSvg);
+
     // ===== 节点层：宽于轨道，避免圆点被裁切 =====
     const dotsLayer = document.createElement('div');
     dotsLayer.style.position = 'absolute';
@@ -685,6 +766,7 @@
     dotsLayer.style.width = '100%';
     dotsLayer.style.height = '100%';
     dotsLayer.style.overflow = 'visible';
+    dotsLayer.addEventListener('wheel', handleWheelTrackScroll, { passive: false });
     content.appendChild(dotsLayer);
 
     const fixedScrollRail = document.createElement('div');
@@ -733,6 +815,7 @@
         if (!scrollArea.isConnected) container.appendChild(scrollArea);
         if (!content.isConnected) scrollArea.appendChild(content);
         if (!track.isConnected) content.appendChild(track);
+        if (!wheelTrackSvg.isConnected) content.appendChild(wheelTrackSvg);
         if (!dotsLayer.isConnected) content.appendChild(dotsLayer);
         if (!fixedScrollRail.isConnected) document.body.appendChild(fixedScrollRail);
         if (!fixedScrollThumb.isConnected) document.body.appendChild(fixedScrollThumb);
@@ -741,6 +824,11 @@
 
     function updateFixedScrollIndicator() {
         if (!container.isConnected || !scrollArea.isConnected) {
+            fixedScrollRail.style.opacity = '0';
+            fixedScrollThumb.style.opacity = '0';
+            return;
+        }
+        if (trackStyle === 'wheel') {
             fixedScrollRail.style.opacity = '0';
             fixedScrollThumb.style.opacity = '0';
             return;
@@ -2321,6 +2409,13 @@
 
     function scrollDotIntoView(dot) {
         if (!dot) return;
+        if (trackStyle === 'wheel') {
+            const nodeIndex = nodes.findIndex((n) => n.dot === dot);
+            if (nodeIndex !== -1) {
+                centerWheelNodeByIndex(nodeIndex);
+            }
+            return;
+        }
 
         const areaRect = scrollArea.getBoundingClientRect();
         const dotRect = dot.getBoundingClientRect();
@@ -2330,6 +2425,69 @@
         const delta = dotCenter - areaCenter;
 
         scrollArea.scrollTop += delta;
+    }
+
+    function getWheelScrollBounds(totalCount) {
+        const visibleCount = Math.max(1, Math.min(totalCount, WHEEL_VISIBLE_LIMIT));
+        const centerOffset = (visibleCount - 1) / 2;
+        return {
+            visibleCount,
+            centerOffset,
+            min: -centerOffset,
+            max: Math.max(-centerOffset, (Math.max(0, totalCount - 1)) - centerOffset)
+        };
+    }
+
+    function getWheelRenderMetrics(totalCount) {
+        const visibleCount = Math.max(1, Math.min(totalCount, WHEEL_VISIBLE_LIMIT));
+        const fadeMargin = Math.min(WHEEL_FADE_MARGIN, Math.max(0, visibleCount - 1));
+        const segments = Math.max(1, (visibleCount - 1) + fadeMargin * 2);
+        return { visibleCount, fadeMargin, segments };
+    }
+
+    function stopWheelAnimation() {
+        if (typeof wheelAnimationFrame === 'undefined') return;
+        if (!wheelAnimationFrame) return;
+        cancelAnimationFrame(wheelAnimationFrame);
+        wheelAnimationFrame = 0;
+    }
+
+    function runWheelAnimation() {
+        if (wheelAnimationFrame) return;
+        const tick = () => {
+            wheelScrollOffset += (wheelTargetScrollOffset - wheelScrollOffset) * 0.14;
+            if (Math.abs(wheelTargetScrollOffset - wheelScrollOffset) < 0.001) {
+                wheelScrollOffset = wheelTargetScrollOffset;
+                wheelAnimationFrame = 0;
+                render();
+                return;
+            }
+            render();
+            wheelAnimationFrame = requestAnimationFrame(tick);
+        };
+        wheelAnimationFrame = requestAnimationFrame(tick);
+    }
+
+    function centerWheelNodeByIndex(nodeIndex, immediate = false) {
+        if (trackStyle !== 'wheel' || nodeIndex < 0 || !Number.isFinite(nodeIndex)) return;
+        const bounds = getWheelScrollBounds(nodes.length);
+        const next = Math.max(bounds.min, Math.min(bounds.max, nodeIndex - bounds.centerOffset));
+        if (Math.abs(next - wheelTargetScrollOffset) < 0.001 && Math.abs(next - wheelScrollOffset) < 0.001) return;
+        wheelTargetScrollOffset = next;
+        if (immediate) {
+            stopWheelAnimation();
+            wheelScrollOffset = next;
+            return;
+        }
+        runWheelAnimation();
+    }
+
+    function centerWheelNodeById(nodeId, immediate = false) {
+        if (trackStyle !== 'wheel' || !nodeId) return;
+        const nodeIndex = nodes.findIndex((n) => n.id === nodeId);
+        if (nodeIndex !== -1) {
+            centerWheelNodeByIndex(nodeIndex, immediate);
+        }
     }
 
     function findNearestScrollableAncestor(el) {
@@ -2397,10 +2555,11 @@
         }
     }
 
-    function buildDot(node, topPx) {
+    function buildDot(node, topPx, leftPx = null) {
         const dot = document.createElement('div');
+        const isWheelMode = trackStyle === 'wheel';
         dot.style.position = 'absolute';
-        dot.style.left = '50%';
+        dot.style.left = leftPx == null ? '50%' : (Math.round(leftPx) + 'px');
         dot.style.top = topPx + 'px';
         dot.style.transform = 'translate(-50%, -50%)';
         dot.style.width = CONFIG.dotSize + 'px';
@@ -2413,14 +2572,15 @@
         
         const userColor = 'linear-gradient(135deg, #1E88E5 0%, #1565C0 100%)';
         const aiColor = 'linear-gradient(135deg, #4FC3F7 0%, #03A9F4 100%)';
+        const wheelColor = 'linear-gradient(135deg, #89a3bf 0%, #6e8cab 100%)';
         
-        dot.style.background = node.role === 'user' ? userColor : aiColor;
+        dot.style.background = isWheelMode ? wheelColor : (node.role === 'user' ? userColor : aiColor);
         dot.style.border = `${CONFIG.dotBorder}px solid #fff`;
         dot.style.boxShadow = '0 2px 6px rgba(0, 0, 0, 0.15), inset 0 1px 2px rgba(255, 255, 255, 0.3)';
         dot.style.opacity = '0.5';
         
         // 应用历史/当前状态样式
-        dot.className = `ai-nav-dot ${node.isHistory ? 'ai-dot-history' : 'ai-dot-session'}`;
+        dot.className = `ai-nav-dot ${isWheelMode ? 'ai-dot-wheel' : (node.isHistory ? 'ai-dot-history' : 'ai-dot-session')}`;
         
         // 首次发现提示
         if (!node.isHistory && !node.notified) {
@@ -2509,6 +2669,20 @@
             }
         });
         return dot;
+    }
+
+    function getWheelTrackPoint(t, contentHeight, dotEdgePad, trackWidth = CONFIG.wheelScrollWidth) {
+        const clampedT = Math.max(0, Math.min(1, t));
+        const startY = dotEdgePad + CONFIG.dotSize / 2;
+        const endY = Math.max(startY, contentHeight - dotEdgePad - CONFIG.dotSize / 2);
+        const centerY = (startY + endY) / 2;
+        const radiusY = Math.max(1, (endY - startY) / 2);
+        const centerX = trackWidth - CONFIG.wheelRightInset;
+        const radiusX = Math.max(16, trackWidth - CONFIG.wheelRightInset - CONFIG.dotSize - 34);
+        const theta = -Math.PI / 2 + clampedT * Math.PI;
+        const x = centerX - radiusX * Math.cos(theta);
+        const y = centerY + radiusY * Math.sin(theta);
+        return { x, y, centerX, centerY, radiusX, radiusY, startY, endY };
     }
 
     /**
@@ -2855,6 +3029,7 @@
 
 
     function render() {
+        applyTrackStyleLayout();
         if (!ensureNavigatorMounted()) return;
         if (isQwen && Array.isArray(nodes) && nodes.length) {
             const normalizedNodes = normalizeQwenNodeOrder(nodes);
@@ -2878,6 +3053,9 @@
         if (!nodes.length) {
             track.style.top = '0';
             track.style.height = '0';
+            track.style.display = 'block';
+            wheelTrackSvg.style.display = 'none';
+            wheelTrackInnerPath.setAttribute('d', '');
             content.style.height = '0';
             dotsLayer.style.height = '0';
             scrollArea.style.height = '0';
@@ -2886,19 +3064,43 @@
         }
 
         const dotEdgePad = 24;
-        const requiredHeight = (nodes.length - 1) * CONFIG.dotGap + CONFIG.dotSize + dotEdgePad * 2;
+        const wheelMetrics = getWheelRenderMetrics(nodes.length);
+        const wheelVisibleCount = wheelMetrics.visibleCount;
+        const linearCount = nodes.length;
+        const requiredHeight = ((trackStyle === 'wheel' ? wheelVisibleCount : linearCount) - 1) * CONFIG.dotGap + CONFIG.dotSize + dotEdgePad * 2;
         const maxTrackHeight = Math.floor(window.innerHeight * CONFIG.maxTrackViewportRatio);
         const availableHeight = Math.max(0, window.innerHeight - container.getBoundingClientRect().top - CONFIG.bottomGap - 12);
         const visibleHeight = Math.max(0, Math.min(requiredHeight, maxTrackHeight, availableHeight));
+        const currentTrackWidth = trackStyle === 'wheel' ? CONFIG.wheelScrollWidth : CONFIG.scrollWidth;
+        if (trackStyle === 'wheel') {
+            const bounds = getWheelScrollBounds(nodes.length);
+            wheelTargetScrollOffset = Math.max(bounds.min, Math.min(bounds.max, wheelTargetScrollOffset));
+            wheelScrollOffset = Math.max(bounds.min, Math.min(bounds.max, wheelScrollOffset));
+        } else {
+            stopWheelAnimation();
+        }
 
         let contentHeight = requiredHeight;
-        let topPositions = [];
+        let dotPositions = [];
+        const isWheelScrollable = trackStyle === 'wheel' && nodes.length > WHEEL_VISIBLE_LIMIT;
 
         if (nodes.length <= 1) {
-            topPositions = nodes.length === 1 ? [dotEdgePad + CONFIG.dotSize / 2] : [];
+            if (nodes.length === 1) {
+                if (trackStyle === 'wheel') {
+                    const p = getWheelTrackPoint(0.5, contentHeight, dotEdgePad, currentTrackWidth);
+                    dotPositions = [{ top: p.y, left: p.x }];
+                } else {
+                    dotPositions = [{ top: dotEdgePad + CONFIG.dotSize / 2, left: null }];
+                }
+            }
         } else {
             for (let i = 0; i < nodes.length; i++) {
-                topPositions.push(dotEdgePad + CONFIG.dotSize / 2 + i * CONFIG.dotGap);
+                if (trackStyle === 'wheel') {
+                    const p = getWheelTrackPoint(i / (nodes.length - 1), contentHeight, dotEdgePad, currentTrackWidth);
+                    dotPositions.push({ top: p.y, left: p.x });
+                } else {
+                    dotPositions.push({ top: dotEdgePad + CONFIG.dotSize / 2 + i * CONFIG.dotGap, left: null });
+                }
             }
         }
 
@@ -2906,11 +3108,71 @@
         content.style.height = contentHeight + 'px';
         dotsLayer.style.height = contentHeight + 'px';
 
-        track.style.top = dotEdgePad + 'px';
-        track.style.height = Math.max(0, contentHeight - dotEdgePad * 2) + 'px';
+        if (trackStyle === 'wheel') {
+            scrollArea.style.overflowY = 'hidden';
+            scrollArea.style.overflowX = 'visible';
+            track.style.display = 'none';
+            wheelTrackSvg.style.display = 'block';
+            wheelTrackSvg.setAttribute('viewBox', `0 0 ${currentTrackWidth} ${contentHeight}`);
+            const start = getWheelTrackPoint(0, contentHeight, dotEdgePad, currentTrackWidth);
+            const end = getWheelTrackPoint(1, contentHeight, dotEdgePad, currentTrackWidth);
+            const pathD = `M ${start.centerX} ${start.startY} A ${start.radiusX} ${start.radiusY} 0 0 0 ${end.centerX} ${end.endY}`;
+            const innerRadiusX = Math.max(4, start.radiusX - 7);
+            const innerRadiusY = Math.max(8, start.radiusY - 10);
+            const innerStartX = start.centerX;
+            const innerStartY = start.centerY - innerRadiusY;
+            const innerEndX = start.centerX;
+            const innerEndY = start.centerY + innerRadiusY;
+            const innerPathD = `M ${innerStartX} ${innerStartY} A ${innerRadiusX} ${innerRadiusY} 0 0 0 ${innerEndX} ${innerEndY}`;
+            wheelTrackPath.setAttribute('d', pathD);
+            wheelTrackInnerPath.setAttribute('d', innerPathD);
+        } else {
+            scrollArea.style.overflowY = 'auto';
+            scrollArea.style.overflowX = 'visible';
+            wheelTrackSvg.style.display = 'none';
+            wheelTrackInnerPath.setAttribute('d', '');
+            track.style.display = 'block';
+            track.style.top = dotEdgePad + 'px';
+            track.style.height = Math.max(0, contentHeight - dotEdgePad * 2) + 'px';
+        }
 
         nodes.forEach((node, index) => {
-            const dot = buildDot(node, topPositions[index]);
+            let pos = dotPositions[index] || { top: dotEdgePad + CONFIG.dotSize / 2, left: null };
+            let opacity = 1;
+            let isHidden = false;
+
+            if (trackStyle === 'wheel') {
+                const segments = wheelMetrics.segments;
+                const offsetIdx = wheelMetrics.fadeMargin;
+                const relIndex = index - wheelScrollOffset + offsetIdx;
+                const t = segments <= 0 ? 0.5 : (relIndex / segments);
+
+                if (isWheelScrollable && (relIndex < 0 || relIndex > segments)) {
+                    isHidden = true;
+                } else {
+                    const p = getWheelTrackPoint(t, contentHeight, dotEdgePad, currentTrackWidth);
+                    pos = { top: p.y, left: p.x };
+                }
+
+                if (isWheelScrollable && wheelMetrics.fadeMargin > 0) {
+                    if (relIndex < wheelMetrics.fadeMargin) {
+                        opacity = relIndex / wheelMetrics.fadeMargin;
+                    } else if (relIndex > (segments - wheelMetrics.fadeMargin)) {
+                        opacity = (segments - relIndex) / wheelMetrics.fadeMargin;
+                    }
+                }
+                opacity = Math.max(0, Math.min(1, opacity));
+                if (isWheelScrollable && opacity < WHEEL_HIDE_THRESHOLD) {
+                    isHidden = true;
+                }
+            }
+
+            const dot = buildDot(node, pos.top, pos.left);
+            if (trackStyle === 'wheel') {
+                dot.style.opacity = String(opacity);
+                dot.style.pointerEvents = (isHidden || opacity <= 0.1) ? 'none' : 'auto';
+                dot.style.display = isHidden ? 'none' : 'block';
+            }
             node.dot = dot;
             dotsLayer.appendChild(dot);
             
@@ -3210,7 +3472,11 @@
             const node = getQwenActiveNodeByConversationState(scrollEl);
             if (node && node.id !== activeNodeId) {
                 setActiveDot(node.dot, node.id);
-                scrollDotIntoView(node.dot);
+                if (trackStyle === 'wheel') {
+                    if (Date.now() - wheelLastInteractionAt > 420) centerWheelNodeById(node.id);
+                } else {
+                    scrollDotIntoView(node.dot);
+                }
             }
             return;
         }
@@ -3221,7 +3487,11 @@
             const lastNode = nodes[nodes.length - 1];
             if (lastNode && lastNode.id !== activeNodeId) {
                 setActiveDot(lastNode.dot, lastNode.id);
-                scrollDotIntoView(lastNode.dot);
+                if (trackStyle === 'wheel') {
+                    if (Date.now() - wheelLastInteractionAt > 420) centerWheelNodeById(lastNode.id);
+                } else {
+                    scrollDotIntoView(lastNode.dot);
+                }
             }
             return;
         }
@@ -3247,7 +3517,11 @@
         
         if (bestNode && bestNode.id !== activeNodeId) {
             setActiveDot(bestNode.dot, bestNode.id);
-            scrollDotIntoView(bestNode.dot);
+            if (trackStyle === 'wheel') {
+                if (Date.now() - wheelLastInteractionAt > 420) centerWheelNodeById(bestNode.id);
+            } else {
+                scrollDotIntoView(bestNode.dot);
+            }
         }
     }
 
@@ -3394,14 +3668,28 @@
             transform: translateY(-10px) scale(0.95);
             backdrop-filter: blur(10px);
         `;
+        const platformIconUrl = getPlatformIconUrl();
         popup.innerHTML = `
             <div style="margin-bottom: 12px; border-bottom: 1px solid #eee; padding-bottom: 8px; display:flex; align-items:baseline; gap:6px;">
                 <span style="font-weight:700;font-size:15px;letter-spacing:.2px;color:#0f172a;">AI对话助手</span>
                 <span style="font-weight:500;font-size:12px;color:#64748b;">设置</span>
             </div>
             <div style="display: flex; align-items: center; gap: 8px; font-size: 13px; color: #666;">
-                <span style="font-size:16px;line-height:1;color:#46a758;">●</span>
+                <img src="${escapeHtml(platformIconUrl)}" alt="${escapeHtml(aiName)}" style="width:16px;height:16px;border-radius:4px;display:block;flex-shrink:0;" referrerpolicy="no-referrer">
                 <span>当前 AI 平台: <b>${aiName}</b></span>
+            </div>
+            <div style="margin-top: 12px; padding-top: 8px; border-top: 1px dashed #eee; display: flex; flex-direction: column; gap: 8px;">
+                <div style="font-size: 12px; color: #64748b; font-weight: 600;">轨道样式</div>
+                <div style="display:flex; gap:8px;">
+                    <label style="flex:1; display:flex; align-items:center; justify-content:center; gap:6px; padding:7px 8px; border:1px solid ${trackStyle === 'line' ? '#93c5fd' : '#e5e7eb'}; border-radius:10px; background:${trackStyle === 'line' ? '#eff6ff' : '#fff'}; cursor:pointer; font-size:12px; color:${trackStyle === 'line' ? '#1d4ed8' : '#475569'};">
+                        <input type="radio" name="ai-nodes-track-style" value="line" ${trackStyle === 'line' ? 'checked' : ''} style="margin:0;">
+                        <span>直线</span>
+                    </label>
+                    <label style="flex:1; display:flex; align-items:center; justify-content:center; gap:6px; padding:7px 8px; border:1px solid ${trackStyle === 'wheel' ? '#fdba74' : '#e5e7eb'}; border-radius:10px; background:${trackStyle === 'wheel' ? '#fff7ed' : '#fff'}; cursor:pointer; font-size:12px; color:${trackStyle === 'wheel' ? '#c2410c' : '#475569'};">
+                        <input type="radio" name="ai-nodes-track-style" value="wheel" ${trackStyle === 'wheel' ? 'checked' : ''} style="margin:0;">
+                        <span>轮盘</span>
+                    </label>
+                </div>
             </div>
             ${isQwen ? `
                 <div style="margin-top: 12px; padding-top: 8px; border-top: 1px dashed #eee; display: flex; flex-direction: column; gap: 8px;">
@@ -3426,7 +3714,7 @@
 
             <div style="margin-top: 12px; padding-top: 12px; border-top: 1px dashed #eee; display: flex; flex-direction: column; gap: 8px;">
                 <button id="ai-nodes-clear-refresh" style="width: 100%; border: 1px solid #ff4d4f; background: #fff; color: #ff4d4f; padding: 6px; border-radius: 8px; cursor: pointer; font-size: 12px; font-weight: 500; transition: all 0.2s;">
-                    <span style="margin-right: 4px;">↻</span> 清除节点缓存重新获取
+                    <span style="margin-right: 4px;">↻</span> 重新获取节点
                 </button>
                 
                 <button id="ai-nodes-export-trigger" style="width: 100%; padding: 10px; background: #1E88E5; color: white; border: none; border-radius: 10px; cursor: pointer; font-size: 13px; font-weight: 600; display: flex; align-items: center; justify-content: center; gap: 8px; transition: all 0.2s; box-shadow: 0 4px 10px rgba(30, 136, 229, 0.2);">
@@ -3504,6 +3792,25 @@
 
         // 监听设置项变化
 
+        popup.querySelectorAll('input[name="ai-nodes-track-style"]').forEach((el) => {
+            el.addEventListener('change', (e) => {
+                const nextStyle = e.target.value === 'wheel' ? 'wheel' : 'line';
+                if (trackStyle === nextStyle) return;
+                trackStyle = nextStyle;
+                localStorage.setItem(TRACK_STYLE_KEY, trackStyle);
+                applyTrackStyleLayout();
+                if (trackStyle === 'wheel') {
+                    centerWheelNodeById(activeNodeId, true);
+                } else {
+                    wheelScrollOffset = 0;
+                    wheelTargetScrollOffset = 0;
+                }
+                hidePopup();
+                hideExportMenu();
+                render();
+                updateActiveNodeOnScroll();
+            });
+        });
 
         if (isQwen) {
             popup.querySelector('#ai-nodes-opt-collapse').addEventListener('change', (e) => {
@@ -3551,6 +3858,9 @@
                 nodes = [];
                 lastCount = 0;
                 activeNodeId = null;
+                stopWheelAnimation();
+                wheelScrollOffset = 0;
+                wheelTargetScrollOffset = 0;
                 localStorage.removeItem(storageKey);
                 if (isQwen) {
                     qwenVirtualNodesCache = [];
