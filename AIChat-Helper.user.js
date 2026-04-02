@@ -66,8 +66,10 @@
     let deepseekVirtualNodesLoaded = false;
     let deepseekVirtualNodesLastFetchAt = 0;
     let deepseekCapturedHeaders = null;
+    let deepseekPageListTemplate = null;
     let deepseekCaptureHooksInstalled = false;
     let deepseekLastSessionMeta = null;
+    const DEEPSEEK_PAGE_LIST_PATH = '/api/v0/chat_session/fetch_page';
     const DEEPSEEK_HISTORY_PATH = '/api/v0/chat/history_messages';
     const QWEN_NODE_DEBUG = true;
 
@@ -314,6 +316,7 @@
                 deepseekVirtualNodesCache = [];
                 deepseekVirtualNodesLoaded = false;
                 deepseekVirtualNodesLastFetchAt = 0;
+                deepseekPageListTemplate = null;
                 deepseekLastSessionMeta = null;
             }
             return true;
@@ -854,6 +857,15 @@
         }
     }
 
+    function isDeepSeekPageListUrl(rawUrl) {
+        try {
+            const u = new URL(rawUrl, window.location.origin);
+            return u.pathname.includes(DEEPSEEK_PAGE_LIST_PATH);
+        } catch (e) {
+            return false;
+        }
+    }
+
     function isLikelyUuid(str) {
         return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(str || '').trim());
     }
@@ -915,11 +927,18 @@
             try {
                 const inputUrl = typeof input === 'string' ? input : input?.url;
                 const url = inputUrl ? new URL(inputUrl, window.location.origin).toString() : '';
-                if (url && isDeepSeekHistoryUrl(url)) {
-                    deepseekCapturedHeaders = sanitizeDeepSeekHeaders({
+                if (url && (isDeepSeekHistoryUrl(url) || isDeepSeekPageListUrl(url))) {
+                    const mergedHeaders = sanitizeDeepSeekHeaders({
                         ...parseDeepSeekHeaders(input?.headers),
                         ...parseDeepSeekHeaders(init?.headers)
                     });
+                    deepseekCapturedHeaders = mergedHeaders;
+                    if (isDeepSeekPageListUrl(url)) {
+                        deepseekPageListTemplate = {
+                            url,
+                            headers: mergedHeaders
+                        };
+                    }
                 }
             } catch (e) {
                 // ignore
@@ -950,8 +969,15 @@
 
         XMLHttpRequest.prototype.send = function () {
             try {
-                if (this.__aiNodesDeepSeekUrl && isDeepSeekHistoryUrl(this.__aiNodesDeepSeekUrl)) {
-                    deepseekCapturedHeaders = sanitizeDeepSeekHeaders(this.__aiNodesDeepSeekHeaders || {});
+                if (this.__aiNodesDeepSeekUrl && (isDeepSeekHistoryUrl(this.__aiNodesDeepSeekUrl) || isDeepSeekPageListUrl(this.__aiNodesDeepSeekUrl))) {
+                    const mergedHeaders = sanitizeDeepSeekHeaders(this.__aiNodesDeepSeekHeaders || {});
+                    deepseekCapturedHeaders = mergedHeaders;
+                    if (isDeepSeekPageListUrl(this.__aiNodesDeepSeekUrl)) {
+                        deepseekPageListTemplate = {
+                            url: String(this.__aiNodesDeepSeekUrl || ''),
+                            headers: mergedHeaders
+                        };
+                    }
                 }
             } catch (e) {
                 // ignore
@@ -1099,6 +1125,7 @@
                 if (!clean) return;
                 out.push({
                     id: fragmentId ? `${msgId}-${fragmentType}-${fragmentId}` : `${msgId}-${fragmentType}`,
+                    sourceMessageId: msgId,
                     role,
                     text: clean,
                     status,
@@ -1160,6 +1187,18 @@
                         return;
                     }
 
+                    if (
+                        fragmentType === 'TIP'
+                        || fragmentType.startsWith('TOOL_')
+                        || fragmentType.includes('TOOL')
+                        || fragmentType.includes('PLUGIN')
+                        || fragmentType.includes('FUNCTION')
+                        || fragmentType.includes('STATUS')
+                    ) {
+                        // DeepSeek 深度搜索会把工具调用轨迹、提示语等混在 fragments 中，这些不应作为独立消息导出
+                        return;
+                    }
+
                     const bucket = [];
                     extractDeepSeekText(frag, bucket);
                     const fallbackText = Array.from(new Set(bucket.map((s) => String(s || '').trim()).filter(Boolean))).join('\n\n').trim();
@@ -1182,6 +1221,126 @@
                 isThought: false,
                 isSearch: false
             });
+        });
+
+        return out;
+    }
+
+    function aggregateDeepSeekMessagesForExport(messages) {
+        const input = Array.isArray(messages) ? messages : [];
+        const groups = [];
+        const seenKeys = new Map();
+
+        input.forEach((msg, idx) => {
+            if (!msg || !msg.text) return;
+            const role = String(msg.role || 'assistant');
+            const sourceMessageId = String(msg.sourceMessageId || msg.id || idx + 1);
+            const key = `${sourceMessageId}:${role}`;
+            let group = seenKeys.get(key);
+            if (!group) {
+                group = {
+                    key,
+                    sourceMessageId,
+                    role,
+                    status: String(msg.status || ''),
+                    userParts: [],
+                    thoughtParts: [],
+                    responseParts: [],
+                    fallbackParts: []
+                };
+                seenKeys.set(key, group);
+                groups.push(group);
+            }
+
+            const text = String(msg.text || '').trim();
+            if (!text) return;
+
+            if (role === 'user') {
+                group.userParts.push(text);
+                return;
+            }
+
+            const fragmentType = String(msg.fragmentType || '').toUpperCase();
+            if (msg.isSearch || fragmentType === 'SEARCH') {
+                return;
+            }
+            if (msg.isThought || fragmentType === 'THINK') {
+                group.thoughtParts.push(text);
+                return;
+            }
+            if (!fragmentType || fragmentType === 'RESPONSE' || fragmentType === 'MESSAGE') {
+                group.responseParts.push(text);
+                return;
+            }
+            if (
+                fragmentType.includes('TOOL')
+                || fragmentType.includes('FUNCTION')
+                || fragmentType.includes('PLUGIN')
+                || fragmentType.includes('STATUS')
+                || fragmentType.includes('FINISHED')
+                || fragmentType.includes('OPEN')
+            ) {
+                return;
+            }
+            group.fallbackParts.push(text);
+        });
+
+        const out = [];
+
+        groups.forEach((group, idx) => {
+            if (group.role === 'user') {
+                const text = Array.from(new Set(group.userParts.filter(Boolean))).join('\n\n').trim();
+                if (!text) return;
+                out.push({
+                    id: `deepseek-export-${group.sourceMessageId || idx + 1}`,
+                    sourceMessageId: group.sourceMessageId,
+                    role: 'user',
+                    text,
+                    status: group.status,
+                    fragmentType: 'REQUEST',
+                    isThought: false,
+                    isSearch: false,
+                    hasThought: false,
+                    textWithoutThought: text
+                });
+                return;
+            }
+
+            const thoughtText = Array.from(new Set(group.thoughtParts.filter(Boolean))).join('\n\n').trim();
+            const responseText = Array.from(new Set(group.responseParts.filter(Boolean))).join('\n\n').trim();
+            const fallbackText = Array.from(new Set(group.fallbackParts.filter(Boolean))).join('\n\n').trim();
+            if (thoughtText) {
+                out.push({
+                    id: `deepseek-export-${group.sourceMessageId || idx + 1}-think`,
+                    sourceMessageId: group.sourceMessageId,
+                    role: 'assistant',
+                    text: thoughtText,
+                    fullText: thoughtText,
+                    status: group.status,
+                    fragmentType: 'THINK',
+                    isThought: true,
+                    isSearch: false,
+                    hasThought: true,
+                    textWithoutThought: ''
+                });
+            }
+
+            const finalText = responseText || fallbackText;
+            if (finalText) {
+                out.push({
+                    id: `deepseek-export-${group.sourceMessageId || idx + 1}-response`,
+                    sourceMessageId: group.sourceMessageId,
+                    role: 'assistant',
+                    text: finalText,
+                    fullText: finalText,
+                    status: group.status,
+                    fragmentType: responseText ? 'RESPONSE' : 'MESSAGE',
+                    isThought: false,
+                    isSearch: false,
+                    hasThought: Boolean(thoughtText),
+                    textWithoutThought: finalText
+                });
+            }
         });
 
         return out;
@@ -3162,8 +3321,8 @@
                     <svg viewBox="9 7 6 10" fill="none" xmlns="http://www.w3.org/2000/svg" style="width:10px;height:10px;flex:none;"><path d="M10 16L14 12L10 8" stroke="#ffffff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path></svg>
                     <span>导出当前对话</span>
                 </button>
-                <button id="ai-nodes-export-batch" style="width:152px;padding:8px 10px;background:${(isDoubao || isQwen) ? '#0f766e' : '#f3f4f6'};color:${(isDoubao || isQwen) ? '#fff' : '#6b7280'};border:${(isDoubao || isQwen) ? 'none' : '1px solid #e5e7eb'};border-radius:9px;cursor:pointer;font-size:12px;font-weight:600;display:flex;align-items:center;justify-content:center;gap:4px;">
-                    <svg viewBox="9 7 6 10" fill="none" xmlns="http://www.w3.org/2000/svg" style="width:10px;height:10px;flex:none;"><path d="M10 16L14 12L10 8" stroke="${(isDoubao || isQwen) ? '#ffffff' : '#6b7280'}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+                <button id="ai-nodes-export-batch" style="width:152px;padding:8px 10px;background:${(isDoubao || isQwen || isDeepSeek) ? '#0f766e' : '#f3f4f6'};color:${(isDoubao || isQwen || isDeepSeek) ? '#fff' : '#6b7280'};border:${(isDoubao || isQwen || isDeepSeek) ? 'none' : '1px solid #e5e7eb'};border-radius:9px;cursor:pointer;font-size:12px;font-weight:600;display:flex;align-items:center;justify-content:center;gap:4px;">
+                    <svg viewBox="9 7 6 10" fill="none" xmlns="http://www.w3.org/2000/svg" style="width:10px;height:10px;flex:none;"><path d="M10 16L14 12L10 8" stroke="${(isDoubao || isQwen || isDeepSeek) ? '#ffffff' : '#6b7280'}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path></svg>
                     <span>批量导出对话</span>
                 </button>
             </div>
@@ -3314,7 +3473,7 @@
         if (exportBatchBtn) {
             exportBatchBtn.onclick = (e) => {
                 e.stopPropagation();
-                if (!isDoubao && !isQwen) {
+                if (!isDoubao && !isQwen && !isDeepSeek) {
                     alert(`${aiName} 暂未实现该功能`);
                     return;
                 }
@@ -3322,6 +3481,7 @@
                 hideExportMenu();
                 if (isDoubao) openDoubaoBatchExportModal();
                 else if (isQwen) openQwenBatchExportModal();
+                else if (isDeepSeek) openDeepSeekBatchExportModal();
             };
         }
 
@@ -3355,6 +3515,258 @@
                 .replace(/&/g, '&amp;')
                 .replace(/</g, '&lt;')
                 .replace(/>/g, '&gt;');
+        }
+
+        const ZIP_TEXT_ENCODER = new TextEncoder();
+        const ZIP_CRC32_TABLE = (() => {
+            const table = new Uint32Array(256);
+            for (let i = 0; i < 256; i += 1) {
+                let c = i;
+                for (let j = 0; j < 8; j += 1) {
+                    c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+                }
+                table[i] = c >>> 0;
+            }
+            return table;
+        })();
+
+        function crc32(bytes) {
+            let crc = 0xFFFFFFFF;
+            for (let i = 0; i < bytes.length; i += 1) {
+                crc = ZIP_CRC32_TABLE[(crc ^ bytes[i]) & 0xFF] ^ (crc >>> 8);
+            }
+            return (crc ^ 0xFFFFFFFF) >>> 0;
+        }
+
+        function getDosDateTime(date = new Date()) {
+            const year = Math.max(1980, date.getFullYear());
+            const dosTime = ((date.getHours() & 0x1F) << 11)
+                | ((date.getMinutes() & 0x3F) << 5)
+                | Math.floor(date.getSeconds() / 2);
+            const dosDate = (((year - 1980) & 0x7F) << 9)
+                | (((date.getMonth() + 1) & 0x0F) << 5)
+                | (date.getDate() & 0x1F);
+            return { dosTime, dosDate };
+        }
+
+        function createZipBlob(entries) {
+            const localParts = [];
+            const centralParts = [];
+            let offset = 0;
+
+            entries.forEach((entry) => {
+                const fileNameBytes = ZIP_TEXT_ENCODER.encode(String(entry.name || 'file.txt'));
+                const dataBytes = entry.data instanceof Uint8Array
+                    ? entry.data
+                    : ZIP_TEXT_ENCODER.encode(String(entry.data || ''));
+                const fileDate = entry.date instanceof Date ? entry.date : new Date();
+                const { dosTime, dosDate } = getDosDateTime(fileDate);
+                const checksum = crc32(dataBytes);
+
+                const localHeader = new Uint8Array(30 + fileNameBytes.length);
+                const localView = new DataView(localHeader.buffer);
+                localView.setUint32(0, 0x04034b50, true);
+                localView.setUint16(4, 20, true);
+                localView.setUint16(6, 0x0800, true);
+                localView.setUint16(8, 0, true);
+                localView.setUint16(10, dosTime, true);
+                localView.setUint16(12, dosDate, true);
+                localView.setUint32(14, checksum, true);
+                localView.setUint32(18, dataBytes.length, true);
+                localView.setUint32(22, dataBytes.length, true);
+                localView.setUint16(26, fileNameBytes.length, true);
+                localView.setUint16(28, 0, true);
+                localHeader.set(fileNameBytes, 30);
+
+                const centralHeader = new Uint8Array(46 + fileNameBytes.length);
+                const centralView = new DataView(centralHeader.buffer);
+                centralView.setUint32(0, 0x02014b50, true);
+                centralView.setUint16(4, 20, true);
+                centralView.setUint16(6, 20, true);
+                centralView.setUint16(8, 0x0800, true);
+                centralView.setUint16(10, 0, true);
+                centralView.setUint16(12, dosTime, true);
+                centralView.setUint16(14, dosDate, true);
+                centralView.setUint32(16, checksum, true);
+                centralView.setUint32(20, dataBytes.length, true);
+                centralView.setUint32(24, dataBytes.length, true);
+                centralView.setUint16(28, fileNameBytes.length, true);
+                centralView.setUint16(30, 0, true);
+                centralView.setUint16(32, 0, true);
+                centralView.setUint16(34, 0, true);
+                centralView.setUint16(36, 0, true);
+                centralView.setUint32(38, 0, true);
+                centralView.setUint32(42, offset, true);
+                centralHeader.set(fileNameBytes, 46);
+
+                localParts.push(localHeader, dataBytes);
+                centralParts.push(centralHeader);
+                offset += localHeader.length + dataBytes.length;
+            });
+
+            const centralSize = centralParts.reduce((sum, part) => sum + part.length, 0);
+            const endRecord = new Uint8Array(22);
+            const endView = new DataView(endRecord.buffer);
+            endView.setUint32(0, 0x06054b50, true);
+            endView.setUint16(4, 0, true);
+            endView.setUint16(6, 0, true);
+            endView.setUint16(8, entries.length, true);
+            endView.setUint16(10, entries.length, true);
+            endView.setUint32(12, centralSize, true);
+            endView.setUint32(16, offset, true);
+            endView.setUint16(20, 0, true);
+
+            return new Blob([...localParts, ...centralParts, endRecord], { type: 'application/zip' });
+        }
+
+        function downloadBlob(blob, filename) {
+            const a = document.createElement('a');
+            const href = URL.createObjectURL(blob);
+            a.href = href;
+            a.download = filename;
+            a.click();
+            setTimeout(() => URL.revokeObjectURL(href), 0);
+        }
+
+        function sanitizeExportFileName(name, fallback = '会话') {
+            const cleaned = String(name || '')
+                .replace(/[\\/:*?"<>|]/g, ' ')
+                .replace(/[\u0000-\u001F]/g, ' ')
+                .replace(/\s+/g, ' ')
+                .trim()
+                .replace(/[. ]+$/g, '');
+            return (cleaned || fallback).slice(0, 80);
+        }
+
+        function getUniqueBatchFileName(baseName, extension, usedNames) {
+            const safeBase = sanitizeExportFileName(baseName);
+            const normalizedExt = String(extension || '').replace(/^\./, '');
+            let candidate = `${safeBase}.${normalizedExt}`;
+            let index = 2;
+            while (usedNames.has(candidate)) {
+                candidate = `${safeBase} (${index}).${normalizedExt}`;
+                index += 1;
+            }
+            usedNames.add(candidate);
+            return candidate;
+        }
+
+        function buildBatchConversationJson(platform, conversation) {
+            return JSON.stringify({
+                platform,
+                exportedAt: new Date().toISOString(),
+                conversationId: conversation.conversationId || '',
+                title: conversation.title || '',
+                updatedAt: conversation.updatedAtText || '',
+                messageCount: Number(conversation.messageCount || 0),
+                messages: Array.isArray(conversation.messages)
+                    ? conversation.messages.map((m) => ({
+                        role: m.role,
+                        text: getDisplayTextForExport(m.text || '')
+                    }))
+                    : []
+            }, null, 2);
+        }
+
+        function buildBatchConversationMarkdown(conversation, assistantLabel) {
+            const header = `# ${conversation.title || `会话 ${conversation.conversationId || '-'}`}\n\n- 会话ID: ${conversation.conversationId || '-'}\n- 更新时间: ${conversation.updatedAtText || '-'}\n- 消息数: ${conversation.messageCount || 0}`;
+            const body = (Array.isArray(conversation.messages) ? conversation.messages : []).map((m, idx) => `\n## ${idx + 1}. ${m.role === 'user' ? '用户' : assistantLabel}\n\n${getDisplayTextForExport(m.text || '')}\n`).join('\n');
+            return `${header}\n${body}`.trim();
+        }
+
+        function buildBatchConversationText(conversation, assistantLabel) {
+            const header = `${conversation.title || `会话 ${conversation.conversationId || '-'}`}\n会话ID: ${conversation.conversationId || '-'}\n更新时间: ${conversation.updatedAtText || '-'}\n消息数: ${conversation.messageCount || 0}`;
+            const body = (Array.isArray(conversation.messages) ? conversation.messages : []).map((m, idx) => `\n[${idx + 1}] ${m.role === 'user' ? '用户' : assistantLabel}\n${getDisplayTextForExport(m.text || '')}`).join('\n');
+            return `${header}\n${body}`.trim();
+        }
+
+        function buildBatchConversationPrintableHtml(platform, conversation, assistantLabel) {
+            const renderText = (txt) => escapeHtml(getDisplayTextForExport(txt || '')).replace(/\n/g, '<br>');
+            const rows = (Array.isArray(conversation.messages) ? conversation.messages : []).map((m, idx) => `
+                <div class="msg">
+                    <div class="role">${idx + 1}. ${m.role === 'user' ? '用户' : assistantLabel}</div>
+                    <div class="text">${renderText(m.text || '')}</div>
+                </div>
+            `).join('');
+            return `
+                <html>
+                <head>
+                    <meta charset="utf-8">
+                    <title>${escapeHtml(conversation.title || `会话 ${conversation.conversationId || '-'}`)}</title>
+                    <style>
+                        @page { size: A4; margin: 14mm; }
+                        body { font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; color:#0f172a; margin:0; padding:0; }
+                        .head { margin-bottom: 14px; border-bottom: 2px solid #1d4ed8; padding-bottom: 8px; }
+                        .platform { font-size: 12px; color: #64748b; margin-bottom: 6px; }
+                        .title { font-size: 18px; font-weight: 700; }
+                        .meta { margin-top: 6px; color: #475569; font-size: 12px; line-height: 1.6; }
+                        .msg { border: 1px solid #e2e8f0; border-radius: 10px; padding: 10px 12px; margin: 10px 0; }
+                        .role { font-size: 12px; font-weight: 700; color: #1e40af; margin-bottom: 6px; }
+                        .text { font-size: 13px; line-height: 1.7; white-space: normal; word-break: break-word; }
+                    </style>
+                </head>
+                <body>
+                    <section class="conv">
+                        <div class="head">
+                            <div class="platform">${escapeHtml(platform)} 批量导出</div>
+                            <div class="title">${escapeHtml(conversation.title || `会话 ${conversation.conversationId || '-'}`)}</div>
+                            <div class="meta">
+                                会话ID: ${escapeHtml(conversation.conversationId || '-')}<br>
+                                更新时间: ${escapeHtml(conversation.updatedAtText || '-')}<br>
+                                消息数: ${escapeHtml(String(conversation.messageCount || 0))}
+                            </div>
+                        </div>
+                        ${rows || '<div class="meta">该会话暂无可导出的消息内容。</div>'}
+                    </section>
+                </body>
+                </html>
+            `.trim();
+        }
+
+        async function exportBatchConversationsAsZip(platform, conversations, format, assistantLabel) {
+            const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '_');
+            const usedNames = new Set();
+            const entries = [];
+
+            conversations.forEach((conversation, index) => {
+                const titleBase = conversation.title || `会话 ${conversation.conversationId || index + 1}`;
+                if (format === 'json') {
+                    entries.push({
+                        name: getUniqueBatchFileName(titleBase, 'json', usedNames),
+                        data: buildBatchConversationJson(platform, conversation)
+                    });
+                    return;
+                }
+                if (format === 'md') {
+                    entries.push({
+                        name: getUniqueBatchFileName(titleBase, 'md', usedNames),
+                        data: buildBatchConversationMarkdown(conversation, assistantLabel)
+                    });
+                    return;
+                }
+                if (format === 'pdf') {
+                    entries.push({
+                        name: getUniqueBatchFileName(titleBase, 'html', usedNames),
+                        data: buildBatchConversationPrintableHtml(platform, conversation, assistantLabel)
+                    });
+                    return;
+                }
+                entries.push({
+                    name: getUniqueBatchFileName(titleBase, 'txt', usedNames),
+                    data: buildBatchConversationText(conversation, assistantLabel)
+                });
+            });
+
+            if (format === 'pdf') {
+                entries.push({
+                    name: 'README.txt',
+                    data: '已按单会话导出为可打印 HTML 文件。浏览器原生环境下无法稳定批量直接生成多个 PDF，请解压后分别打开 HTML 文件再打印为 PDF。'
+                });
+            }
+
+            const zipBlob = createZipBlob(entries);
+            const suffix = format === 'pdf' ? 'html' : format;
+            downloadBlob(zipBlob, `${platform}_批量导出_${suffix}_${stamp}.zip`);
         }
 
         function chatMarkdownToHtml(mdText) {
@@ -6249,228 +6661,496 @@
             };
         }
 
-        function exportDoubaoBatchConversations(conversations, format) {
-            const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '_');
-
-            if (format === 'json') {
-                const content = JSON.stringify({
-                    platform: 'Doubao',
-                    exportedAt: new Date().toISOString(),
-                    conversationCount: conversations.length,
-                    conversations
-                }, null, 2);
-                const blob = new Blob([content], { type: 'application/json;charset=utf-8' });
-                const a = document.createElement('a');
-                a.href = URL.createObjectURL(blob);
-                a.download = `豆包_批量导出_${stamp}.json`;
-                a.click();
-                URL.revokeObjectURL(a.href);
-                return;
-            }
-
-            if (format === 'md') {
-                const content = conversations.map((c, i) => {
-                    const header = `# ${i + 1}. ${c.title}\n\n- 会话ID: ${c.conversationId}\n- 更新时间: ${c.updatedAtText || '-'}\n- 消息数: ${c.messageCount}`;
-                    const body = (Array.isArray(c.messages) ? c.messages : []).map((m, idx) => `\n## ${idx + 1}. ${m.role === 'user' ? '用户' : '豆包'}\n\n${getDisplayTextForExport(m.text || '')}\n`).join('\n');
-                    return `${header}\n${body}`;
-                }).join('\n\n---\n\n');
-
-                const blob = new Blob([content], { type: 'text/markdown;charset=utf-8' });
-                const a = document.createElement('a');
-                a.href = URL.createObjectURL(blob);
-                a.download = `豆包_批量导出_${stamp}.md`;
-                a.click();
-                URL.revokeObjectURL(a.href);
-                return;
-            }
-
-            if (format === 'pdf') {
-                const win = window.open('', '_blank');
-                if (!win) {
-                    alert('无法打开 PDF 打印窗口，请检查浏览器是否拦截了弹窗。');
-                    return;
-                }
-
-                const renderText = (txt) => escapeHtml(getDisplayTextForExport(txt || '')).replace(/\n/g, '<br>');
-                const html = `
-                    <html>
-                    <head>
-                        <title>豆包批量导出 PDF</title>
-                        <style>
-                            @page { size: A4; margin: 14mm; }
-                            body { font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; color:#0f172a; margin:0; padding:0; }
-                            .conv { page-break-after: always; }
-                            .conv:last-child { page-break-after: auto; }
-                            .head { margin-bottom: 14px; border-bottom: 2px solid #1d4ed8; padding-bottom: 8px; }
-                            .title { font-size: 18px; font-weight: 700; }
-                            .meta { margin-top: 6px; color: #475569; font-size: 12px; line-height: 1.6; }
-                            .msg { border: 1px solid #e2e8f0; border-radius: 10px; padding: 10px 12px; margin: 10px 0; }
-                            .role { font-size: 12px; font-weight: 700; color: #1e40af; margin-bottom: 6px; }
-                            .text { font-size: 13px; line-height: 1.7; white-space: normal; word-break: break-word; }
-                        </style>
-                    </head>
-                    <body>
-                        ${conversations.map((c, i) => {
-                            const rows = (Array.isArray(c.messages) ? c.messages : []).map((m, idx) => `
-                                <div class="msg">
-                                    <div class="role">${idx + 1}. ${m.role === 'user' ? '用户' : '豆包'}</div>
-                                    <div class="text">${renderText(m.text || '')}</div>
-                                </div>
-                            `).join('');
-                            return `
-                                <section class="conv">
-                                    <div class="head">
-                                        <div class="title">${i + 1}. ${escapeHtml(c.title || `会话 ${c.conversationId || '-'}`)}</div>
-                                        <div class="meta">
-                                            会话ID: ${escapeHtml(c.conversationId || '-')}<br>
-                                            更新时间: ${escapeHtml(c.updatedAtText || '-')}<br>
-                                            消息数: ${escapeHtml(String(c.messageCount || 0))}
-                                        </div>
-                                    </div>
-                                    ${rows || '<div class="meta">该会话暂无可导出的消息内容。</div>'}
-                                </section>
-                            `;
-                        }).join('')}
-                    </body>
-                    </html>
-                `;
-
-                win.document.open();
-                win.document.write(html);
-                win.document.close();
-                win.focus();
-                setTimeout(() => {
-                    try {
-                        win.print();
-                    } catch (_) {
-                        // ignore
-                    }
-                }, 120);
-                return;
-            }
-
-            const content = conversations.map((c, i) => {
-                const header = `${i + 1}. ${c.title}\n会话ID: ${c.conversationId}\n更新时间: ${c.updatedAtText || '-'}\n消息数: ${c.messageCount}`;
-                const body = (Array.isArray(c.messages) ? c.messages : []).map((m, idx) => `\n[${idx + 1}] ${m.role === 'user' ? '用户' : '豆包'}\n${getDisplayTextForExport(m.text || '')}`).join('\n');
-                return `${header}\n${body}`;
-            }).join('\n\n==============================\n\n');
-
-            const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
-            const a = document.createElement('a');
-            a.href = URL.createObjectURL(blob);
-            a.download = `豆包_批量导出_${stamp}.txt`;
-            a.click();
-            URL.revokeObjectURL(a.href);
+        async function exportDoubaoBatchConversations(conversations, format) {
+            await exportBatchConversationsAsZip('豆包', conversations, format, '豆包');
         }
 
-        function exportQwenBatchConversations(conversations, format) {
-            const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '_');
+        async function exportQwenBatchConversations(conversations, format) {
+            await exportBatchConversationsAsZip('千问', conversations, format, '千问');
+        }
 
-            if (format === 'json') {
-                const content = JSON.stringify({
-                    platform: 'Qwen',
-                    exportedAt: new Date().toISOString(),
-                    conversationCount: conversations.length,
-                    conversations
-                }, null, 2);
-                const blob = new Blob([content], { type: 'application/json;charset=utf-8' });
-                const a = document.createElement('a');
-                a.href = URL.createObjectURL(blob);
-                a.download = `千问_批量导出_${stamp}.json`;
-                a.click();
-                URL.revokeObjectURL(a.href);
-                return;
+        async function exportDeepSeekBatchConversations(conversations, format) {
+            await exportBatchConversationsAsZip('DeepSeek', conversations, format, 'DeepSeek');
+        }
+
+        function findAnyDeepSeek(obj, keys) {
+            if (!obj || typeof obj !== 'object') return '';
+            for (const key of keys) {
+                const parts = String(key).split('.');
+                let cur = obj;
+                let ok = true;
+                for (const p of parts) {
+                    if (cur && Object.prototype.hasOwnProperty.call(cur, p)) cur = cur[p];
+                    else {
+                        ok = false;
+                        break;
+                    }
+                }
+                if (ok && cur != null && cur !== '') return cur;
+            }
+            return '';
+        }
+
+        function normalizeDeepSeekBatchTimestamp(raw) {
+            if (raw == null || raw === '') return { value: 0, text: '-' };
+            const str = String(raw).trim();
+            if (!str) return { value: 0, text: '-' };
+            if (/^\d+(?:\.\d+)?$/.test(str)) {
+                const num = Number(str);
+                const intPart = str.split('.')[0] || '';
+                const ms = intPart.length <= 10 ? num * 1000 : num;
+                const dt = new Date(ms);
+                return { value: ms, text: Number.isFinite(dt.getTime()) ? dt.toLocaleString() : str };
+            }
+            const parsed = Date.parse(str);
+            if (Number.isFinite(parsed)) return { value: parsed, text: new Date(parsed).toLocaleString() };
+            return { value: 0, text: str };
+        }
+
+        function ensureDeepSeekPageListUrl(cursor) {
+            const base = deepseekPageListTemplate?.url || `https://chat.deepseek.com${DEEPSEEK_PAGE_LIST_PATH}?lte_cursor.pinned=false`;
+            const u = new URL(base, window.location.origin);
+            u.pathname = DEEPSEEK_PAGE_LIST_PATH;
+            if (!u.searchParams.has('lte_cursor.pinned')) u.searchParams.set('lte_cursor.pinned', 'false');
+            if (cursor && typeof cursor === 'object') {
+                Object.entries(cursor).forEach(([k, v]) => {
+                    if (v == null || v === '') return;
+                    const key = String(k).startsWith('lte_cursor.') ? String(k) : `lte_cursor.${String(k)}`;
+                    u.searchParams.set(key, String(v));
+                });
+            }
+            return u.toString();
+        }
+
+        function pickDeepSeekConversationArray(respJson) {
+            const candidates = [
+                respJson?.data?.biz_data?.chat_sessions,
+                respJson?.data?.biz_data?.session_list,
+                respJson?.data?.biz_data?.sessions,
+                respJson?.data?.chat_sessions,
+                respJson?.data?.list,
+                respJson?.data?.sessions,
+                respJson?.chat_sessions,
+                respJson?.sessions,
+                respJson?.list
+            ];
+            return candidates.find((item) => Array.isArray(item)) || [];
+        }
+
+        function extractDeepSeekBatchConversationsFromResponse(respJson) {
+            const rawList = pickDeepSeekConversationArray(respJson);
+            const out = [];
+            const seen = new Set();
+
+            rawList.forEach((item, idx) => {
+                const id = String(findAnyDeepSeek(item, [
+                    'id', 'chat_session_id', 'chatSessionId', 'session_id', 'sessionId', 'uuid'
+                ]) || '').trim();
+                if (!id || seen.has(id)) return;
+                seen.add(id);
+
+                const title = String(findAnyDeepSeek(item, [
+                    'title', 'name', 'session_title', 'sessionTitle', 'topic', 'summary'
+                ]) || `会话 ${idx + 1}`).trim();
+                const updated = normalizeDeepSeekBatchTimestamp(findAnyDeepSeek(item, [
+                    'updated_at', 'update_time', 'modified_at', 'modified_time', 'gmt_modified'
+                ]));
+                const created = normalizeDeepSeekBatchTimestamp(findAnyDeepSeek(item, [
+                    'inserted_at', 'created_at', 'create_time', 'created_time', 'gmt_create'
+                ]));
+                const messageCountRaw = findAnyDeepSeek(item, ['message_count', 'msg_count', 'badge_count', 'messageCount']);
+                const messageCount = Number(messageCountRaw);
+
+                out.push({
+                    id,
+                    title: title || `会话 ${id}`,
+                    updatedAt: updated.value,
+                    updatedAtText: updated.text,
+                    createdAt: created.value,
+                    createdAtText: created.text,
+                    pinned: Boolean(findAnyDeepSeek(item, ['pinned'])),
+                    messageCount: Number.isFinite(messageCount) ? messageCount : null,
+                    raw: item
+                });
+            });
+
+            return out.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+        }
+
+        function getDeepSeekBatchNextCursor(respJson) {
+            const candidates = [
+                respJson?.data?.biz_data?.next_cursor,
+                respJson?.data?.biz_data?.lte_cursor,
+                respJson?.data?.next_cursor,
+                respJson?.data?.cursor,
+                respJson?.next_cursor,
+                respJson?.cursor
+            ];
+            for (const item of candidates) {
+                if (!item) continue;
+                if (typeof item === 'string' || typeof item === 'number' || typeof item === 'boolean') {
+                    return { value: { value: item }, key: JSON.stringify(item) };
+                }
+                if (typeof item === 'object') {
+                    const normalized = {};
+                    Object.entries(item).forEach(([k, v]) => {
+                        if (v == null || v === '') return;
+                        normalized[String(k)] = v;
+                    });
+                    if (Object.keys(normalized).length) {
+                        return { value: normalized, key: JSON.stringify(normalized) };
+                    }
+                }
+            }
+            return { value: null, key: '' };
+        }
+
+        async function fetchDeepSeekConversationPage(cursor = null) {
+            installDeepSeekCaptureHooks();
+            const url = ensureDeepSeekPageListUrl(cursor);
+            const headers = sanitizeDeepSeekHeaders({
+                ...(deepseekPageListTemplate?.headers || {}),
+                ...(deepseekCapturedHeaders || {})
+            });
+            const resp = await fetch(url, {
+                method: 'GET',
+                credentials: 'include',
+                headers
+            });
+            const rawText = await resp.text();
+            const json = safeParseDeepSeekJson(rawText);
+            if (!resp.ok) throw new Error(`会话列表请求失败: HTTP ${resp.status} ${rawText.slice(0, 300)}`);
+            if (!json) throw new Error('会话列表返回非 JSON');
+            deepseekPageListTemplate = { url, headers };
+            return json;
+        }
+
+        async function fetchDeepSeekRecentConversations(limit = 30, maxPages = 8) {
+            const merged = [];
+            const seen = new Set();
+            let cursor = null;
+            let cursorKey = '';
+            let page = 0;
+
+            while (page < maxPages && merged.length < limit) {
+                page += 1;
+                const json = await fetchDeepSeekConversationPage(cursor);
+                const pageItems = extractDeepSeekBatchConversationsFromResponse(json);
+                pageItems.forEach((item) => {
+                    if (seen.has(item.id)) return;
+                    seen.add(item.id);
+                    merged.push(item);
+                });
+                const next = getDeepSeekBatchNextCursor(json);
+                if (!next.value || !pageItems.length || next.key === cursorKey) break;
+                cursor = next.value;
+                cursorKey = next.key;
             }
 
-            if (format === 'md') {
-                const content = conversations.map((c, i) => {
-                    const header = `# ${i + 1}. ${c.title}\n\n- 会话ID: ${c.conversationId}\n- 更新时间: ${c.updatedAtText || '-'}\n- 消息数: ${c.messageCount}`;
-                    const body = (Array.isArray(c.messages) ? c.messages : []).map((m, idx) => `\n## ${idx + 1}. ${m.role === 'user' ? '用户' : '千问'}\n\n${getDisplayTextForExport(m.text || '')}\n`).join('\n');
-                    return `${header}\n${body}`;
-                }).join('\n\n---\n\n');
+            return {
+                conversations: merged.slice(0, limit).sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0)),
+                requested: limit,
+                obtained: Math.min(limit, merged.length)
+            };
+        }
 
-                const blob = new Blob([content], { type: 'text/markdown;charset=utf-8' });
-                const a = document.createElement('a');
-                a.href = URL.createObjectURL(blob);
-                a.download = `千问_批量导出_${stamp}.md`;
-                a.click();
-                URL.revokeObjectURL(a.href);
-                return;
-            }
+        async function fetchDeepSeekConversationMessages(sessionId) {
+            installDeepSeekCaptureHooks();
+            const url = createDeepSeekHistoryUrl(sessionId);
+            const headers = sanitizeDeepSeekHeaders({
+                ...(deepseekCapturedHeaders || {}),
+                ...(deepseekPageListTemplate?.headers || {})
+            });
+            const resp = await fetch(url, {
+                method: 'GET',
+                credentials: 'include',
+                headers
+            });
+            const rawText = await resp.text();
+            const json = safeParseDeepSeekJson(rawText);
+            if (!resp.ok) throw new Error(`消息请求失败: HTTP ${resp.status} ${rawText.slice(0, 300)}`);
+            if (!json) throw new Error('消息接口返回非 JSON');
 
-            if (format === 'pdf') {
-                const win = window.open('', '_blank');
-                if (!win) {
-                    alert('无法打开 PDF 打印窗口，请检查浏览器是否拦截了弹窗。');
+            const messages = aggregateDeepSeekMessagesForExport(parseDeepSeekMessagesFromResponse(json)).map((msg) => ({
+                role: msg.role,
+                text: String(msg.text || ''),
+                isThought: Boolean(msg.isThought),
+                fragmentType: String(msg.fragmentType || ''),
+                hasThought: Boolean(msg.hasThought),
+                textWithoutThought: String(msg.textWithoutThought || msg.text || '')
+            }));
+
+            return {
+                messages,
+                meta: extractDeepSeekSessionMeta(json)
+            };
+        }
+
+        function openDeepSeekBatchExportModal() {
+            const overlay = document.createElement('div');
+            overlay.style.cssText = 'position:fixed;inset:0;z-index:1000001;background:rgba(2,6,23,0.55);display:flex;align-items:center;justify-content:center;padding:24px;backdrop-filter:blur(3px);';
+
+            const modal = document.createElement('div');
+            modal.style.cssText = 'width:min(980px,94vw);height:min(82vh,860px);background:#fff;border-radius:16px;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 20px 60px rgba(0,0,0,0.25);';
+
+            modal.innerHTML = `
+                <div style="padding:16px 20px;border-bottom:1px solid #e5e7eb;display:flex;justify-content:space-between;align-items:center;background:linear-gradient(180deg,#f8fafc 0%, #ffffff 100%);">
+                    <div>
+                        <div style="font-size:16px;font-weight:700;color:#0f172a;">DeepSeek 批量导出</div>
+                    </div>
+                    <button id="ds-batch-close" style="border:1px solid #d1d5db;background:#fff;border-radius:8px;padding:6px 10px;cursor:pointer;font-size:12px;color:#334155;">关闭</button>
+                </div>
+                <div class="db-batch-scroll" style="padding:16px 20px;overflow:auto;background:#f8fafc;">
+                    <div style="border:1px solid #e2e8f0;border-radius:12px;padding:14px;background:#fff;">
+                        <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">
+                            <div style="font-size:13px;font-weight:700;color:#0f172a;">历史会话</div>
+                            <label style="display:flex;align-items:center;gap:8px;font-size:12px;color:#475569;">
+                                <span>获取数量</span>
+                                <input id="ds-batch-limit" type="text" inputmode="numeric" value="30" style="width:72px;box-sizing:border-box;border:1px solid #d1d5db;border-radius:8px;padding:6px 8px;font-size:12px;background:#fff;color:#0f172a;" />
+                            </label>
+                        </div>
+                        <div id="ds-batch-status" style="font-size:11px;color:#64748b;margin-top:8px;">正在加载历史会话...</div>
+                        <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-top:12px;">
+                            <div style="display:flex;align-items:center;gap:8px;">
+                                <button id="ds-batch-toggle-select" style="border:1px solid #93c5fd;background:#eff6ff;border-radius:8px;font-size:12px;padding:8px 12px;cursor:pointer;color:#1d4ed8;font-weight:600;">全选</button>
+                            </div>
+                            <div style="position:relative;display:flex;justify-content:flex-end;align-items:center;">
+                                <button id="ds-batch-export-menu-trigger" style="border:1px solid #2563eb;background:#2563eb;color:#fff;border-radius:8px;font-size:12px;padding:8px 14px;cursor:pointer;font-weight:600;display:flex;align-items:center;gap:6px;">
+                                    <span>导出</span><span id="ds-batch-export-menu-icon" style="font-size:10px;opacity:.9;display:inline-block;transition:transform .2s ease;transform:rotate(0deg);">▼</span>
+                                </button>
+                                <div id="ds-batch-export-menu" style="position:absolute;right:0;top:40px;width:140px;background:#fff;border:1px solid #dbe3ee;border-radius:10px;box-shadow:0 10px 30px rgba(15,23,42,.15);padding:8px;z-index:5;opacity:0;pointer-events:none;transform:translateY(-8px) scale(0.96);transition:opacity .22s cubic-bezier(0.22, 0.61, 0.36, 1), transform .22s cubic-bezier(0.22, 0.61, 0.36, 1);">
+                                    <button class="ds-batch-export-item" data-format="json" style="display:block;width:100%;text-align:left;background:#f39c12;color:#ffffff;border:none;border-radius:8px;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;">JSON</button>
+                                    <button class="ds-batch-export-item" data-format="md" style="display:block;width:100%;text-align:left;background:#333333;color:#ffffff;border:none;border-radius:8px;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;margin-top:6px;">Markdown</button>
+                                    <button class="ds-batch-export-item" data-format="txt" style="display:block;width:100%;text-align:left;background:#28a745;color:#ffffff;border:none;border-radius:8px;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;margin-top:6px;">TXT</button>
+                                    <button class="ds-batch-export-item" data-format="pdf" style="display:block;width:100%;text-align:left;background:#dc3545;color:#ffffff;border:none;border-radius:8px;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;margin-top:6px;">PDF</button>
+                                </div>
+                            </div>
+                        </div>
+                        <div id="ds-batch-list" style="max-height:520px;overflow:auto;border:1px solid #e5e7eb;border-radius:10px;margin-top:12px;background:#fff;"></div>
+                    </div>
+                </div>
+                <style>
+                    .db-batch-scroll::-webkit-scrollbar,
+                    #ds-batch-list::-webkit-scrollbar { width: 8px; height: 8px; }
+                    .db-batch-scroll::-webkit-scrollbar-track,
+                    #ds-batch-list::-webkit-scrollbar-track { background: transparent; }
+                    .db-batch-scroll::-webkit-scrollbar-thumb,
+                    #ds-batch-list::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 999px; }
+                    .db-batch-scroll::-webkit-scrollbar-thumb:hover,
+                    #ds-batch-list::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+                    .db-batch-loading { display:flex; align-items:center; justify-content:center; flex-direction:column; gap:10px; padding:28px 12px; color:#64748b; font-size:12px; }
+                    .db-batch-spinner { width:22px; height:22px; border-radius:999px; border:2px solid #cbd5e1; border-top-color:#2563eb; animation: db-batch-spin 0.9s linear infinite; }
+                    @keyframes db-batch-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+                    .db-batch-item { display:flex; gap:10px; align-items:flex-start; padding:10px 12px; border-bottom:1px solid #f1f5f9; cursor:pointer; transition:background .2s; }
+                    .db-batch-item:hover { background:#f8fafc; }
+                    .db-batch-ck { appearance:none; -webkit-appearance:none; width:16px; height:16px; border:1.5px solid #94a3b8; border-radius:4px; margin-top:2px; background:#fff; cursor:pointer; position:relative; flex-shrink:0; display:grid; place-items:center; }
+                    .db-batch-ck:checked { border-color:#2563eb; background:#2563eb; }
+                    .db-batch-ck:checked::after { content:''; position:absolute; left:50%; top:50%; width:5px; height:9px; border:solid #fff; border-width:0 2px 2px 0; transform:translate(-50%, -58%) rotate(45deg); }
+                    .db-batch-title { font-size:12px; color:#0f172a; line-height:1.5; font-weight:600; margin:0; }
+                    .db-batch-meta { display:grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap:6px; margin-top:5px; }
+                    .db-batch-tag { font-size:11px; color:#475569; background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; padding:4px 8px; line-height:1.4; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+                    .db-batch-index { margin-left:auto; flex-shrink:0; align-self:center; min-width:34px; text-align:center; font-size:11px; font-weight:700; color:#1d4ed8; background:#eff6ff; border:1px solid #bfdbfe; border-radius:999px; padding:4px 8px; line-height:1.2; }
+                    @media (max-width: 860px) { .db-batch-meta { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+                </style>
+            `;
+
+            overlay.appendChild(modal);
+            document.body.appendChild(overlay);
+
+            let recentConversations = [];
+            let loading = false;
+            const listEl = modal.querySelector('#ds-batch-list');
+            const statusEl = modal.querySelector('#ds-batch-status');
+            const limitInput = modal.querySelector('#ds-batch-limit');
+            const toggleSelectBtn = modal.querySelector('#ds-batch-toggle-select');
+            const exportMenuTrigger = modal.querySelector('#ds-batch-export-menu-trigger');
+            const exportMenu = modal.querySelector('#ds-batch-export-menu');
+            const exportMenuIcon = modal.querySelector('#ds-batch-export-menu-icon');
+
+            const close = () => {
+                if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
+            };
+
+            const hideExportMenu = () => {
+                exportMenu.style.opacity = '0';
+                exportMenu.style.pointerEvents = 'none';
+                exportMenu.style.transform = 'translateY(-8px) scale(0.96)';
+                if (exportMenuIcon) exportMenuIcon.style.transform = 'rotate(0deg)';
+            };
+
+            const showExportMenu = () => {
+                exportMenu.style.opacity = '1';
+                exportMenu.style.pointerEvents = 'auto';
+                exportMenu.style.transform = 'translateY(0) scale(1)';
+                if (exportMenuIcon) exportMenuIcon.style.transform = 'rotate(180deg)';
+            };
+
+            const getRecentLimit = () => {
+                const inputRaw = String(limitInput.value || '').trim();
+                const onlyNum = inputRaw.replace(/[^\d]/g, '');
+                const raw = Number(onlyNum || 30);
+                const n = Number.isFinite(raw) ? Math.floor(raw) : 30;
+                const safe = Math.max(1, Math.min(100, n || 30));
+                limitInput.value = String(safe);
+                return safe;
+            };
+
+            const areAllSelected = () => {
+                const items = Array.from(listEl.querySelectorAll('.db-batch-ck'));
+                return items.length ? items.every((ck) => ck.checked) : false;
+            };
+
+            const updateSelectToggleButton = () => {
+                const allSelected = areAllSelected();
+                toggleSelectBtn.textContent = allSelected ? '全不选' : '全选';
+                if (allSelected) {
+                    toggleSelectBtn.style.borderColor = '#fecaca';
+                    toggleSelectBtn.style.background = '#fef2f2';
+                    toggleSelectBtn.style.color = '#b91c1c';
+                } else {
+                    toggleSelectBtn.style.borderColor = '#93c5fd';
+                    toggleSelectBtn.style.background = '#eff6ff';
+                    toggleSelectBtn.style.color = '#1d4ed8';
+                }
+            };
+
+            const renderRecentList = () => {
+                if (!recentConversations.length) {
+                    listEl.innerHTML = '<div style="padding:14px;font-size:12px;color:#64748b;">未获取到历史会话，请稍后重试或调整获取数量。</div>';
                     return;
                 }
 
-                const renderText = (txt) => escapeHtml(getDisplayTextForExport(txt || '')).replace(/\n/g, '<br>');
-                const html = `
-                    <html>
-                    <head>
-                        <title>千问批量导出 PDF</title>
-                        <style>
-                            @page { size: A4; margin: 14mm; }
-                            body { font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; color:#0f172a; margin:0; padding:0; }
-                            .conv { page-break-after: always; }
-                            .conv:last-child { page-break-after: auto; }
-                            .head { margin-bottom: 14px; border-bottom: 2px solid #1d4ed8; padding-bottom: 8px; }
-                            .title { font-size: 18px; font-weight: 700; }
-                            .meta { margin-top: 6px; color: #475569; font-size: 12px; line-height: 1.6; }
-                            .msg { border: 1px solid #e2e8f0; border-radius: 10px; padding: 10px 12px; margin: 10px 0; }
-                            .role { font-size: 12px; font-weight: 700; color: #1e40af; margin-bottom: 6px; }
-                            .text { font-size: 13px; line-height: 1.7; white-space: normal; word-break: break-word; }
-                        </style>
-                    </head>
-                    <body>
-                        ${conversations.map((c, i) => {
-                            const rows = (Array.isArray(c.messages) ? c.messages : []).map((m, idx) => `
-                                <div class="msg">
-                                    <div class="role">${idx + 1}. ${m.role === 'user' ? '用户' : '千问'}</div>
-                                    <div class="text">${renderText(m.text || '')}</div>
-                                </div>
-                            `).join('');
-                            return `
-                                <section class="conv">
-                                    <div class="head">
-                                        <div class="title">${i + 1}. ${escapeHtml(c.title || `会话 ${c.conversationId || '-'}`)}</div>
-                                        <div class="meta">
-                                            会话ID: ${escapeHtml(c.conversationId || '-')}<br>
-                                            更新时间: ${escapeHtml(c.updatedAtText || '-')}<br>
-                                            消息数: ${escapeHtml(String(c.messageCount || 0))}
-                                        </div>
-                                    </div>
-                                    ${rows || '<div class="meta">该会话暂无可导出的消息内容。</div>'}
-                                </section>
-                            `;
-                        }).join('')}
-                    </body>
-                    </html>
-                `;
+                listEl.innerHTML = recentConversations.map((c, idx) => `
+                    <label class="db-batch-item">
+                        <input type="checkbox" class="db-batch-ck" data-id="${escapeHtml(c.id)}" checked>
+                        <div style="flex:1;min-width:0;">
+                            <p class="db-batch-title">${escapeHtml(c.title || `会话 ${c.id}`)}</p>
+                            <div class="db-batch-meta">
+                                ${c.id ? `<span class="db-batch-tag">会话ID: ${escapeHtml(c.id)}</span>` : ''}
+                                ${c.updatedAtText && c.updatedAtText !== '-' ? `<span class="db-batch-tag">更新时间: ${escapeHtml(c.updatedAtText)}</span>` : ''}
+                                ${c.createdAtText && c.createdAtText !== '-' ? `<span class="db-batch-tag">创建时间: ${escapeHtml(c.createdAtText)}</span>` : ''}
+                                ${c.pinned ? '<span class="db-batch-tag">置顶: 是</span>' : ''}
+                                ${c.messageCount != null && Number.isFinite(Number(c.messageCount)) ? `<span class="db-batch-tag">消息数: ${escapeHtml(String(c.messageCount))}</span>` : ''}
+                            </div>
+                        </div>
+                        <span class="db-batch-index">#${idx + 1}</span>
+                    </label>
+                `).join('');
+                updateSelectToggleButton();
+            };
 
-                win.document.open();
-                win.document.write(html);
-                win.document.close();
-                win.focus();
-                setTimeout(() => {
-                    try { win.print(); } catch (_) {}
-                }, 120);
-                return;
-            }
+            const loadRecentConversations = async () => {
+                if (loading) return;
+                loading = true;
+                const limit = getRecentLimit();
+                hideExportMenu();
+                listEl.innerHTML = '<div class="db-batch-loading"><div class="db-batch-spinner"></div><div>正在加载历史会话...</div></div>';
+                statusEl.textContent = `正在加载历史会话（数量: ${limit}）...`;
+                try {
+                    const result = await fetchDeepSeekRecentConversations(limit, 8);
+                    recentConversations = result.conversations;
+                    statusEl.textContent = `已加载 ${Number(result?.obtained || recentConversations.length)}/${Number(result?.requested || limit)} 个历史会话`;
+                    renderRecentList();
+                } catch (e) {
+                    recentConversations = [];
+                    statusEl.textContent = '加载历史会话失败';
+                    listEl.innerHTML = `<div style="padding:14px;font-size:12px;color:#b91c1c;">加载失败: ${escapeHtml(e.message || String(e))}</div>`;
+                } finally {
+                    loading = false;
+                }
+            };
 
-            const content = conversations.map((c, i) => {
-                const header = `${i + 1}. ${c.title}\n会话ID: ${c.conversationId}\n更新时间: ${c.updatedAtText || '-'}\n消息数: ${c.messageCount}`;
-                const body = (Array.isArray(c.messages) ? c.messages : []).map((m, idx) => `\n[${idx + 1}] ${m.role === 'user' ? '用户' : '千问'}\n${getDisplayTextForExport(m.text || '')}`).join('\n');
-                return `${header}\n${body}`;
-            }).join('\n\n==============================\n\n');
+            const getSelectedConversations = () => {
+                const map = new Map(recentConversations.map((c) => [c.id, c]));
+                return Array.from(listEl.querySelectorAll('.db-batch-ck:checked'))
+                    .map((el) => map.get(el.getAttribute('data-id')))
+                    .filter(Boolean);
+            };
 
-            const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
-            const a = document.createElement('a');
-            a.href = URL.createObjectURL(blob);
-            a.download = `千问_批量导出_${stamp}.txt`;
-            a.click();
-            URL.revokeObjectURL(a.href);
+            const runBatchExport = async (format) => {
+                hideExportMenu();
+                const selected = getSelectedConversations();
+                if (!selected.length) {
+                    alert('请先勾选至少一个历史会话');
+                    return;
+                }
+
+                const out = [];
+                let failCount = 0;
+
+                for (let i = 0; i < selected.length; i += 1) {
+                    const conv = selected[i];
+                    statusEl.textContent = `正在导出第 ${i + 1}/${selected.length} 个会话: ${conv.title || conv.id}`;
+                    try {
+                        const allRes = await fetchDeepSeekConversationMessages(conv.id);
+                        out.push({
+                            conversationId: conv.id,
+                            title: conv.title,
+                            updatedAt: conv.updatedAt || 0,
+                            updatedAtText: conv.updatedAtText || '',
+                            createdAt: conv.createdAt || 0,
+                            createdAtText: conv.createdAtText || '',
+                            pinned: Boolean(conv.pinned),
+                            messageCount: allRes.messages.length,
+                            messages: allRes.messages.map((m) => ({
+                                role: m.role,
+                                text: String(m.text || ''),
+                                isThought: Boolean(m.isThought),
+                                fragmentType: String(m.fragmentType || '')
+                            }))
+                        });
+                    } catch (e) {
+                        failCount += 1;
+                        console.warn('AI-Chat-Nodes: DeepSeek 批量导出会话失败', conv?.id, e);
+                    }
+                }
+
+                if (!out.length) {
+                    alert('无可导出的会话数据');
+                    return;
+                }
+
+                await exportDeepSeekBatchConversations(out, format);
+                statusEl.textContent = `批量导出完成，成功 ${out.length} 个会话${failCount ? `，失败 ${failCount} 个` : ''}`;
+                alert(`批量导出完成：成功 ${out.length} 个会话${failCount ? `，失败 ${failCount} 个` : ''}。已按会话标题分别打包为 ZIP。${format === 'pdf' ? 'PDF 选项导出为可打印 HTML 压缩包。' : ''}`);
+            };
+
+            modal.querySelector('#ds-batch-close').addEventListener('click', close);
+            overlay.addEventListener('click', (e) => {
+                if (e.target === overlay) close();
+            });
+            exportMenuTrigger.addEventListener('click', (e) => {
+                e.stopPropagation();
+                if (exportMenu.style.opacity === '1') hideExportMenu();
+                else showExportMenu();
+            });
+            modal.addEventListener('click', (e) => {
+                const target = e.target;
+                if (target !== exportMenu && target !== exportMenuTrigger && !exportMenu.contains(target)) hideExportMenu();
+            });
+            limitInput.addEventListener('change', () => loadRecentConversations());
+            limitInput.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    loadRecentConversations();
+                }
+            });
+            toggleSelectBtn.addEventListener('click', () => {
+                const allSelected = areAllSelected();
+                listEl.querySelectorAll('.db-batch-ck').forEach((ck) => { ck.checked = !allSelected; });
+                updateSelectToggleButton();
+            });
+            listEl.addEventListener('change', (e) => {
+                if (e.target && e.target.classList.contains('db-batch-ck')) updateSelectToggleButton();
+            });
+            modal.querySelectorAll('.ds-batch-export-item').forEach((btn) => {
+                btn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    runBatchExport(btn.getAttribute('data-format'));
+                });
+            });
+
+            loadRecentConversations();
         }
 
         function openDoubaoBatchExportModal() {
@@ -6812,8 +7492,8 @@
                     return;
                 }
 
-                exportDoubaoBatchConversations(out, format);
-                alert(`批量导出完成：成功 ${out.length} 个会话${failCount ? `，失败 ${failCount} 个` : ''}`);
+                await exportDoubaoBatchConversations(out, format);
+                alert(`批量导出完成：成功 ${out.length} 个会话${failCount ? `，失败 ${failCount} 个` : ''}。已按会话标题分别打包为 ZIP。${format === 'pdf' ? 'PDF 选项导出为可打印 HTML 压缩包。' : ''}`);
             };
 
             modal.querySelector('#db-batch-close').addEventListener('click', close);
@@ -7063,8 +7743,8 @@
                     alert('无可导出的会话数据');
                     return;
                 }
-                exportQwenBatchConversations(out, format);
-                alert(`批量导出完成：成功 ${out.length} 个会话${failCount ? `，失败 ${failCount} 个` : ''}`);
+                await exportQwenBatchConversations(out, format);
+                alert(`批量导出完成：成功 ${out.length} 个会话${failCount ? `，失败 ${failCount} 个` : ''}。已按会话标题分别打包为 ZIP。${format === 'pdf' ? 'PDF 选项导出为可打印 HTML 压缩包。' : ''}`);
             };
 
             modal.querySelector('#qw-batch-close').addEventListener('click', close);
@@ -7159,13 +7839,7 @@
                 const apiMsgs = await getDeepSeekMessagesByApi();
                 source = 'API(/api/v0/chat/history_messages)';
                 if (apiMsgs.length) {
-                    list.push(...apiMsgs.map((m) => ({
-                        role: m.role,
-                        text: m.text,
-                        isThought: Boolean(m.isThought),
-                        isSearch: Boolean(m.isSearch),
-                        fragmentType: String(m.fragmentType || '')
-                    })));
+                    list.push(...aggregateDeepSeekMessagesForExport(apiMsgs));
                 } else {
                     source = 'API(/api/v0/chat/history_messages)-FAILED';
                     console.warn('AI-Chat-Nodes: DeepSeek 导出已禁用 DOM 回退，当前仅支持 API 获取。');
@@ -7721,7 +8395,16 @@
             if (isDeepSeek && modal.querySelector('#m-no-thought')) {
                 modal.querySelector('#m-no-thought').onclick = () => {
                     allMsgs.forEach((m, i) => {
-                        if (m.isThought) modal.querySelector(`.m-row-ck[data-i="${i}"]`).checked = false;
+                        const ck = modal.querySelector(`.m-row-ck[data-i="${i}"]`);
+                        const rowText = modal.querySelector(`.m-row-ck[data-i="${i}"]`)?.closest('.m-item-row')?.querySelector('.m-row-text');
+                        if (m.isThought) {
+                            if (ck) ck.checked = false;
+                            return;
+                        }
+                        if (m.hasThought && m.textWithoutThought) {
+                            m.text = String(m.textWithoutThought || '');
+                            if (rowText) rowText.textContent = getDisplayTextForExport(m.text);
+                        }
                     });
                     upCount();
                 };
