@@ -69,8 +69,12 @@
     let deepseekPageListTemplate = null;
     let deepseekCaptureHooksInstalled = false;
     let deepseekLastSessionMeta = null;
+    let chatgptAccessToken = null;
+    const chatgptCapturedWorkspaceIds = new Set();
+    const chatgptCapturedDeviceIds = new Set();
     const DEEPSEEK_PAGE_LIST_PATH = '/api/v0/chat_session/fetch_page';
     const DEEPSEEK_HISTORY_PATH = '/api/v0/chat/history_messages';
+    const CHATGPT_BATCH_PAGE_LIMIT = 100;
     const QWEN_NODE_DEBUG = true;
 
     // 先放占位实现，避免页面初始阶段因执行时序触发 ReferenceError。
@@ -252,6 +256,92 @@
             // ignore debug log errors
         }
     }
+
+    function captureChatGPTHeaderValue(name, value) {
+        if (!isChatGPT || !name || value == null || value === '') return;
+        const lower = String(name).toLowerCase();
+        const rawValue = String(value).trim();
+        if (!rawValue) return;
+
+        if (lower === 'authorization' && /^bearer\s+/i.test(rawValue)) {
+            const token = rawValue.replace(/^bearer\s+/i, '').trim();
+            if (token) chatgptAccessToken = token;
+            return;
+        }
+
+        if (lower === 'chatgpt-account-id') {
+            chatgptCapturedWorkspaceIds.add(rawValue);
+            return;
+        }
+
+        if (lower === 'oai-device-id') {
+            chatgptCapturedDeviceIds.add(rawValue);
+        }
+    }
+
+    function captureChatGPTHeaders(headersLike) {
+        if (!isChatGPT || !headersLike) return;
+
+        if (typeof headersLike === 'string') {
+            captureChatGPTHeaderValue('authorization', headersLike);
+            return;
+        }
+
+        if (headersLike instanceof Headers) {
+            headersLike.forEach((value, name) => captureChatGPTHeaderValue(name, value));
+            return;
+        }
+
+        if (Array.isArray(headersLike)) {
+            headersLike.forEach((entry) => {
+                if (!Array.isArray(entry) || entry.length < 2) return;
+                captureChatGPTHeaderValue(entry[0], entry[1]);
+            });
+            return;
+        }
+
+        if (typeof headersLike === 'object') {
+            Object.entries(headersLike).forEach(([name, value]) => captureChatGPTHeaderValue(name, value));
+        }
+    }
+
+    function installChatGPTCaptureHooks() {
+        if (!isChatGPT || window.__aiNodesChatGPTCaptureInstalled) return;
+        window.__aiNodesChatGPTCaptureInstalled = true;
+
+        const nativeFetch = window.fetch;
+        window.fetch = function (input, init) {
+            try {
+                captureChatGPTHeaders(init?.headers);
+                if (input && typeof input === 'object') captureChatGPTHeaders(input.headers);
+            } catch (e) {
+                // ignore capture errors
+            }
+            return nativeFetch.apply(this, arguments);
+        };
+
+        const rawOpen = XMLHttpRequest.prototype.open;
+        const rawSetHeader = XMLHttpRequest.prototype.setRequestHeader;
+
+        XMLHttpRequest.prototype.open = function (method, url) {
+            this.__aiNodesChatGPTHeaders = {};
+            return rawOpen.apply(this, arguments);
+        };
+
+        XMLHttpRequest.prototype.setRequestHeader = function (name, value) {
+            try {
+                if (this.__aiNodesChatGPTHeaders && name) {
+                    this.__aiNodesChatGPTHeaders[String(name)] = String(value);
+                }
+                captureChatGPTHeaderValue(name, value);
+            } catch (e) {
+                // ignore capture errors
+            }
+            return rawSetHeader.apply(this, arguments);
+        };
+    }
+
+    installChatGPTCaptureHooks();
 
     function cleanupQwenInternalRequestMarks() {
         if (!qwenInternalRequestMarks.size) return;
@@ -2665,7 +2755,7 @@
 
             const toast = document.createElement('div');
             toast.style.cssText = `position:fixed;bottom:80px;left:50%;transform:translateX(-50%);background:rgba(30, 30, 40, 0.92);color:#fff;font-size:13px;padding:14px 28px;border-radius:30px;z-index:20000;display:flex;align-items:center;gap:12px;backdrop-filter:blur(10px);box-shadow:0 10px 40px rgba(0,0,0,0.5);border:1px solid rgba(255,255,255,0.1);transition:opacity 0.3s;`;
-            toast.innerHTML = `<i class="fas fa-history fa-spin" style="color:#4dabf7;"></i><div style="min-width:340px;"><div id="load-all-toast-msg">准备导出：正在回溯历史记录...</div><div style="margin-top:8px;height:6px;background:rgba(255,255,255,0.18);border-radius:99px;overflow:hidden;"><div id="load-all-toast-bar" style="height:100%;width:0%;background:linear-gradient(90deg,#4dabf7,#74c0fc);transition:width .25s ease;"></div></div><div id="load-all-toast-sub" style="margin-top:6px;font-size:12px;color:rgba(255,255,255,.75);">轮次: 0 / ${MAX_TICKS} · 已识别消息: 0 · 到顶确认: 0/${STABLE_ZERO_TARGET}</div></div>`;
+            toast.innerHTML = `<div style="width:18px;height:18px;flex:none;border-radius:999px;border:2px solid rgba(116,192,252,.35);border-top-color:#4dabf7;animation:ai-nodes-spin .9s linear infinite;"></div><div style="min-width:340px;"><div id="load-all-toast-msg">准备导出：正在回溯历史记录...</div><div style="margin-top:8px;height:6px;background:rgba(255,255,255,0.18);border-radius:99px;overflow:hidden;"><div id="load-all-toast-bar" style="height:100%;width:0%;background:linear-gradient(90deg,#4dabf7,#74c0fc);transition:width .25s ease;"></div></div><div id="load-all-toast-sub" style="margin-top:6px;font-size:12px;color:rgba(255,255,255,.75);">轮次: 0 / ${MAX_TICKS} · 已识别消息: 0 · 到顶确认: 0/${STABLE_ZERO_TARGET}</div></div>`;
             document.body.appendChild(toast);
 
             const toastMsg = toast.querySelector('#load-all-toast-msg');
@@ -2713,7 +2803,7 @@
                 isHistoryFullyLoaded = true; // 标记历史已全量加载
                 if (toastMsg) {
                     toastMsg.style.color = '#51cf66';
-                    toastMsg.innerHTML = '<i class="fas fa-check" style="color:#51cf66;"></i> 对话数据准备就绪';
+                    toastMsg.textContent = '对话数据准备就绪';
                 }
                 if (toastBar) {
                     toastBar.style.width = '100%';
@@ -3154,6 +3244,12 @@
     function injectSettings() {
         // 使用全局变量 host, isQwen, isChatGPT, isDoubao, isDeepSeek
         const aiName = isChatGPT ? 'ChatGPT' : (isDeepSeek ? 'DeepSeek' : (isDoubao ? '豆包' : '通义千问'));
+        if (!document.getElementById('ai-nodes-inline-style')) {
+            const inlineStyle = document.createElement('style');
+            inlineStyle.id = 'ai-nodes-inline-style';
+            inlineStyle.textContent = '@keyframes ai-nodes-spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}';
+            document.head.appendChild(inlineStyle);
+        }
 
         if (isQwen) {
             try {
@@ -3171,19 +3267,9 @@
             }
         }
 
-        // 注入 FontAwesome
-
-        // 注入 FontAwesome
-        if (!document.getElementById('ai-nodes-fa')) {
-            const fa = document.createElement('link');
-            fa.id = 'ai-nodes-fa';
-            fa.rel = 'stylesheet';
-            fa.href = 'https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css';
-            document.head.appendChild(fa);
-        }
-
         // 创建按钮
         const btn = document.createElement('button');
+        btn.type = 'button';
         btn.className = 'ai-nodes-settings-btn' + (isDeepSeek ? ' ds-icon-button ds-icon-button--l ds-icon-button--s ds-icon-button--sizing-container' : '');
         // 使用 SVG 代替 FontAwesome 字体，以绕过 ChatGPT 严格的 CSP（防止字体库加载失败）
         btn.innerHTML = `
@@ -3209,7 +3295,9 @@
             justify-content: center;
             outline: none;
             flex-shrink: 0;
-            z-index: 100;
+            position: relative;
+            pointer-events: auto;
+            z-index: 10060;
             background-clip: padding-box;
         `;
         btn.addEventListener('mouseenter', () => {
@@ -3218,8 +3306,20 @@
         });
         btn.addEventListener('mouseleave', () => {
             btn.style.color = '#888';
-            btn.style.transform = 'rotate(0)';
+            btn.style.transform = 'none';
         });
+        const buttonHost = document.createElement('div');
+        buttonHost.className = 'ai-nodes-settings-host';
+        buttonHost.style.cssText = `
+            position: relative;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+            pointer-events: auto;
+            z-index: 10060;
+        `;
+        buttonHost.appendChild(btn);
 
         const fallbackHost = document.createElement('div');
         fallbackHost.className = 'ai-nodes-settings-fallback-host';
@@ -3227,12 +3327,43 @@
             position: fixed;
             top: 16px;
             right: 16px;
+            left: auto;
             z-index: 10050;
             display: flex;
             align-items: center;
             justify-content: center;
             pointer-events: auto;
         `;
+        const findChatGPTHeaderAnchor = () => (
+            document.querySelector('[data-testid="thread-header-right-actions"]') ||
+            document.querySelector('#conversation-header-actions') ||
+            document.querySelector("#page-header > div.flex.items-center.justify-center.gap-3.overflow-x-hidden > div.flex.items-center.justify-end.overflow-x-hidden") ||
+            document.querySelector('#page-header .items-center.justify-end') ||
+            document.querySelector('header .items-center.justify-end') ||
+            document.querySelector('header [class*="justify-end"]')
+        );
+        const applyFallbackHostPlacement = () => {
+            if (isChatGPT) {
+                const anchor = findChatGPTHeaderAnchor();
+                if (anchor) {
+                    const rect = anchor.getBoundingClientRect();
+                    const top = Math.max(8, Math.round(rect.top + Math.max(0, (rect.height - 32) / 2) - 1));
+                    const left = Math.round(Math.max(8, Math.min(window.innerWidth - 40, rect.left - 34)));
+                    fallbackHost.style.top = `${top}px`;
+                    fallbackHost.style.left = `${left}px`;
+                    fallbackHost.style.right = 'auto';
+                } else {
+                    fallbackHost.style.top = '14px';
+                    fallbackHost.style.right = '72px';
+                    fallbackHost.style.left = 'auto';
+                }
+            } else {
+                fallbackHost.style.top = '16px';
+                fallbackHost.style.right = '16px';
+                fallbackHost.style.left = 'auto';
+            }
+        };
+        applyFallbackHostPlacement();
 
         // 创建弹出气泡 (Popup)
         const popup = document.createElement('div');
@@ -3258,7 +3389,7 @@
                 <span style="font-weight:500;font-size:12px;color:#64748b;">设置</span>
             </div>
             <div style="display: flex; align-items: center; gap: 8px; font-size: 13px; color: #666;">
-                <i class="fas fa-robot" style="color: #46a758;"></i>
+                <span style="font-size:16px;line-height:1;color:#46a758;">●</span>
                 <span>当前 AI 平台: <b>${aiName}</b></span>
             </div>
             ${isQwen ? `
@@ -3284,7 +3415,7 @@
 
             <div style="margin-top: 12px; padding-top: 12px; border-top: 1px dashed #eee; display: flex; flex-direction: column; gap: 8px;">
                 <button id="ai-nodes-clear-refresh" style="width: 100%; border: 1px solid #ff4d4f; background: #fff; color: #ff4d4f; padding: 6px; border-radius: 8px; cursor: pointer; font-size: 12px; font-weight: 500; transition: all 0.2s;">
-                    <i class="fas fa-redo-alt" style="margin-right: 4px;"></i> 清除节点缓存重新获取
+                    <span style="margin-right: 4px;">↻</span> 清除节点缓存重新获取
                 </button>
                 
                 <button id="ai-nodes-export-trigger" style="width: 100%; padding: 10px; background: #1E88E5; color: white; border: none; border-radius: 10px; cursor: pointer; font-size: 13px; font-weight: 600; display: flex; align-items: center; justify-content: center; gap: 8px; transition: all 0.2s; box-shadow: 0 4px 10px rgba(30, 136, 229, 0.2);">
@@ -3321,8 +3452,8 @@
                     <svg viewBox="9 7 6 10" fill="none" xmlns="http://www.w3.org/2000/svg" style="width:10px;height:10px;flex:none;"><path d="M10 16L14 12L10 8" stroke="#ffffff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path></svg>
                     <span>导出当前对话</span>
                 </button>
-                <button id="ai-nodes-export-batch" style="width:152px;padding:8px 10px;background:${(isDoubao || isQwen || isDeepSeek) ? '#0f766e' : '#f3f4f6'};color:${(isDoubao || isQwen || isDeepSeek) ? '#fff' : '#6b7280'};border:${(isDoubao || isQwen || isDeepSeek) ? 'none' : '1px solid #e5e7eb'};border-radius:9px;cursor:pointer;font-size:12px;font-weight:600;display:flex;align-items:center;justify-content:center;gap:4px;">
-                    <svg viewBox="9 7 6 10" fill="none" xmlns="http://www.w3.org/2000/svg" style="width:10px;height:10px;flex:none;"><path d="M10 16L14 12L10 8" stroke="${(isDoubao || isQwen || isDeepSeek) ? '#ffffff' : '#6b7280'}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+                <button id="ai-nodes-export-batch" style="width:152px;padding:8px 10px;background:${(isChatGPT || isDoubao || isQwen || isDeepSeek) ? '#0f766e' : '#f3f4f6'};color:${(isChatGPT || isDoubao || isQwen || isDeepSeek) ? '#fff' : '#6b7280'};border:${(isChatGPT || isDoubao || isQwen || isDeepSeek) ? 'none' : '1px solid #e5e7eb'};border-radius:9px;cursor:pointer;font-size:12px;font-weight:600;display:flex;align-items:center;justify-content:center;gap:4px;">
+                    <svg viewBox="9 7 6 10" fill="none" xmlns="http://www.w3.org/2000/svg" style="width:10px;height:10px;flex:none;"><path d="M10 16L14 12L10 8" stroke="${(isChatGPT || isDoubao || isQwen || isDeepSeek) ? '#ffffff' : '#6b7280'}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path></svg>
                     <span>批量导出对话</span>
                 </button>
             </div>
@@ -3348,6 +3479,7 @@
             exportMenu.style.pointerEvents = 'none';
             exportMenu.style.transform = 'translateY(-8px) scale(0.96)';
         };
+        let lastToggleSettingsAt = 0;
 
         const openCurrentConversationExport = async () => {
             hidePopup();
@@ -3473,13 +3605,14 @@
         if (exportBatchBtn) {
             exportBatchBtn.onclick = (e) => {
                 e.stopPropagation();
-                if (!isDoubao && !isQwen && !isDeepSeek) {
+                if (!isChatGPT && !isDoubao && !isQwen && !isDeepSeek) {
                     alert(`${aiName} 暂未实现该功能`);
                     return;
                 }
                 hidePopup();
                 hideExportMenu();
-                if (isDoubao) openDoubaoBatchExportModal();
+                if (isChatGPT) openChatGPTBatchExportModal();
+                else if (isDoubao) openDoubaoBatchExportModal();
                 else if (isQwen) openQwenBatchExportModal();
                 else if (isDeepSeek) openDeepSeekBatchExportModal();
             };
@@ -3491,15 +3624,296 @@
         }
 
         async function getChatGPTAccessToken() {
+            if (chatgptAccessToken) return chatgptAccessToken;
             try {
                 const sessionResp = await fetch('/api/auth/session?unstable_client=true');
                 if (!sessionResp.ok) return null;
                 const session = await sessionResp.json();
-                return session?.accessToken || null;
+                chatgptAccessToken = session?.accessToken || null;
+                return chatgptAccessToken;
             } catch (e) {
                 console.warn('AI-Chat-Nodes: 获取 ChatGPT access token 失败', e);
                 return null;
             }
+        }
+
+        function getChatGPTDeviceId() {
+            const fromCaptured = Array.from(chatgptCapturedDeviceIds).find(Boolean);
+            if (fromCaptured) return String(fromCaptured);
+
+            try {
+                const cookieMatch = String(document.cookie || '').match(/(?:^|;\s*)oai-did=([^;]+)/i);
+                if (cookieMatch && cookieMatch[1]) return decodeURIComponent(cookieMatch[1]);
+            } catch (e) {
+                // ignore
+            }
+
+            try {
+                const keys = ['oai-did', 'oai-device-id', 'oaiDeviceId'];
+                for (const key of keys) {
+                    const v1 = localStorage.getItem(key);
+                    if (v1) return String(v1).replace(/^"|"$/g, '');
+                    const v2 = sessionStorage.getItem(key);
+                    if (v2) return String(v2).replace(/^"|"$/g, '');
+                }
+            } catch (e) {
+                // ignore
+            }
+
+            return '';
+        }
+
+        function detectChatGPTWorkspaceIds() {
+            const found = new Set(chatgptCapturedWorkspaceIds);
+
+            try {
+                const nextDataEl = document.getElementById('__NEXT_DATA__');
+                if (nextDataEl?.textContent) {
+                    const nextData = JSON.parse(nextDataEl.textContent);
+                    const accounts = nextData?.props?.pageProps?.user?.accounts;
+                    if (accounts && typeof accounts === 'object') {
+                        Object.values(accounts).forEach((acc) => {
+                            const accountId = acc?.account?.id;
+                            if (accountId) found.add(String(accountId));
+                        });
+                    }
+                }
+            } catch (e) {
+                // ignore
+            }
+
+            try {
+                const wsRegex = /\bws-[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}\b/i;
+                for (let i = 0; i < localStorage.length; i += 1) {
+                    const key = localStorage.key(i);
+                    if (!key || (!/account|workspace/i.test(key))) continue;
+                    const value = localStorage.getItem(key);
+                    if (!value) continue;
+                    const matched = String(value).match(wsRegex);
+                    if (matched && matched[0]) found.add(matched[0]);
+                }
+            } catch (e) {
+                // ignore
+            }
+
+            return Array.from(found).filter(Boolean);
+        }
+
+        function normalizeChatGPTBatchTimestamp(raw) {
+            if (raw == null || raw === '') return { value: 0, text: '-' };
+            const str = String(raw).trim();
+            if (!str) return { value: 0, text: '-' };
+            if (/^\d+$/.test(str)) {
+                const num = Number(str);
+                const ms = str.length <= 10 ? num * 1000 : num;
+                const dt = new Date(ms);
+                return { value: ms, text: Number.isFinite(dt.getTime()) ? dt.toLocaleString() : str };
+            }
+            const parsed = Date.parse(str);
+            if (Number.isFinite(parsed)) return { value: parsed, text: new Date(parsed).toLocaleString() };
+            return { value: 0, text: str };
+        }
+
+        function buildChatGPTApiHeaders(token, workspaceId = '') {
+            const headers = {
+                Authorization: `Bearer ${token}`
+            };
+            const deviceId = getChatGPTDeviceId();
+            if (deviceId) headers['oai-device-id'] = deviceId;
+            if (workspaceId) headers['ChatGPT-Account-Id'] = workspaceId;
+            return headers;
+        }
+
+        async function fetchChatGPTProjects(workspaceId, token) {
+            if (!workspaceId) return [];
+            try {
+                const resp = await fetch('/backend-api/gizmos/snorlax/sidebar', {
+                    headers: buildChatGPTApiHeaders(token, workspaceId)
+                });
+                if (!resp.ok) return [];
+                const json = await resp.json();
+                return (Array.isArray(json?.items) ? json.items : [])
+                    .map((item) => ({
+                        id: String(item?.gizmo?.id || '').trim(),
+                        title: String(item?.gizmo?.display?.name || item?.gizmo?.display_name || '').trim()
+                    }))
+                    .filter((item) => item.id);
+            } catch (e) {
+                console.warn('AI-Chat-Nodes: 获取 ChatGPT 项目列表失败', workspaceId, e);
+                return [];
+            }
+        }
+
+        function extractChatGPTConversationListItems(rawItems, extra = {}) {
+            const items = Array.isArray(rawItems) ? rawItems : [];
+            const workspaceId = String(extra.workspaceId || '').trim();
+            const workspaceLabel = workspaceId ? '团队空间' : '个人空间';
+            const projectId = String(extra.projectId || '').trim();
+            const projectTitle = String(extra.projectTitle || '').trim();
+            const archived = Boolean(extra.archived);
+
+            return items.map((item, idx) => {
+                const id = String(item?.id || item?.conversation_id || item?.conversationId || '').trim();
+                if (!id) return null;
+
+                const updated = normalizeChatGPTBatchTimestamp(
+                    item?.update_time ?? item?.updated_time ?? item?.updated_at ?? item?.create_time ?? item?.created_at
+                );
+                const created = normalizeChatGPTBatchTimestamp(
+                    item?.create_time ?? item?.created_at ?? item?.inserted_at ?? item?.update_time
+                );
+                const title = String(item?.title || item?.name || item?.conversation_title || '').trim() || `会话 ${idx + 1}`;
+                const badgeCount = Number(item?.message_count ?? item?.badge_count ?? item?.messageCount ?? item?.num_messages);
+
+                return {
+                    key: `${workspaceId || 'personal'}::${projectId || 'root'}::${id}`,
+                    id,
+                    title,
+                    workspaceId,
+                    workspaceLabel,
+                    projectId,
+                    projectTitle,
+                    archived,
+                    updatedAt: updated.value,
+                    updatedAtText: updated.text,
+                    createdAt: created.value,
+                    createdAtText: created.text,
+                    badgeCount: Number.isFinite(badgeCount) ? badgeCount : null
+                };
+            }).filter(Boolean);
+        }
+
+        async function fetchChatGPTRootConversations(workspaceId, token, archived, limit, maxPages = 10) {
+            const out = [];
+            let offset = 0;
+            let page = 0;
+            let hasMore = true;
+
+            while (hasMore && out.length < limit && page < maxPages) {
+                const resp = await fetch(`/backend-api/conversations?offset=${offset}&limit=${CHATGPT_BATCH_PAGE_LIMIT}&order=updated${archived ? '&is_archived=true' : ''}`, {
+                    headers: buildChatGPTApiHeaders(token, workspaceId)
+                });
+                if (!resp.ok) {
+                    throw new Error(`获取会话列表失败 (${resp.status})`);
+                }
+
+                const json = await resp.json();
+                const pageItems = extractChatGPTConversationListItems(json?.items, { workspaceId, archived });
+                out.push(...pageItems);
+
+                const rawItems = Array.isArray(json?.items) ? json.items : [];
+                hasMore = rawItems.length === CHATGPT_BATCH_PAGE_LIMIT;
+                offset += rawItems.length;
+                page += 1;
+                if (hasMore && out.length < limit) {
+                    await new Promise((resolve) => setTimeout(resolve, 180 + Math.floor(Math.random() * 120)));
+                }
+            }
+
+            return out.slice(0, limit);
+        }
+
+        async function fetchChatGPTProjectConversations(workspaceId, token, project, limit) {
+            if (!workspaceId || !project?.id || limit <= 0) return [];
+            const out = [];
+            let cursor = '0';
+            let guard = 0;
+
+            while (cursor != null && out.length < limit && guard < 20) {
+                const resp = await fetch(`/backend-api/gizmos/${project.id}/conversations?cursor=${encodeURIComponent(cursor)}`, {
+                    headers: buildChatGPTApiHeaders(token, workspaceId)
+                });
+                if (!resp.ok) {
+                    throw new Error(`获取项目会话失败 (${resp.status})`);
+                }
+
+                const json = await resp.json();
+                out.push(...extractChatGPTConversationListItems(json?.items, {
+                    workspaceId,
+                    projectId: project.id,
+                    projectTitle: project.title || ''
+                }));
+
+                const nextCursor = json?.cursor;
+                if (!nextCursor || nextCursor === cursor) break;
+                cursor = String(nextCursor);
+                guard += 1;
+                if (out.length < limit) {
+                    await new Promise((resolve) => setTimeout(resolve, 180 + Math.floor(Math.random() * 120)));
+                }
+            }
+
+            return out.slice(0, limit);
+        }
+
+        async function fetchChatGPTRecentConversations(limit = 100, maxPages = 10) {
+            const token = await getChatGPTAccessToken();
+            if (!token) throw new Error('未能获取 ChatGPT access token');
+
+            const requested = Math.max(1, Math.min(500, Number(limit) || 100));
+            const merged = [];
+            const seen = new Set();
+            const appendItems = (items) => {
+                items.forEach((item) => {
+                    if (!item?.id || seen.has(item.key)) return;
+                    seen.add(item.key);
+                    merged.push(item);
+                });
+            };
+
+            appendItems(await fetchChatGPTRootConversations('', token, false, requested, maxPages));
+            if (merged.length < requested) {
+                appendItems(await fetchChatGPTRootConversations('', token, true, requested - merged.length, maxPages));
+            }
+
+            const workspaceIds = detectChatGPTWorkspaceIds();
+            for (const workspaceId of workspaceIds) {
+                if (merged.length >= requested) break;
+
+                try {
+                    appendItems(await fetchChatGPTRootConversations(workspaceId, token, false, requested - merged.length, maxPages));
+                    if (merged.length < requested) {
+                        appendItems(await fetchChatGPTRootConversations(workspaceId, token, true, requested - merged.length, maxPages));
+                    }
+                } catch (e) {
+                    console.warn('AI-Chat-Nodes: 获取 ChatGPT 空间会话失败', workspaceId, e);
+                }
+
+                if (merged.length >= requested) break;
+
+                try {
+                    const projects = await fetchChatGPTProjects(workspaceId, token);
+                    for (const project of projects) {
+                        if (merged.length >= requested) break;
+                        appendItems(await fetchChatGPTProjectConversations(workspaceId, token, project, requested - merged.length));
+                    }
+                } catch (e) {
+                    console.warn('AI-Chat-Nodes: 获取 ChatGPT 项目会话失败', workspaceId, e);
+                }
+            }
+
+            return {
+                requested,
+                obtained: merged.length,
+                conversations: merged.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0)).slice(0, requested)
+            };
+        }
+
+        async function fetchChatGPTConversationById(conversationId, workspaceId = '') {
+            const token = await getChatGPTAccessToken();
+            if (!token) throw new Error('未能获取 ChatGPT access token');
+
+            const resp = await fetch(`/backend-api/conversation/${conversationId}`, {
+                headers: buildChatGPTApiHeaders(token, workspaceId)
+            });
+            if (!resp.ok) {
+                throw new Error(`获取会话详情失败 (${resp.status})`);
+            }
+            return resp.json();
+        }
+
+        async function exportChatGPTBatchConversations(conversations, format) {
+            await exportBatchConversationsAsZip('ChatGPT', conversations, format, 'ChatGPT');
         }
 
         function cleanChatGPTText(text) {
@@ -3936,21 +4350,8 @@
             const convId = getChatGPTConversationIdFromUrl();
             if (!convId) return [];
 
-            const token = await getChatGPTAccessToken();
-            if (!token) return [];
-
             try {
-                const resp = await fetch(`/backend-api/conversation/${convId}`, {
-                    headers: {
-                        'Authorization': `Bearer ${token}`
-                    }
-                });
-                if (!resp.ok) {
-                    console.warn(`AI-Chat-Nodes: ChatGPT 会话 API 请求失败 (${resp.status})`);
-                    return [];
-                }
-
-                const convData = await resp.json();
+                const convData = await fetchChatGPTConversationById(convId);
                 return extractChatGPTMessagesFromMapping(convData);
             } catch (e) {
                 console.warn('AI-Chat-Nodes: ChatGPT 会话 API 解析失败', e);
@@ -6673,6 +7074,435 @@
             await exportBatchConversationsAsZip('DeepSeek', conversations, format, 'DeepSeek');
         }
 
+        function getBatchConversationListStyles(listSelector) {
+            return `
+                    .db-batch-scroll::-webkit-scrollbar,
+                    ${listSelector}::-webkit-scrollbar { width: 8px; height: 8px; }
+                    .db-batch-scroll::-webkit-scrollbar-track,
+                    ${listSelector}::-webkit-scrollbar-track { background: transparent; }
+                    .db-batch-scroll::-webkit-scrollbar-thumb,
+                    ${listSelector}::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 999px; }
+                    .db-batch-scroll::-webkit-scrollbar-thumb:hover,
+                    ${listSelector}::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+                    .db-batch-loading { display:flex; align-items:center; justify-content:center; flex-direction:column; gap:10px; padding:28px 12px; color:#64748b; font-size:12px; }
+                    .db-batch-spinner { width:22px; height:22px; border-radius:999px; border:2px solid #cbd5e1; border-top-color:#2563eb; animation: db-batch-spin 0.9s linear infinite; }
+                    @keyframes db-batch-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+                    .db-batch-item { position:relative; display:grid; grid-template-columns:auto minmax(0, 1fr) auto; column-gap:10px; align-items:start; padding:10px 12px; border-bottom:1px solid #f1f5f9; background:#fff; overflow:hidden; }
+                    .db-batch-content { position:relative; z-index:1; display:grid; grid-template-columns:auto minmax(0, 1fr) auto; column-gap:10px; align-items:start; width:100%; pointer-events:none; }
+                    .db-batch-left-slot { display:grid; place-items:start center; align-content:start; padding-top:2px; }
+                    .db-batch-hit-layer { position:absolute; inset:0; z-index:2; display:grid; grid-template-columns:minmax(0, 1fr) minmax(0, 1fr); }
+                    .db-batch-hit-left,
+                    .db-batch-hit-right { border:none; background:transparent; padding:0; margin:0; cursor:pointer; transition:background .18s ease, box-shadow .18s ease; }
+                    .db-batch-hit-left:hover { background:linear-gradient(90deg, rgba(16,185,129,.10), rgba(16,185,129,.03)); }
+                    .db-batch-hit-right:hover { background:linear-gradient(90deg, rgba(37,99,235,.03), rgba(37,99,235,.10)); }
+                    .db-batch-hit-left:focus-visible,
+                    .db-batch-hit-right:focus-visible { outline:none; box-shadow:inset 0 0 0 2px rgba(37,99,235,.22); }
+                    .db-batch-ck { appearance:none; -webkit-appearance:none; width:16px; height:16px; border:1.5px solid #94a3b8; border-radius:4px; margin-top:2px; background:#fff; position:relative; flex-shrink:0; display:grid; place-items:center; }
+                    .db-batch-ck:checked { border-color:#2563eb; background:#2563eb; }
+                    .db-batch-ck:checked::after { content:''; position:absolute; left:50%; top:50%; width:5px; height:9px; border:solid #fff; border-width:0 2px 2px 0; transform:translate(-50%, -58%) rotate(45deg); }
+                    .db-batch-main { min-width:0; }
+                    .db-batch-title { font-size:12px; color:#0f172a; line-height:1.5; font-weight:600; margin:0; }
+                    .db-batch-meta { display:grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap:6px; margin-top:5px; }
+                    .db-batch-tag { font-size:11px; color:#475569; background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; padding:4px 8px; line-height:1.4; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+                    .db-batch-index { justify-self:end; align-self:center; min-width:34px; text-align:center; font-size:11px; font-weight:700; color:#1d4ed8; background:#eff6ff; border:1px solid #bfdbfe; border-radius:999px; padding:4px 8px; line-height:1.2; white-space:nowrap; }
+                    @media (max-width: 860px) { .db-batch-meta { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+                `;
+        }
+
+        function renderBatchConversationList(listEl, conversations, buildMetaTags, emptyText) {
+            if (!conversations.length) {
+                listEl.innerHTML = `<div style="padding:14px;font-size:12px;color:#64748b;">${escapeHtml(emptyText || '未获取到历史会话，请稍后重试。')}</div>`;
+                return;
+            }
+
+            listEl.innerHTML = conversations.map((conversation, idx) => {
+                const metaTags = (typeof buildMetaTags === 'function' ? buildMetaTags(conversation) : [])
+                    .filter(Boolean)
+                    .map((text) => `<span class="db-batch-tag">${escapeHtml(String(text))}</span>`)
+                    .join('');
+                const rowKey = escapeHtml(String(conversation.key || conversation.id || idx));
+                return `
+                    <div class="db-batch-item" data-key="${rowKey}">
+                        <div class="db-batch-content">
+                            <div class="db-batch-left-slot">
+                                <input type="checkbox" class="db-batch-ck" data-key="${rowKey}" data-id="${escapeHtml(conversation.id)}" checked>
+                            </div>
+                            <div class="db-batch-main">
+                                <p class="db-batch-title">${escapeHtml(conversation.title || `会话 ${conversation.id}`)}</p>
+                                <div class="db-batch-meta">${metaTags}</div>
+                            </div>
+                            <span class="db-batch-index">#${idx + 1}</span>
+                        </div>
+                        <div class="db-batch-hit-layer">
+                            <button type="button" class="db-batch-hit-left" data-key="${rowKey}" title="选中/取消选中"></button>
+                            <button type="button" class="db-batch-hit-right" data-key="${rowKey}" title="查看该对话消息"></button>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        function openBatchConversationPreviewModal(platformLabel, conversationTitle, loader) {
+            const overlay = document.createElement('div');
+            overlay.style.cssText = 'position:fixed;inset:0;z-index:1000003;background:rgba(2,6,23,.58);display:flex;align-items:center;justify-content:center;padding:24px;backdrop-filter:blur(3px);';
+
+            const modal = document.createElement('div');
+            modal.style.cssText = 'width:min(980px,94vw);height:min(82vh,860px);background:#fff;border-radius:16px;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 20px 60px rgba(0,0,0,.28);';
+            modal.innerHTML = `
+                <div style="padding:16px 20px;border-bottom:1px solid #e5e7eb;display:flex;justify-content:space-between;align-items:center;gap:12px;background:linear-gradient(180deg,#f8fafc 0%, #ffffff 100%);">
+                    <div style="min-width:0;">
+                        <div id="batch-preview-title" style="font-size:16px;font-weight:700;color:#0f172a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(conversationTitle || '会话预览')}</div>
+                        <div style="font-size:11px;color:#64748b;margin-top:4px;">${escapeHtml(platformLabel)} 对话消息预览</div>
+                    </div>
+                    <button type="button" id="batch-preview-close" style="border:1px solid #d1d5db;background:#fff;border-radius:8px;padding:6px 10px;cursor:pointer;font-size:12px;color:#334155;">关闭</button>
+                </div>
+                <div id="batch-preview-status" style="padding:10px 20px;border-bottom:1px solid #e5e7eb;font-size:11px;color:#64748b;background:#fff;">正在加载消息...</div>
+                <div id="batch-preview-body" style="flex:1;overflow:auto;padding:18px 20px;background:#f8fafc;"></div>
+            `;
+
+            overlay.appendChild(modal);
+            document.body.appendChild(overlay);
+
+            const close = () => {
+                if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
+            };
+
+            modal.querySelector('#batch-preview-close').addEventListener('click', close);
+            overlay.addEventListener('click', (e) => {
+                if (e.target === overlay) close();
+            });
+
+            const statusEl = modal.querySelector('#batch-preview-status');
+            const bodyEl = modal.querySelector('#batch-preview-body');
+
+            Promise.resolve()
+                .then(() => loader())
+                .then((result) => {
+                    const title = String(result?.title || conversationTitle || '').trim() || '会话预览';
+                    const messages = Array.isArray(result?.messages) ? result.messages : [];
+                    modal.querySelector('#batch-preview-title').textContent = title;
+                    statusEl.textContent = `共 ${messages.length} 条消息`;
+
+                    if (!messages.length) {
+                        bodyEl.innerHTML = '<div style="padding:24px 12px;color:#64748b;font-size:12px;text-align:center;">该会话暂无可预览的消息内容。</div>';
+                        return;
+                    }
+
+                    bodyEl.innerHTML = messages.map((msg, idx) => {
+                        const role = String(msg?.role || '').toLowerCase() === 'user' ? '用户' : String(msg?.role || '').toLowerCase() === 'assistant' ? '助手' : (msg?.role || '消息');
+                        const roleBg = role === '用户' ? '#eff6ff' : '#ecfeff';
+                        const roleColor = role === '用户' ? '#1d4ed8' : '#0f766e';
+                        const extraFlags = [
+                            msg?.isThought ? '思考' : '',
+                            msg?.isArtifact ? '附件' : '',
+                            msg?.isSearch ? '搜索' : '',
+                            msg?.fragmentType ? String(msg.fragmentType) : ''
+                        ].filter(Boolean).map((text) => `<span style="font-size:10px;color:#475569;background:#fff;border:1px solid #e2e8f0;border-radius:999px;padding:2px 6px;">${escapeHtml(text)}</span>`).join('');
+
+                        return `
+                            <section style="border:1px solid #e2e8f0;border-radius:12px;background:#fff;padding:12px 14px;margin-bottom:12px;">
+                                <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:8px;flex-wrap:wrap;">
+                                    <div style="display:flex;align-items:center;gap:8px;min-width:0;">
+                                        <span style="font-size:11px;font-weight:700;color:${roleColor};background:${roleBg};border:1px solid rgba(37,99,235,.12);border-radius:999px;padding:4px 8px;">${escapeHtml(role)}</span>
+                                        ${extraFlags}
+                                    </div>
+                                    <span style="font-size:10px;color:#94a3b8;">#${idx + 1}</span>
+                                </div>
+                                <pre style="margin:0;white-space:pre-wrap;word-break:break-word;font:12px/1.7 ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace;color:#0f172a;background:transparent;">${escapeHtml(String(msg?.text || ''))}</pre>
+                            </section>
+                        `;
+                    }).join('');
+                })
+                .catch((error) => {
+                    statusEl.textContent = '消息加载失败';
+                    bodyEl.innerHTML = `<div style="padding:24px 12px;color:#b91c1c;font-size:12px;text-align:center;">加载失败: ${escapeHtml(error?.message || String(error))}</div>`;
+                });
+        }
+
+        function bindBatchConversationListInteractions(listEl, lookupConversation, onView, onSelectionChange) {
+            listEl.addEventListener('click', async (e) => {
+                const selectHit = e.target.closest('.db-batch-hit-left');
+                if (selectHit && listEl.contains(selectHit)) {
+                    e.preventDefault();
+                    const key = selectHit.getAttribute('data-key');
+                    const checkbox = listEl.querySelector(`.db-batch-ck[data-key="${CSS.escape(key)}"]`);
+                    if (checkbox) {
+                        checkbox.checked = !checkbox.checked;
+                        if (typeof onSelectionChange === 'function') onSelectionChange();
+                    }
+                    return;
+                }
+
+                const viewHit = e.target.closest('.db-batch-hit-right');
+                if (viewHit && listEl.contains(viewHit)) {
+                    e.preventDefault();
+                    const key = viewHit.getAttribute('data-key');
+                    const conversation = typeof lookupConversation === 'function' ? lookupConversation(key) : null;
+                    if (conversation && typeof onView === 'function') {
+                        await onView(conversation);
+                    }
+                }
+            });
+
+            listEl.addEventListener('change', (e) => {
+                if (e.target && e.target.classList.contains('db-batch-ck') && typeof onSelectionChange === 'function') {
+                    onSelectionChange();
+                }
+            });
+        }
+
+        function openChatGPTBatchExportModal() {
+            const overlay = document.createElement('div');
+            overlay.style.cssText = 'position:fixed;inset:0;z-index:1000001;background:rgba(2,6,23,0.55);display:flex;align-items:center;justify-content:center;padding:24px;backdrop-filter:blur(3px);';
+
+            const modal = document.createElement('div');
+            modal.style.cssText = 'width:min(980px,94vw);height:min(82vh,860px);background:#fff;border-radius:16px;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 20px 60px rgba(0,0,0,0.25);';
+
+            modal.innerHTML = `
+                <div style="padding:16px 20px;border-bottom:1px solid #e5e7eb;display:flex;justify-content:space-between;align-items:center;background:linear-gradient(180deg,#f8fafc 0%, #ffffff 100%);">
+                    <div>
+                        <div style="font-size:16px;font-weight:700;color:#0f172a;">ChatGPT 批量导出</div>
+                    </div>
+                    <button id="gpt-batch-close" style="border:1px solid #d1d5db;background:#fff;border-radius:8px;padding:6px 10px;cursor:pointer;font-size:12px;color:#334155;">关闭</button>
+                </div>
+                <div class="db-batch-scroll" style="padding:16px 20px;overflow:auto;background:#f8fafc;">
+                    <div style="border:1px solid #e2e8f0;border-radius:12px;padding:14px;background:#fff;">
+                        <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">
+                            <div style="font-size:13px;font-weight:700;color:#0f172a;">历史会话</div>
+                            <label style="display:flex;align-items:center;gap:8px;font-size:12px;color:#475569;">
+                                <span>获取数量</span>
+                                <input id="gpt-batch-limit" type="text" inputmode="numeric" value="20" style="width:72px;box-sizing:border-box;border:1px solid #d1d5db;border-radius:8px;padding:6px 8px;font-size:12px;background:#fff;color:#0f172a;" />
+                            </label>
+                        </div>
+                        <div id="gpt-batch-status" style="font-size:11px;color:#64748b;margin-top:8px;">正在加载历史会话...</div>
+                        <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-top:12px;">
+                            <div style="display:flex;align-items:center;gap:8px;">
+                                <button id="gpt-batch-toggle-select" style="border:1px solid #93c5fd;background:#eff6ff;border-radius:8px;font-size:12px;padding:8px 12px;cursor:pointer;color:#1d4ed8;font-weight:600;">全选</button>
+                            </div>
+                            <div style="position:relative;display:flex;justify-content:flex-end;align-items:center;">
+                                <button id="gpt-batch-export-menu-trigger" style="border:1px solid #2563eb;background:#2563eb;color:#fff;border-radius:8px;font-size:12px;padding:8px 14px;cursor:pointer;font-weight:600;display:flex;align-items:center;gap:6px;">
+                                    <span>导出</span><span id="gpt-batch-export-menu-icon" style="font-size:10px;opacity:.9;display:inline-block;transition:transform .2s ease;transform:rotate(0deg);">▼</span>
+                                </button>
+                                <div id="gpt-batch-export-menu" style="position:absolute;right:0;top:40px;width:140px;background:#fff;border:1px solid #dbe3ee;border-radius:10px;box-shadow:0 10px 30px rgba(15,23,42,.15);padding:8px;z-index:5;opacity:0;pointer-events:none;transform:translateY(-8px) scale(0.96);transition:opacity .22s cubic-bezier(0.22, 0.61, 0.36, 1), transform .22s cubic-bezier(0.22, 0.61, 0.36, 1);">
+                                    <button class="gpt-batch-export-item" data-format="json" style="display:block;width:100%;text-align:left;background:#f39c12;color:#ffffff;border:none;border-radius:8px;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;">JSON</button>
+                                    <button class="gpt-batch-export-item" data-format="md" style="display:block;width:100%;text-align:left;background:#333333;color:#ffffff;border:none;border-radius:8px;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;margin-top:6px;">Markdown</button>
+                                    <button class="gpt-batch-export-item" data-format="txt" style="display:block;width:100%;text-align:left;background:#28a745;color:#ffffff;border:none;border-radius:8px;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;margin-top:6px;">TXT</button>
+                                    <button class="gpt-batch-export-item" data-format="pdf" style="display:block;width:100%;text-align:left;background:#dc3545;color:#ffffff;border:none;border-radius:8px;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;margin-top:6px;">PDF</button>
+                                </div>
+                            </div>
+                        </div>
+                        <div id="gpt-batch-list" style="max-height:520px;overflow:auto;border:1px solid #e5e7eb;border-radius:10px;margin-top:12px;background:#fff;"></div>
+                    </div>
+                </div>
+                <style>
+                    ${getBatchConversationListStyles('#gpt-batch-list')}
+                </style>
+            `;
+
+            overlay.appendChild(modal);
+            document.body.appendChild(overlay);
+
+            let recentConversations = [];
+            let loading = false;
+            const listEl = modal.querySelector('#gpt-batch-list');
+            const statusEl = modal.querySelector('#gpt-batch-status');
+            const limitInput = modal.querySelector('#gpt-batch-limit');
+            const toggleSelectBtn = modal.querySelector('#gpt-batch-toggle-select');
+            const exportMenuTrigger = modal.querySelector('#gpt-batch-export-menu-trigger');
+            const exportMenu = modal.querySelector('#gpt-batch-export-menu');
+            const exportMenuIcon = modal.querySelector('#gpt-batch-export-menu-icon');
+
+            const close = () => {
+                if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
+            };
+            const hideExportMenu = () => {
+                exportMenu.style.opacity = '0';
+                exportMenu.style.pointerEvents = 'none';
+                exportMenu.style.transform = 'translateY(-8px) scale(0.96)';
+                if (exportMenuIcon) exportMenuIcon.style.transform = 'rotate(0deg)';
+            };
+            const showExportMenu = () => {
+                exportMenu.style.opacity = '1';
+                exportMenu.style.pointerEvents = 'auto';
+                exportMenu.style.transform = 'translateY(0) scale(1)';
+                if (exportMenuIcon) exportMenuIcon.style.transform = 'rotate(180deg)';
+            };
+            const getRecentLimit = () => {
+                const inputRaw = String(limitInput.value || '').trim();
+                const onlyNum = inputRaw.replace(/[^\d]/g, '');
+                const raw = Number(onlyNum || 20);
+                const n = Number.isFinite(raw) ? Math.floor(raw) : 20;
+                const safe = Math.max(1, Math.min(500, n || 20));
+                limitInput.value = String(safe);
+                return safe;
+            };
+            const areAllSelected = () => {
+                const items = Array.from(listEl.querySelectorAll('.db-batch-ck'));
+                return items.length ? items.every((ck) => ck.checked) : false;
+            };
+            const updateSelectToggleButton = () => {
+                const allSelected = areAllSelected();
+                toggleSelectBtn.textContent = allSelected ? '全不选' : '全选';
+                if (allSelected) {
+                    toggleSelectBtn.style.borderColor = '#fecaca';
+                    toggleSelectBtn.style.background = '#fef2f2';
+                    toggleSelectBtn.style.color = '#b91c1c';
+                } else {
+                    toggleSelectBtn.style.borderColor = '#93c5fd';
+                    toggleSelectBtn.style.background = '#eff6ff';
+                    toggleSelectBtn.style.color = '#1d4ed8';
+                }
+            };
+            const renderRecentList = () => {
+                renderBatchConversationList(
+                    listEl,
+                    recentConversations,
+                    (c) => [
+                        `会话ID: ${c.id || '-'}`,
+                        `空间: ${c.workspaceLabel || '个人空间'}`,
+                        c.projectTitle ? `项目: ${c.projectTitle}` : '',
+                        c.archived ? '归档: 是' : '',
+                        `更新时间: ${c.updatedAtText || '-'}`,
+                        `创建时间: ${c.createdAtText || '-'}`,
+                        Number.isFinite(c.badgeCount) ? `消息数: ${String(c.badgeCount)}` : ''
+                    ],
+                    '未获取到历史会话，请稍后重试。'
+                );
+                updateSelectToggleButton();
+            };
+            const loadRecentConversations = async () => {
+                if (loading) return;
+                loading = true;
+                const limit = getRecentLimit();
+                hideExportMenu();
+                listEl.innerHTML = '<div class="db-batch-loading"><div class="db-batch-spinner"></div><div>正在加载历史会话...</div></div>';
+                statusEl.textContent = `正在加载历史会话（数量: ${limit}）...`;
+                try {
+                    const result = await fetchChatGPTRecentConversations(limit, 10);
+                    recentConversations = result.conversations;
+                    const workspaceIds = detectChatGPTWorkspaceIds();
+                    statusEl.textContent = `已加载 ${Number(result?.obtained || recentConversations.length)}/${Number(result?.requested || limit)} 个会话 · 识别到 ${workspaceIds.length} 个团队空间`;
+                    renderRecentList();
+                } catch (e) {
+                    recentConversations = [];
+                    statusEl.textContent = '加载历史会话失败';
+                    listEl.innerHTML = `<div style="padding:14px;font-size:12px;color:#b91c1c;">加载失败: ${escapeHtml(e.message || String(e))}</div>`;
+                } finally {
+                    loading = false;
+                }
+            };
+            const getSelectedConversations = () => {
+                const map = new Map(recentConversations.map((c) => [c.key, c]));
+                return Array.from(listEl.querySelectorAll('.db-batch-ck:checked'))
+                    .map((el) => map.get(el.getAttribute('data-key')))
+                    .filter(Boolean);
+            };
+
+            const openConversationPreview = async (conv) => {
+                openBatchConversationPreviewModal('ChatGPT', conv.title || conv.id, async () => {
+                    const convData = await fetchChatGPTConversationById(conv.id, conv.workspaceId);
+                    const messages = extractChatGPTMessagesFromMapping(convData);
+                    return {
+                        title: String(convData?.title || conv.title || '').trim() || `会话 ${conv.id}`,
+                        messages: messages.map((m) => ({
+                            role: m.role,
+                            text: String(m.text || '')
+                        }))
+                    };
+                });
+            };
+            const runBatchExport = async (format) => {
+                hideExportMenu();
+                const selected = getSelectedConversations();
+                if (!selected.length) {
+                    alert('请先勾选至少一个历史会话');
+                    return;
+                }
+
+                const out = [];
+                let failCount = 0;
+
+                for (let i = 0; i < selected.length; i += 1) {
+                    const conv = selected[i];
+                    statusEl.textContent = `正在导出第 ${i + 1}/${selected.length} 个会话: ${conv.title || conv.id}`;
+                    try {
+                        const convData = await fetchChatGPTConversationById(conv.id, conv.workspaceId);
+                        const messages = extractChatGPTMessagesFromMapping(convData);
+                        out.push({
+                            conversationId: conv.id,
+                            title: String(convData?.title || conv.title || '').trim() || `会话 ${conv.id}`,
+                            updatedAt: conv.updatedAt || 0,
+                            updatedAtText: conv.updatedAtText || '',
+                            createdAt: conv.createdAt || 0,
+                            createdAtText: conv.createdAtText || '',
+                            messageCount: messages.length,
+                            workspaceId: conv.workspaceId || '',
+                            workspaceLabel: conv.workspaceLabel || '',
+                            projectId: conv.projectId || '',
+                            projectTitle: conv.projectTitle || '',
+                            archived: Boolean(conv.archived),
+                            messages: messages.map((m) => ({
+                                role: m.role,
+                                text: String(m.text || '')
+                            }))
+                        });
+                    } catch (e) {
+                        failCount += 1;
+                        console.warn('AI-Chat-Nodes: ChatGPT 批量导出会话失败', conv?.id, e);
+                    }
+                }
+
+                if (!out.length) {
+                    alert('无可导出的会话数据');
+                    return;
+                }
+
+                await exportChatGPTBatchConversations(out, format);
+                statusEl.textContent = `批量导出完成，成功 ${out.length} 个会话${failCount ? `，失败 ${failCount} 个` : ''}`;
+                alert(`批量导出完成：成功 ${out.length} 个会话${failCount ? `，失败 ${failCount} 个` : ''}。已按会话标题分别打包为 ZIP。${format === 'pdf' ? 'PDF 选项导出为可打印 HTML 压缩包。' : ''}`);
+            };
+
+            modal.querySelector('#gpt-batch-close').addEventListener('click', close);
+            overlay.addEventListener('click', (e) => {
+                if (e.target === overlay) close();
+            });
+            exportMenuTrigger.addEventListener('click', (e) => {
+                e.stopPropagation();
+                if (exportMenu.style.opacity === '1') hideExportMenu();
+                else showExportMenu();
+            });
+            modal.addEventListener('click', (e) => {
+                const target = e.target;
+                if (target !== exportMenu && target !== exportMenuTrigger && !exportMenu.contains(target)) hideExportMenu();
+            });
+            limitInput.addEventListener('change', () => loadRecentConversations());
+            limitInput.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    loadRecentConversations();
+                }
+            });
+            toggleSelectBtn.addEventListener('click', () => {
+                const allSelected = areAllSelected();
+                listEl.querySelectorAll('.db-batch-ck').forEach((ck) => { ck.checked = !allSelected; });
+                updateSelectToggleButton();
+            });
+            bindBatchConversationListInteractions(
+                listEl,
+                (key) => recentConversations.find((c) => c.key === key) || null,
+                openConversationPreview,
+                updateSelectToggleButton
+            );
+            modal.querySelectorAll('.gpt-batch-export-item').forEach((btn) => {
+                btn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    runBatchExport(btn.getAttribute('data-format'));
+                });
+            });
+
+            loadRecentConversations();
+        }
+
         function findAnyDeepSeek(obj, keys) {
             if (!obj || typeof obj !== 'object') return '';
             for (const key of keys) {
@@ -6930,27 +7760,7 @@
                     </div>
                 </div>
                 <style>
-                    .db-batch-scroll::-webkit-scrollbar,
-                    #ds-batch-list::-webkit-scrollbar { width: 8px; height: 8px; }
-                    .db-batch-scroll::-webkit-scrollbar-track,
-                    #ds-batch-list::-webkit-scrollbar-track { background: transparent; }
-                    .db-batch-scroll::-webkit-scrollbar-thumb,
-                    #ds-batch-list::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 999px; }
-                    .db-batch-scroll::-webkit-scrollbar-thumb:hover,
-                    #ds-batch-list::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
-                    .db-batch-loading { display:flex; align-items:center; justify-content:center; flex-direction:column; gap:10px; padding:28px 12px; color:#64748b; font-size:12px; }
-                    .db-batch-spinner { width:22px; height:22px; border-radius:999px; border:2px solid #cbd5e1; border-top-color:#2563eb; animation: db-batch-spin 0.9s linear infinite; }
-                    @keyframes db-batch-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
-                    .db-batch-item { display:flex; gap:10px; align-items:flex-start; padding:10px 12px; border-bottom:1px solid #f1f5f9; cursor:pointer; transition:background .2s; }
-                    .db-batch-item:hover { background:#f8fafc; }
-                    .db-batch-ck { appearance:none; -webkit-appearance:none; width:16px; height:16px; border:1.5px solid #94a3b8; border-radius:4px; margin-top:2px; background:#fff; cursor:pointer; position:relative; flex-shrink:0; display:grid; place-items:center; }
-                    .db-batch-ck:checked { border-color:#2563eb; background:#2563eb; }
-                    .db-batch-ck:checked::after { content:''; position:absolute; left:50%; top:50%; width:5px; height:9px; border:solid #fff; border-width:0 2px 2px 0; transform:translate(-50%, -58%) rotate(45deg); }
-                    .db-batch-title { font-size:12px; color:#0f172a; line-height:1.5; font-weight:600; margin:0; }
-                    .db-batch-meta { display:grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap:6px; margin-top:5px; }
-                    .db-batch-tag { font-size:11px; color:#475569; background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; padding:4px 8px; line-height:1.4; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-                    .db-batch-index { margin-left:auto; flex-shrink:0; align-self:center; min-width:34px; text-align:center; font-size:11px; font-weight:700; color:#1d4ed8; background:#eff6ff; border:1px solid #bfdbfe; border-radius:999px; padding:4px 8px; line-height:1.2; }
-                    @media (max-width: 860px) { .db-batch-meta { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+                    ${getBatchConversationListStyles('#ds-batch-list')}
                 </style>
             `;
 
@@ -7015,27 +7825,18 @@
             };
 
             const renderRecentList = () => {
-                if (!recentConversations.length) {
-                    listEl.innerHTML = '<div style="padding:14px;font-size:12px;color:#64748b;">未获取到历史会话，请稍后重试或调整获取数量。</div>';
-                    return;
-                }
-
-                listEl.innerHTML = recentConversations.map((c, idx) => `
-                    <label class="db-batch-item">
-                        <input type="checkbox" class="db-batch-ck" data-id="${escapeHtml(c.id)}" checked>
-                        <div style="flex:1;min-width:0;">
-                            <p class="db-batch-title">${escapeHtml(c.title || `会话 ${c.id}`)}</p>
-                            <div class="db-batch-meta">
-                                ${c.id ? `<span class="db-batch-tag">会话ID: ${escapeHtml(c.id)}</span>` : ''}
-                                ${c.updatedAtText && c.updatedAtText !== '-' ? `<span class="db-batch-tag">更新时间: ${escapeHtml(c.updatedAtText)}</span>` : ''}
-                                ${c.createdAtText && c.createdAtText !== '-' ? `<span class="db-batch-tag">创建时间: ${escapeHtml(c.createdAtText)}</span>` : ''}
-                                ${c.pinned ? '<span class="db-batch-tag">置顶: 是</span>' : ''}
-                                ${c.messageCount != null && Number.isFinite(Number(c.messageCount)) ? `<span class="db-batch-tag">消息数: ${escapeHtml(String(c.messageCount))}</span>` : ''}
-                            </div>
-                        </div>
-                        <span class="db-batch-index">#${idx + 1}</span>
-                    </label>
-                `).join('');
+                renderBatchConversationList(
+                    listEl,
+                    recentConversations,
+                    (c) => [
+                        c.id ? `会话ID: ${c.id}` : '',
+                        c.updatedAtText && c.updatedAtText !== '-' ? `更新时间: ${c.updatedAtText}` : '',
+                        c.createdAtText && c.createdAtText !== '-' ? `创建时间: ${c.createdAtText}` : '',
+                        c.pinned ? '置顶: 是' : '',
+                        c.messageCount != null && Number.isFinite(Number(c.messageCount)) ? `消息数: ${String(c.messageCount)}` : ''
+                    ],
+                    '未获取到历史会话，请稍后重试或调整获取数量。'
+                );
                 updateSelectToggleButton();
             };
 
@@ -7065,6 +7866,21 @@
                 return Array.from(listEl.querySelectorAll('.db-batch-ck:checked'))
                     .map((el) => map.get(el.getAttribute('data-id')))
                     .filter(Boolean);
+            };
+
+            const openConversationPreview = async (conv) => {
+                openBatchConversationPreviewModal('DeepSeek', conv.title || conv.id, async () => {
+                    const allRes = await fetchDeepSeekConversationMessages(conv.id);
+                    return {
+                        title: conv.title || `会话 ${conv.id}`,
+                        messages: allRes.messages.map((m) => ({
+                            role: m.role,
+                            text: String(m.text || ''),
+                            isThought: Boolean(m.isThought),
+                            fragmentType: String(m.fragmentType || '')
+                        }))
+                    };
+                });
             };
 
             const runBatchExport = async (format) => {
@@ -7140,9 +7956,12 @@
                 listEl.querySelectorAll('.db-batch-ck').forEach((ck) => { ck.checked = !allSelected; });
                 updateSelectToggleButton();
             });
-            listEl.addEventListener('change', (e) => {
-                if (e.target && e.target.classList.contains('db-batch-ck')) updateSelectToggleButton();
-            });
+            bindBatchConversationListInteractions(
+                listEl,
+                (key) => recentConversations.find((c) => String(c.id) === String(key)) || null,
+                openConversationPreview,
+                updateSelectToggleButton
+            );
             modal.querySelectorAll('.ds-batch-export-item').forEach((btn) => {
                 btn.addEventListener('click', (e) => {
                     e.stopPropagation();
@@ -7197,133 +8016,7 @@
                     </div>
                 </div>
                 <style>
-                    .db-batch-scroll::-webkit-scrollbar,
-                    #db-batch-list::-webkit-scrollbar {
-                        width: 8px;
-                        height: 8px;
-                    }
-                    .db-batch-scroll::-webkit-scrollbar-track,
-                    #db-batch-list::-webkit-scrollbar-track {
-                        background: transparent;
-                    }
-                    .db-batch-scroll::-webkit-scrollbar-thumb,
-                    #db-batch-list::-webkit-scrollbar-thumb {
-                        background: #cbd5e1;
-                        border-radius: 999px;
-                    }
-                    .db-batch-scroll::-webkit-scrollbar-thumb:hover,
-                    #db-batch-list::-webkit-scrollbar-thumb:hover {
-                        background: #94a3b8;
-                    }
-                    .db-batch-loading {
-                        display:flex;
-                        align-items:center;
-                        justify-content:center;
-                        flex-direction:column;
-                        gap:10px;
-                        padding:28px 12px;
-                        color:#64748b;
-                        font-size:12px;
-                    }
-                    .db-batch-spinner {
-                        width:22px;
-                        height:22px;
-                        border-radius:999px;
-                        border:2px solid #cbd5e1;
-                        border-top-color:#2563eb;
-                        animation: db-batch-spin 0.9s linear infinite;
-                    }
-                    @keyframes db-batch-spin {
-                        from { transform: rotate(0deg); }
-                        to { transform: rotate(360deg); }
-                    }
-                    .db-batch-item {
-                        display:flex;
-                        gap:10px;
-                        align-items:flex-start;
-                        padding:10px 12px;
-                        border-bottom:1px solid #f1f5f9;
-                        cursor:pointer;
-                        transition:background .2s;
-                    }
-                    .db-batch-item:hover {
-                        background:#f8fafc;
-                    }
-                    .db-batch-ck {
-                        appearance:none;
-                        -webkit-appearance:none;
-                        width:16px;
-                        height:16px;
-                        border:1.5px solid #94a3b8;
-                        border-radius:4px;
-                        margin-top:2px;
-                        background:#fff;
-                        cursor:pointer;
-                        position:relative;
-                        flex-shrink:0;
-                        display:grid;
-                        place-items:center;
-                    }
-                    .db-batch-ck:checked {
-                        border-color:#2563eb;
-                        background:#2563eb;
-                    }
-                    .db-batch-ck:checked::after {
-                        content:'';
-                        position:absolute;
-                        left:50%;
-                        top:50%;
-                        width:5px;
-                        height:9px;
-                        border:solid #fff;
-                        border-width:0 2px 2px 0;
-                        transform:translate(-50%, -58%) rotate(45deg);
-                    }
-                    .db-batch-title {
-                        font-size:12px;
-                        color:#0f172a;
-                        line-height:1.5;
-                        font-weight:600;
-                        margin:0;
-                    }
-                    .db-batch-meta {
-                        display:grid;
-                        grid-template-columns: repeat(4, minmax(0, 1fr));
-                        gap:6px;
-                        margin-top:5px;
-                    }
-                    .db-batch-tag {
-                        font-size:11px;
-                        color:#475569;
-                        background:#f8fafc;
-                        border:1px solid #e2e8f0;
-                        border-radius:8px;
-                        padding:4px 8px;
-                        line-height:1.4;
-                        white-space:nowrap;
-                        overflow:hidden;
-                        text-overflow:ellipsis;
-                    }
-                    .db-batch-index {
-                        margin-left:auto;
-                        flex-shrink:0;
-                        align-self:center;
-                        min-width:34px;
-                        text-align:center;
-                        font-size:11px;
-                        font-weight:700;
-                        color:#1d4ed8;
-                        background:#eff6ff;
-                        border:1px solid #bfdbfe;
-                        border-radius:999px;
-                        padding:4px 8px;
-                        line-height:1.2;
-                    }
-                    @media (max-width: 860px) {
-                        .db-batch-meta {
-                            grid-template-columns: repeat(2, minmax(0, 1fr));
-                        }
-                    }
+                    ${getBatchConversationListStyles('#db-batch-list')}
                 </style>
             `;
 
@@ -7379,26 +8072,17 @@
             };
 
             const renderRecentList = () => {
-                if (!recentConversations.length) {
-                    listEl.innerHTML = '<div style="padding:14px;font-size:12px;color:#64748b;">未获取到历史会话，请稍后重试或调整获取数量。</div>';
-                    return;
-                }
-
-                listEl.innerHTML = recentConversations.map((c, idx) => `
-                    <label class="db-batch-item">
-                        <input type="checkbox" class="db-batch-ck" data-id="${escapeHtml(c.id)}" checked>
-                        <div style="flex:1;min-width:0;">
-                            <p class="db-batch-title">${escapeHtml(c.title || `会话 ${c.id}`)}</p>
-                            <div class="db-batch-meta">
-                                <span class="db-batch-tag">会话编号: ${escapeHtml(c.id || '-')}</span>
-                                <span class="db-batch-tag">消息数: ${escapeHtml(Number.isFinite(c.badgeCount) ? String(c.badgeCount) : '-')}</span>
-                                <span class="db-batch-tag">更新时间: ${escapeHtml(c.updatedAtText || '-')}</span>
-                                <span class="db-batch-tag">创建时间: ${escapeHtml(c.createdAtText || '-')}</span>
-                            </div>
-                        </div>
-                        <span class="db-batch-index">#${idx + 1}</span>
-                    </label>
-                `).join('');
+                renderBatchConversationList(
+                    listEl,
+                    recentConversations,
+                    (c) => [
+                        `会话编号: ${c.id || '-'}`,
+                        `消息数: ${Number.isFinite(c.badgeCount) ? String(c.badgeCount) : '-'}`,
+                        `更新时间: ${c.updatedAtText || '-'}`,
+                        `创建时间: ${c.createdAtText || '-'}`
+                    ],
+                    '未获取到历史会话，请稍后重试或调整获取数量。'
+                );
                 updateSelectToggleButton();
             };
 
@@ -7450,6 +8134,20 @@
                 return Array.from(listEl.querySelectorAll('.db-batch-ck:checked'))
                     .map((el) => map.get(el.getAttribute('data-id')))
                     .filter(Boolean);
+            };
+
+            const openConversationPreview = async (conv) => {
+                openBatchConversationPreviewModal('豆包', conv.title || conv.id, async () => {
+                    const allRes = await fetchDoubaoAllConversationMessages(conv.id, 30, () => {});
+                    return {
+                        title: conv.title || `会话 ${conv.id}`,
+                        messages: allRes.messages.map((m) => ({
+                            role: m.role,
+                            text: String(m.text || ''),
+                            isArtifact: Boolean(m.isArtifact)
+                        }))
+                    };
+                });
             };
 
             const runBatchExport = async (format) => {
@@ -7532,11 +8230,12 @@
                 updateSelectToggleButton();
             });
 
-            listEl.addEventListener('change', (e) => {
-                if (e.target && e.target.classList.contains('db-batch-ck')) {
-                    updateSelectToggleButton();
-                }
-            });
+            bindBatchConversationListInteractions(
+                listEl,
+                (key) => recentConversations.find((c) => String(c.id) === String(key)) || null,
+                openConversationPreview,
+                updateSelectToggleButton
+            );
 
             modal.querySelectorAll('.db-batch-export-item').forEach((btn) => {
                 btn.addEventListener('click', (e) => {
@@ -7592,27 +8291,7 @@
                     </div>
                 </div>
                 <style>
-                    .db-batch-scroll::-webkit-scrollbar,
-                    #qw-batch-list::-webkit-scrollbar { width: 8px; height: 8px; }
-                    .db-batch-scroll::-webkit-scrollbar-track,
-                    #qw-batch-list::-webkit-scrollbar-track { background: transparent; }
-                    .db-batch-scroll::-webkit-scrollbar-thumb,
-                    #qw-batch-list::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 999px; }
-                    .db-batch-scroll::-webkit-scrollbar-thumb:hover,
-                    #qw-batch-list::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
-                    .db-batch-loading { display:flex; align-items:center; justify-content:center; flex-direction:column; gap:10px; padding:28px 12px; color:#64748b; font-size:12px; }
-                    .db-batch-spinner { width:22px; height:22px; border-radius:999px; border:2px solid #cbd5e1; border-top-color:#2563eb; animation: db-batch-spin 0.9s linear infinite; }
-                    @keyframes db-batch-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
-                    .db-batch-item { display:flex; gap:10px; align-items:flex-start; padding:10px 12px; border-bottom:1px solid #f1f5f9; cursor:pointer; transition:background .2s; }
-                    .db-batch-item:hover { background:#f8fafc; }
-                    .db-batch-ck { appearance:none; -webkit-appearance:none; width:16px; height:16px; border:1.5px solid #94a3b8; border-radius:4px; margin-top:2px; background:#fff; cursor:pointer; position:relative; flex-shrink:0; display:grid; place-items:center; }
-                    .db-batch-ck:checked { border-color:#2563eb; background:#2563eb; }
-                    .db-batch-ck:checked::after { content:''; position:absolute; left:50%; top:50%; width:5px; height:9px; border:solid #fff; border-width:0 2px 2px 0; transform:translate(-50%, -58%) rotate(45deg); }
-                    .db-batch-title { font-size:12px; color:#0f172a; line-height:1.5; font-weight:600; margin:0; }
-                    .db-batch-meta { display:grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap:6px; margin-top:5px; }
-                    .db-batch-tag { font-size:11px; color:#475569; background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; padding:4px 8px; line-height:1.4; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-                    .db-batch-index { margin-left:auto; flex-shrink:0; align-self:center; min-width:34px; text-align:center; font-size:11px; font-weight:700; color:#1d4ed8; background:#eff6ff; border:1px solid #bfdbfe; border-radius:999px; padding:4px 8px; line-height:1.2; }
-                    @media (max-width: 860px) { .db-batch-meta { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+                    ${getBatchConversationListStyles('#qw-batch-list')}
                 </style>
             `;
 
@@ -7662,25 +8341,17 @@
                 toggleSelectBtn.textContent = allSelected ? '全不选' : '全选';
             };
             const renderRecentList = () => {
-                if (!recentConversations.length) {
-                    listEl.innerHTML = '<div style="padding:14px;font-size:12px;color:#64748b;">未获取到历史会话，请稍后重试。</div>';
-                    return;
-                }
-                listEl.innerHTML = recentConversations.map((c, idx) => `
-                    <label class="db-batch-item">
-                        <input type="checkbox" class="db-batch-ck" data-id="${escapeHtml(c.id)}" checked>
-                        <div style="flex:1;min-width:0;">
-                            <p class="db-batch-title">${escapeHtml(c.title || `会话 ${c.id}`)}</p>
-                            <div class="db-batch-meta">
-                                <span class="db-batch-tag">会话编号: ${escapeHtml(c.id || '-')}</span>
-                                <span class="db-batch-tag">消息数: ${escapeHtml(Number.isFinite(c.badgeCount) ? String(c.badgeCount) : '-')}</span>
-                                <span class="db-batch-tag">更新时间: ${escapeHtml(c.updatedAtText || '-')}</span>
-                                <span class="db-batch-tag">创建时间: ${escapeHtml(c.createdAtText || '-')}</span>
-                            </div>
-                        </div>
-                        <span class="db-batch-index">#${idx + 1}</span>
-                    </label>
-                `).join('');
+                renderBatchConversationList(
+                    listEl,
+                    recentConversations,
+                    (c) => [
+                        `会话编号: ${c.id || '-'}`,
+                        `消息数: ${Number.isFinite(c.badgeCount) ? String(c.badgeCount) : '-'}`,
+                        `更新时间: ${c.updatedAtText || '-'}`,
+                        `创建时间: ${c.createdAtText || '-'}`
+                    ],
+                    '未获取到历史会话，请稍后重试。'
+                );
                 updateSelectToggleButton();
             };
             const loadRecentConversations = async () => {
@@ -7709,6 +8380,20 @@
                     .map((el) => map.get(el.getAttribute('data-id')))
                     .filter(Boolean);
             };
+
+            const openConversationPreview = async (conv) => {
+                openBatchConversationPreviewModal('千问', conv.title || conv.id, async () => {
+                    const allRes = await fetchQwenAllConversationMessages(conv.id, 20, () => {});
+                    return {
+                        title: conv.title || `会话 ${conv.id}`,
+                        messages: allRes.messages.map((m) => ({
+                            role: m.role,
+                            text: String(m.text || '')
+                        }))
+                    };
+                });
+            };
+
             const runBatchExport = async (format) => {
                 hideExportMenu();
                 const selected = getSelectedConversations();
@@ -7772,9 +8457,12 @@
                 listEl.querySelectorAll('.db-batch-ck').forEach((ck) => { ck.checked = !allSelected; });
                 updateSelectToggleButton();
             });
-            listEl.addEventListener('change', (e) => {
-                if (e.target && e.target.classList.contains('db-batch-ck')) updateSelectToggleButton();
-            });
+            bindBatchConversationListInteractions(
+                listEl,
+                (key) => recentConversations.find((c) => String(c.id) === String(key)) || null,
+                openConversationPreview,
+                updateSelectToggleButton
+            );
             modal.querySelectorAll('.qw-batch-export-item').forEach((btn) => {
                 btn.addEventListener('click', (e) => {
                     e.stopPropagation();
@@ -8423,8 +9111,12 @@
             });
         }
 
-        btn.addEventListener('click', (e) => {
-            e.stopPropagation();
+        const toggleSettingsPopup = (e) => {
+            const now = Date.now();
+            if (now - lastToggleSettingsAt < 180) return;
+            lastToggleSettingsAt = now;
+            if (e && typeof e.stopPropagation === 'function') e.stopPropagation();
+            if (e && typeof e.preventDefault === 'function') e.preventDefault();
             const isVisible = popup.style.opacity === '1';
             
             if (isVisible) {
@@ -8445,7 +9137,8 @@
                 popup.style.transform = 'translateY(0) scale(1)';
                 hideExportMenu();
             }
-        });
+        };
+        btn.addEventListener('click', toggleSettingsPopup);
 
         document.addEventListener('click', () => {
             hidePopup();
@@ -8542,17 +9235,17 @@
             if (!isDeepSeek) return false;
             const anchor = findDeepSeekHeaderAnchor();
             if (!anchor || !anchor.parentElement) return false;
-            if (anchor === btn) return false;
+            if (anchor === buttonHost || anchor === btn) return false;
             const container = anchor.parentElement;
 
-            if (btn.parentElement !== container) {
-                container.insertBefore(btn, anchor);
+            if (buttonHost.parentElement !== container) {
+                container.insertBefore(buttonHost, anchor);
                 return true;
             }
 
             // 已在目标容器内，但顺序不正确时强制纠正到锚点前
-            if (btn.nextSibling !== anchor) {
-                container.insertBefore(btn, anchor);
+            if (buttonHost.nextSibling !== anchor) {
+                container.insertBefore(buttonHost, anchor);
                 return true;
             }
             return true;
@@ -8562,14 +9255,12 @@
         function attemptInjection() {
             let container = null;
             if (isChatGPT) {
-                container = document.querySelector("#page-header > div.flex.items-center.justify-center.gap-3.overflow-x-hidden > div.flex.items-center.justify-end.overflow-x-hidden");
-                if (!container) {
-                    container = document.querySelector('#page-header .items-center.justify-end') ||
-                                document.querySelector('header .items-center.justify-end') ||
-                                document.querySelector('header [class*="justify-end"]');
+                applyFallbackHostPlacement();
+                if (!fallbackHost.isConnected) document.body.appendChild(fallbackHost);
+                if (buttonHost.parentElement !== fallbackHost) {
+                    fallbackHost.appendChild(buttonHost);
                 }
-                // 核心修复：强制隐藏 GPT 容器的垂直滚动条
-                if (container) container.style.setProperty('overflow-y', 'hidden', 'important');
+                return true;
             } else if (isQwen) {
                 // 更新千问注入位置为顶栏右侧功能区
                 container = document.querySelector(".flex.items-center.gap-2.mr-4.desktop-no-drag > div.flex.items-center.gap-2");
@@ -8584,7 +9275,7 @@
                 const shareAnchor = shareEl ? (shareEl.closest('button') || shareEl.closest('div') || shareEl) : null;
                 const shareContainer = shareAnchor && shareAnchor.parentElement;
                 if (shareContainer && !shareContainer.querySelector('.ai-nodes-settings-btn')) {
-                    shareContainer.insertBefore(btn, shareAnchor);
+                    shareContainer.insertBefore(buttonHost, shareAnchor);
                     setTimeout(applyAutoCollapse, 500);
                     return true;
                 }
@@ -8608,7 +9299,7 @@
             }
 
             if (container && !container.querySelector('.ai-nodes-settings-btn')) {
-                container.appendChild(btn);
+                container.appendChild(buttonHost);
                 if (fallbackHost.isConnected) fallbackHost.remove();
                 // 首次注入成功时尝试自动收起
                 setTimeout(applyAutoCollapse, 500);
@@ -8616,9 +9307,9 @@
             }
 
             // 兜底：顶栏容器结构变化时，始终保证设置按钮可点击
-            if (!btn.isConnected) {
+            if (!buttonHost.isConnected) {
                 if (!fallbackHost.isConnected) document.body.appendChild(fallbackHost);
-                fallbackHost.appendChild(btn);
+                fallbackHost.appendChild(buttonHost);
                 return true;
             }
             return false;
@@ -8635,15 +9326,18 @@
 
         // 长驻守护：路由切换或头部重渲染后自动补注入
         const ensureInjected = () => {
+            if (isChatGPT) {
+                applyFallbackHostPlacement();
+            }
             if (isDeepSeek) {
                 // DeepSeek 头部经常局部重渲染，即使按钮仍连接也可能位置错乱
-                if (!ensureDeepSeekPlacement() && !btn.isConnected) {
+                if (!ensureDeepSeekPlacement() && !buttonHost.isConnected) {
                     attemptInjection();
                 }
                 return;
             }
 
-            if (!btn.isConnected) {
+            if (!buttonHost.isConnected) {
                 attemptInjection();
             }
         };
@@ -8667,6 +9361,10 @@
         document.addEventListener('visibilitychange', () => {
             if (!document.hidden) setTimeout(ensureInjected, 100);
         });
+        if (isChatGPT) {
+            window.addEventListener('resize', applyFallbackHostPlacement, { passive: true });
+            window.addEventListener('scroll', applyFallbackHostPlacement, { passive: true });
+        }
     }
 
     let appBootstrapped = false;
