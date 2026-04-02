@@ -126,6 +126,8 @@
         return text
             .replace(/\uE200cite(?:\uE202turn\d+(?:search|view)\d+)+\uE201/gi, '')
             .replace(/cite(?:turn\d+(?:search|view)\d+)+/gi, '')
+            .replace(/[“"]\s*[“"](?=\s|$)/g, '')
+            .replace(/\s{2,}/g, ' ')
             .trim();
     }
 

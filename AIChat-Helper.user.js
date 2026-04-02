@@ -3921,7 +3921,95 @@
             return text
                 .replace(/\uE200cite(?:\uE202turn\d+(?:search|view)\d+)+\uE201/gi, '')
                 .replace(/cite(?:turn\d+(?:search|view)\d+)+/gi, '')
+                .replace(/[“"]\s*[“"](?=\s|$)/g, '')
+                .replace(/\s{2,}/g, ' ')
+                .replace(/\n[ \t]+\n/g, '\n\n')
                 .trim();
+        }
+
+        function normalizeChatGPTReferenceName(reference) {
+            if (!reference || typeof reference !== 'object') return '';
+            return String(
+                reference.name ||
+                reference.metadata?.name ||
+                reference.metadata?.title ||
+                reference.title ||
+                reference.id ||
+                ''
+            ).trim();
+        }
+
+        function buildChatGPTReferenceReplacement(reference, fallbackLabel) {
+            const type = String(reference?.type || reference?.metadata?.type || '').toLowerCase();
+            const name = normalizeChatGPTReferenceName(reference);
+            if (type === 'file' || name) {
+                return `[${fallbackLabel || '文件引用'}: ${name || '未命名文件'}]`;
+            }
+            return `[${fallbackLabel || '引用'}]`;
+        }
+
+        function applyChatGPTMessageReferences(text, msg) {
+            let output = String(text || '');
+            const refs = Array.isArray(msg?.metadata?.content_references) ? msg.metadata.content_references : [];
+            if (refs.length) {
+                const exactItems = refs
+                    .map((ref, idx) => ({
+                        idx,
+                        start: Number(ref?.start_idx),
+                        end: Number(ref?.end_idx),
+                        matchedText: String(ref?.matched_text || ''),
+                        replacement: buildChatGPTReferenceReplacement(ref, ref?.type === 'file' ? '文件引用' : '引用')
+                    }))
+                    .filter((item) => item.matchedText || (Number.isFinite(item.start) && Number.isFinite(item.end) && item.end > item.start));
+
+                if (exactItems.length) {
+                    exactItems.forEach((item) => {
+                        if (item.matchedText && output.includes(item.matchedText)) {
+                            output = output.split(item.matchedText).join(item.replacement);
+                        }
+                    });
+
+                    const fallbackItems = exactItems
+                        .filter((item) => Number.isFinite(item.start) && Number.isFinite(item.end) && item.end > item.start)
+                        .sort((a, b) => b.start - a.start);
+
+                    fallbackItems.forEach((item) => {
+                        const segment = output.slice(item.start, item.end);
+                        if (segment === item.replacement) return;
+                        if (item.matchedText && segment && segment !== item.matchedText && !segment.includes('filecite') && !segment.includes('')) return;
+                        output = output.slice(0, item.start) + item.replacement + output.slice(item.end);
+                    });
+                    return output;
+                }
+            }
+
+            const citations = Array.isArray(msg?.metadata?.citations) ? msg.metadata.citations : [];
+            if (citations.length) {
+                const items = citations
+                    .map((citation) => ({
+                        start: Number(citation?.start_ix),
+                        end: Number(citation?.end_ix),
+                        replacement: buildChatGPTReferenceReplacement(
+                            citation?.metadata || {},
+                            citation?.metadata?.type === 'file' ? '文件引用' : '引用'
+                        )
+                    }))
+                    .filter((item) => Number.isFinite(item.start) && Number.isFinite(item.end) && item.end > item.start)
+                    .sort((a, b) => b.start - a.start);
+
+                if (items.length) {
+                    items.forEach((item) => {
+                        output = output.slice(0, item.start) + item.replacement + output.slice(item.end);
+                    });
+                    return output;
+                }
+            }
+
+            return output
+                .replace(/\uE200filecite(?:\uE202turn\d+file\d+)+\uE201/gi, '[文件引用]')
+                .replace(/\uE200cite(?:\uE202turn\d+(?:search|view)\d+)+\uE201/gi, '[引用]')
+                .replace(/filecite(?:turn\d+file\d+)+/gi, '[文件引用]')
+                .replace(/cite(?:turn\d+(?:search|view)\d+)+/gi, '[引用]');
         }
 
         function escapeHtml(str) {
@@ -4254,7 +4342,7 @@
             const content = msg?.content;
             if (!content) return '';
 
-            if (typeof content === 'string') return cleanChatGPTText(content);
+            if (typeof content === 'string') return cleanChatGPTText(applyChatGPTMessageReferences(content, msg));
 
             let raw = '';
             if (Array.isArray(content.parts) && content.parts.length) {
@@ -4273,7 +4361,19 @@
                 raw = partToMarkdown(content);
             }
 
-            return cleanChatGPTText(String(raw).replace(/\n{3,}/g, '\n\n'));
+            return cleanChatGPTText(applyChatGPTMessageReferences(String(raw).replace(/\n{3,}/g, '\n\n'), msg));
+        }
+
+        function extractChatGPTUserAttachmentText(msg) {
+            const attachments = Array.isArray(msg?.metadata?.attachments) ? msg.metadata.attachments : [];
+            if (!attachments.length) return '';
+
+            const lines = attachments.map((item, idx) => {
+                const name = String(item?.name || item?.filename || item?.file_name || '').trim() || `文件${idx + 1}`;
+                return `[附件${idx + 1}: ${name}]`;
+            }).filter(Boolean);
+
+            return lines.join('\n');
         }
 
         function extractChatGPTMessagesFromMapping(convData) {
@@ -4293,12 +4393,14 @@
                 if ((author !== 'user' && author !== 'assistant') || isHidden) return;
 
                 const text = extractChatGPTMessageText(msg);
-                if (!text) return;
+                const attachmentText = author === 'user' ? extractChatGPTUserAttachmentText(msg) : '';
+                const mergedText = [text, attachmentText].filter(Boolean).join(text && attachmentText ? '\n\n' : '');
+                if (!mergedText) return;
 
                 messages.push({
                     role: author,
-                    text,
-                    html: chatMarkdownToHtml(text),
+                    text: mergedText,
+                    html: chatMarkdownToHtml(mergedText),
                     createTime: msg.create_time || 0
                 });
             };
@@ -7142,81 +7244,381 @@
             }).join('');
         }
 
-        function openBatchConversationPreviewModal(platformLabel, conversationTitle, loader) {
-            const overlay = document.createElement('div');
-            overlay.style.cssText = 'position:fixed;inset:0;z-index:1000003;background:rgba(2,6,23,.58);display:flex;align-items:center;justify-content:center;padding:24px;backdrop-filter:blur(3px);';
+        function normalizeExportSourceLabel(raw) {
+            const s = String(raw || 'DOM').toUpperCase();
+            if (s.includes('API')) return 'API';
+            return 'DOM';
+        }
 
-            const modal = document.createElement('div');
-            modal.style.cssText = 'width:min(980px,94vw);height:min(82vh,860px);background:#fff;border-radius:16px;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 20px 60px rgba(0,0,0,.28);';
-            modal.innerHTML = `
-                <div style="padding:16px 20px;border-bottom:1px solid #e5e7eb;display:flex;justify-content:space-between;align-items:center;gap:12px;background:linear-gradient(180deg,#f8fafc 0%, #ffffff 100%);">
-                    <div style="min-width:0;">
-                        <div id="batch-preview-title" style="font-size:16px;font-weight:700;color:#0f172a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(conversationTitle || '会话预览')}</div>
-                        <div style="font-size:11px;color:#64748b;margin-top:4px;">${escapeHtml(platformLabel)} 对话消息预览</div>
+        function renderDeepSeekSessionPanel(meta) {
+            if (!isDeepSeek || !meta) return '';
+            const cs = meta.chatSession || {};
+            const st = meta.messageStats || {};
+            const sample = Array.isArray(st.sample) ? st.sample : [];
+
+            const tags = [
+                `会话ID: ${cs.id || '-'}`,
+                `标题: ${cs.title || '-'}`,
+                `已置顶: ${cs.pinned ? '是' : '否'}`,
+                `创建时间: ${cs.insertedAt || '-'}`,
+                `更新时间: ${cs.updatedAt || '-'}`
+            ];
+
+            const thinkingOn = sample.some((s) => Boolean(s?.thinkingEnabled));
+            const searchOn = sample.some((s) => Boolean(s?.searchEnabled));
+            const sampleTags = [
+                `<span class="m-ds-tag m-ds-tag-soft">深度思考: ${thinkingOn ? '开启' : '关闭'}</span>`,
+                `<span class="m-ds-tag m-ds-tag-soft">智能搜索: ${searchOn ? '开启' : '关闭'}</span>`
+            ].join('');
+
+            return `
+                <details class="m-ds-session-panel">
+                    <summary class="m-ds-session-title">DeepSeek 对话信息（点击展开）</summary>
+                    <div class="m-ds-session-body">
+                        <div class="m-ds-tag-wrap">${tags.map((t) => `<span class="m-ds-tag">${t}</span>`).join('')}</div>
+                        ${sampleTags ? `<div class="m-ds-session-subtitle">chat_messages 状态</div><div class="m-ds-tag-wrap">${sampleTags}</div>` : ''}
                     </div>
-                    <button type="button" id="batch-preview-close" style="border:1px solid #d1d5db;background:#fff;border-radius:8px;padding:6px 10px;cursor:pointer;font-size:12px;color:#334155;">关闭</button>
+                </details>
+            `;
+        }
+
+        async function openMessagePreviewExportModal(options = {}) {
+            const headerTitle = String(options.headerTitle || '导出当前对话');
+            const loadingTitle = String(options.loadingTitle || '正在加载对话内容...');
+            const loadingHint = String(options.loadingHint || '请稍候，导出列表即将就绪');
+            const emptyText = String(options.emptyText || '未检测到可导出的内容');
+            const headerMetaText = String(options.headerMetaText || '').trim();
+            const loader = typeof options.loader === 'function' ? options.loader : null;
+            const initialSelectedIndices = Array.isArray(options.initialSelectedIndices) ? options.initialSelectedIndices : null;
+            const onSelectionChange = typeof options.onSelectionChange === 'function' ? options.onSelectionChange : null;
+            if (!loader) return;
+
+            const renderHeader = (sourceLabel) => `
+                <div style="padding:20px 24px;border-bottom:1px solid #eee;display:flex;justify-content:space-between;align-items:center;">
+                    <div style="display:flex;align-items:center;gap:10px;min-width:0;">
+                        <h3 style="margin:0;font-size:18px;white-space:nowrap;">${escapeHtml(headerTitle)}</h3>
+                        ${headerMetaText ? `<span style="font-size:12px;padding:4px 8px;border-radius:999px;background:#eff6ff;color:#1d4ed8;border:1px solid #bfdbfe;max-width:320px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(headerMetaText)}</span>` : ''}
+                    </div>
+                    <button id="modal-x" style="cursor:pointer;border:none;background:#eee;width:28px;height:28px;border-radius:50%;font-size:16px;display:flex;align-items:center;justify-content:center;">&times;</button>
                 </div>
-                <div id="batch-preview-status" style="padding:10px 20px;border-bottom:1px solid #e5e7eb;font-size:11px;color:#64748b;background:#fff;">正在加载消息...</div>
-                <div id="batch-preview-body" style="flex:1;overflow:auto;padding:18px 20px;background:#f8fafc;"></div>
             `;
 
-            overlay.appendChild(modal);
-            document.body.appendChild(overlay);
+            const overlay = document.createElement('div');
+            overlay.style.cssText = `position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.6);z-index:1000003;display:flex;align-items:center;justify-content:center;backdrop-filter:blur(4px);padding:40px;`;
 
-            const close = () => {
-                if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
+            const modal = document.createElement('div');
+            modal.style.cssText = `background:#fff;width:100%;max-width:850px;height:85vh;border-radius:20px;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 15px 45px rgba(0,0,0,0.3);`;
+
+            let persistSelection = () => {};
+
+            const closeModal = () => {
+                persistSelection();
+                if (overlay.parentNode) document.body.removeChild(overlay);
             };
 
-            modal.querySelector('#batch-preview-close').addEventListener('click', close);
-            overlay.addEventListener('click', (e) => {
-                if (e.target === overlay) close();
+            overlay.onclick = (e) => { if (e.target === overlay) closeModal(); };
+
+            modal.innerHTML = `
+                ${renderHeader('检测中...')}
+                <div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;color:#4b5563;">
+                    <div class="m-loading-spinner" style="width:34px;height:34px;border:3px solid #e5e7eb;border-top-color:#1E88E5;border-radius:50%;animation:m-spin 0.9s linear infinite;"></div>
+                    <div style="font-size:14px;font-weight:600;">${escapeHtml(loadingTitle)}</div>
+                    <div style="font-size:12px;color:#9ca3af;">${escapeHtml(loadingHint)}</div>
+                </div>
+                <style>
+                    @keyframes m-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+                </style>
+            `;
+
+            document.body.appendChild(overlay);
+            overlay.appendChild(modal);
+            modal.querySelector('#modal-x').onclick = closeModal;
+
+            let allMsgs = [];
+            let sourceLabel = 'DOM';
+            let deepseekMeta = null;
+            try {
+                const result = await loader();
+                allMsgs = Array.isArray(result) ? result : (result?.messages || []);
+                const rawSource = Array.isArray(result) ? 'DOM' : (result?.source || 'DOM');
+                sourceLabel = normalizeExportSourceLabel(rawSource);
+                deepseekMeta = result?.deepseekMeta || null;
+            } catch (e) {
+                console.warn('AI-Chat-Nodes: 获取导出消息失败', e);
+            }
+
+            if (!overlay.parentNode) return;
+
+            if (!allMsgs.length) {
+                modal.innerHTML = `
+                    ${renderHeader(sourceLabel)}
+                    <div style="flex:1;display:flex;align-items:center;justify-content:center;color:#6b7280;font-size:14px;">${escapeHtml(emptyText)}</div>
+                `;
+                modal.querySelector('#modal-x').onclick = closeModal;
+                return;
+            }
+
+            const selectedIndexSet = new Set(
+                normalizeMessageSelectionIndices(initialSelectedIndices, allMsgs.length)
+                || buildDefaultMessageSelection(allMsgs.length)
+            );
+
+            modal.innerHTML = `
+                ${renderHeader(sourceLabel)}
+                <div style="padding:10px 24px;background:#f8f9fa;border-bottom:1px solid #eee;display:flex;gap:12px;align-items:center;">
+                    <button class="m-util-btn" id="m-toggle-all">全不选</button>
+                    <button class="m-util-btn" id="m-ans" style="background:#e7f3ff;color:#0d6efd;">仅选回答</button>
+                    ${isDeepSeek ? '<button class="m-util-btn" id="m-no-thought" style="background:#fff7e6;color:#d46b08;border-color:#ffd591;">排除思考过程</button>' : ''}
+                    <div style="flex:1"></div>
+                    <span style="font-size:12px;color:#666;">已选 <b id="m-count-view">${selectedIndexSet.size}</b> 条</span>
+                    <div style="position:relative;display:flex;align-items:center;">
+                        <button id="m-export-menu-trigger" style="border:1px solid #2563eb;background:#2563eb;color:#fff;border-radius:8px;font-size:12px;padding:7px 12px;cursor:pointer;font-weight:700;display:flex;align-items:center;gap:6px;">
+                            <span>导出</span><span id="m-export-menu-icon" style="font-size:10px;opacity:.9;display:inline-block;transition:transform .2s ease;transform:rotate(0deg);">▼</span>
+                        </button>
+                        <div id="m-export-menu" style="position:absolute;right:0;top:36px;width:148px;background:#fff;border:1px solid #dbe3ee;border-radius:10px;box-shadow:0 10px 30px rgba(15,23,42,.15);padding:8px;z-index:7;opacity:0;pointer-events:none;transform:translateY(-8px) scale(0.96);transition:opacity .22s cubic-bezier(0.22,0.61,0.36,1), transform .22s cubic-bezier(0.22,0.61,0.36,1);">
+                            <button class="m-export-item" data-f="md" style="display:block;width:100%;text-align:left;background:#333;color:#fff;border:none;border-radius:8px;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;">Markdown</button>
+                            <button class="m-export-item" data-f="pdf" style="display:block;width:100%;text-align:left;background:#dc3545;color:#fff;border:none;border-radius:8px;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;margin-top:6px;">PDF</button>
+                            <button class="m-export-item" data-f="txt" style="display:block;width:100%;text-align:left;background:#28a745;color:#fff;border:none;border-radius:8px;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;margin-top:6px;">TXT</button>
+                            <button class="m-export-item" data-f="json" style="display:block;width:100%;text-align:left;background:#f39c12;color:#fff;border:none;border-radius:8px;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;margin-top:6px;">JSON</button>
+                        </div>
+                    </div>
+                </div>
+                ${renderDeepSeekSessionPanel(deepseekMeta)}
+                <div id="m-list-box" style="flex:1;overflow-y:auto;padding:10px 24px;"></div>
+                <style>
+                    .m-util-btn { cursor:pointer;padding:6px 12px;border:1px solid #ddd;border-radius:8px;background:#fff;font-size:12px; }
+                    .m-item-row { display:flex;gap:15px;padding:16px;border-bottom:1px solid #f2f2f2;position:relative;transition:background 0.2s; }
+                    .m-item-row:hover { background:#fcfdfe; }
+                    .m-msg-wrap { width:100%; display:flex; align-items:center; gap:12px; }
+                    .m-msg-wrap.assistant { justify-content:flex-start; }
+                    .m-msg-wrap.user { justify-content:flex-end; }
+                    .m-view-btn { opacity:0; pointer-events:none; border:none; background:#007bff; padding:5px 12px; border-radius:8px; font-size:11px; font-weight:600; cursor:pointer; color:#fff; transition:all 0.2s; box-shadow:0 4px 12px rgba(0,123,255,0.25); z-index:10; flex-shrink:0; }
+                    .m-view-btn:hover { background:#0056b3; transform:scale(1.05); }
+                    .m-item-row:hover .m-view-btn { opacity:1; pointer-events:auto; }
+                    .m-ds-session-panel { margin:8px 24px 0; border:1px solid #e5e7eb; border-radius:10px; background:linear-gradient(180deg,#fbfdff 0%, #f8fafc 100%); }
+                    .m-ds-session-title { cursor:pointer; list-style:none; font-size:12px; font-weight:700; color:#1f2937; padding:8px 12px; user-select:none; }
+                    .m-ds-session-title::-webkit-details-marker { display:none; }
+                    .m-ds-session-body { padding:0 12px 10px; max-height:180px; overflow:auto; }
+                    .m-ds-session-subtitle { font-size:11px; font-weight:700; color:#4b5563; margin-top:8px; margin-bottom:6px; }
+                    .m-ds-tag-wrap { display:flex; flex-wrap:wrap; gap:6px; }
+                    .m-ds-tag { display:inline-flex; align-items:center; padding:3px 8px; border:1px solid #dbeafe; border-radius:999px; background:#eff6ff; color:#1e3a8a; font-size:11px; line-height:1.4; }
+                    .m-ds-tag-soft { border-color:#e5e7eb; background:#f9fafb; color:#374151; }
+                </style>
+            `;
+
+            const listBox = modal.querySelector('#m-list-box');
+
+            const getSelectedIndices = () => Array.from(modal.querySelectorAll('.m-row-ck:checked'))
+                .map((el) => Number(el.getAttribute('data-i')))
+                .filter((n) => Number.isInteger(n) && n >= 0 && n < allMsgs.length)
+                .sort((a, b) => a - b);
+
+            persistSelection = () => {
+                if (onSelectionChange) onSelectionChange(getSelectedIndices(), allMsgs.slice());
+            };
+
+            const getDisplayLabel = (msg) => {
+                if (msg.role === 'user') return '用户问题';
+                if (isDoubao && msg.isArtifact) return '豆包 代码编辑器内容';
+                if (isDeepSeek) {
+                    if (msg.isThought) return 'DeepSeek 思考过程';
+                    if (msg.isSearch || String(msg.fragmentType || '').toUpperCase() === 'SEARCH') return 'DeepSeek 智能搜索';
+                    if (String(msg.fragmentType || '').toUpperCase() === 'RESPONSE') return 'DeepSeek AI回答';
+                }
+                return AI_NAME;
+            };
+
+            allMsgs.forEach((m, i) => {
+                const item = document.createElement('div');
+                item.className = 'm-item-row';
+                if (m.isThought) item.setAttribute('data-is-thought', 'true');
+                const isU = m.role === 'user';
+                const modalText = getDisplayTextForExport(m.text);
+                const displayLabel = getDisplayLabel(m);
+
+                item.style.cssText = `display:flex; gap:10px; padding:15px 20px; border-bottom:1px solid #f8f8f8; position:relative;`;
+
+                item.innerHTML = `
+                    <div style="width:25px; flex-shrink:0; display:flex; align-items:center;">
+                        <input type="checkbox" class="m-row-ck" data-i="${i}" ${selectedIndexSet.has(i) ? 'checked' : ''} style="width:18px;height:18px;cursor:pointer;">
+                    </div>
+                    <div style="flex:1; display:flex; flex-direction:column; gap:4px;">
+                        <div class="m-msg-wrap ${isU ? 'user' : 'assistant'}">
+                            ${isU ? '<button class="m-view-btn">查看全文</button>' : ''}
+                            <div class="m-bubble" style="
+                            max-width:85%;
+                            padding:12px 16px;
+                            border-radius:16px;
+                            font-size:13px;
+                            line-height:1.6;
+                            word-break:break-all;
+                            position:relative;
+                            ${isU ? 'align-self:flex-end; background:#e7f3ff; border-bottom-right-radius:4px; color:#2c3e50;' : 'align-self:flex-start; background:#f5f5f5; border-bottom-left-radius:4px; color:#333;'}
+                        ">
+                            <div style="font-size:10px; font-weight:700; margin-bottom:5px; opacity:0.7;">${displayLabel}</div>
+                            <div class="m-row-text" style="display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; overflow:hidden; text-overflow:ellipsis;"></div>
+                            </div>
+                            ${isU ? '' : '<button class="m-view-btn">查看全文</button>'}
+                        </div>
+                    </div>
+                `;
+
+                item.querySelector('.m-row-text').textContent = modalText;
+
+                const detailBtn = item.querySelector('.m-view-btn');
+                item.onmouseenter = () => detailBtn.style.opacity = '1';
+                item.onmouseleave = () => detailBtn.style.opacity = '0';
+
+                detailBtn.onclick = (e) => {
+                    e.stopPropagation();
+                    showFullText(modalText, `${displayLabel}全文`);
+                };
+
+                listBox.appendChild(item);
             });
 
-            const statusEl = modal.querySelector('#batch-preview-status');
-            const bodyEl = modal.querySelector('#batch-preview-body');
+            function showFullText(txt, title) {
+                const subOverlay = document.createElement('div');
+                subOverlay.style.cssText = `position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.4);z-index:1000004;display:flex;align-items:center;justify-content:center;`;
+                const subModal = document.createElement('div');
+                subModal.style.cssText = `background:#fff;width:80%;max-width:600px;max-height:80vh;border-radius:12px;padding:24px;display:flex;flex-direction:column;box-shadow:0 10px 30px rgba(0,0,0,0.2);`;
+                subModal.innerHTML = `
+                    <div style="display:flex;justify-content:space-between;margin-bottom:15px;align-items:center;"><h4 style="margin:0">${escapeHtml(title)}</h4><button id="sub-x" style="border:none;background:none;font-size:22px;cursor:pointer;">&times;</button></div>
+                    <div id="sub-body" style="flex:1;overflow-y:auto;font-size:14px;line-height:1.6;color:#333;white-space:pre-wrap;padding-top:10px;border-top:1px solid #eee;"></div>
+                `;
+                subModal.querySelector('#sub-body').textContent = txt;
+                subOverlay.onclick = (e) => { if (e.target === subOverlay) document.body.removeChild(subOverlay); };
+                subModal.querySelector('#sub-x').onclick = () => document.body.removeChild(subOverlay);
+                subOverlay.appendChild(subModal);
+                document.body.appendChild(subOverlay);
+            }
 
-            Promise.resolve()
-                .then(() => loader())
-                .then((result) => {
-                    const title = String(result?.title || conversationTitle || '').trim() || '会话预览';
-                    const messages = Array.isArray(result?.messages) ? result.messages : [];
-                    modal.querySelector('#batch-preview-title').textContent = title;
-                    statusEl.textContent = `共 ${messages.length} 条消息`;
-
-                    if (!messages.length) {
-                        bodyEl.innerHTML = '<div style="padding:24px 12px;color:#64748b;font-size:12px;text-align:center;">该会话暂无可预览的消息内容。</div>';
-                        return;
-                    }
-
-                    bodyEl.innerHTML = messages.map((msg, idx) => {
-                        const role = String(msg?.role || '').toLowerCase() === 'user' ? '用户' : String(msg?.role || '').toLowerCase() === 'assistant' ? '助手' : (msg?.role || '消息');
-                        const roleBg = role === '用户' ? '#eff6ff' : '#ecfeff';
-                        const roleColor = role === '用户' ? '#1d4ed8' : '#0f766e';
-                        const extraFlags = [
-                            msg?.isThought ? '思考' : '',
-                            msg?.isArtifact ? '附件' : '',
-                            msg?.isSearch ? '搜索' : '',
-                            msg?.fragmentType ? String(msg.fragmentType) : ''
-                        ].filter(Boolean).map((text) => `<span style="font-size:10px;color:#475569;background:#fff;border:1px solid #e2e8f0;border-radius:999px;padding:2px 6px;">${escapeHtml(text)}</span>`).join('');
-
-                        return `
-                            <section style="border:1px solid #e2e8f0;border-radius:12px;background:#fff;padding:12px 14px;margin-bottom:12px;">
-                                <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:8px;flex-wrap:wrap;">
-                                    <div style="display:flex;align-items:center;gap:8px;min-width:0;">
-                                        <span style="font-size:11px;font-weight:700;color:${roleColor};background:${roleBg};border:1px solid rgba(37,99,235,.12);border-radius:999px;padding:4px 8px;">${escapeHtml(role)}</span>
-                                        ${extraFlags}
-                                    </div>
-                                    <span style="font-size:10px;color:#94a3b8;">#${idx + 1}</span>
-                                </div>
-                                <pre style="margin:0;white-space:pre-wrap;word-break:break-word;font:12px/1.7 ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace;color:#0f172a;background:transparent;">${escapeHtml(String(msg?.text || ''))}</pre>
-                            </section>
-                        `;
-                    }).join('');
-                })
-                .catch((error) => {
-                    statusEl.textContent = '消息加载失败';
-                    bodyEl.innerHTML = `<div style="padding:24px 12px;color:#b91c1c;font-size:12px;text-align:center;">加载失败: ${escapeHtml(error?.message || String(error))}</div>`;
+            const updateToggleAllButton = () => {
+                const allChecked = allMsgs.length > 0 && allMsgs.every((_, i) => {
+                    const ck = modal.querySelector(`.m-row-ck[data-i="${i}"]`);
+                    return Boolean(ck && ck.checked);
                 });
+                const btn = modal.querySelector('#m-toggle-all');
+                if (!btn) return;
+                btn.innerText = allChecked ? '全不选' : '全选';
+                if (allChecked) {
+                    btn.style.background = '#fff1f2';
+                    btn.style.color = '#be123c';
+                    btn.style.borderColor = '#fecdd3';
+                } else {
+                    btn.style.background = '#eff6ff';
+                    btn.style.color = '#1d4ed8';
+                    btn.style.borderColor = '#93c5fd';
+                }
+            };
+
+            const upCount = () => {
+                modal.querySelector('#m-count-view').innerText = modal.querySelectorAll('.m-row-ck:checked').length;
+                updateToggleAllButton();
+                persistSelection();
+            };
+            modal.querySelectorAll('.m-row-ck').forEach(c => c.onchange = upCount);
+
+            const exportMenuTrigger = modal.querySelector('#m-export-menu-trigger');
+            const exportMenu = modal.querySelector('#m-export-menu');
+            const exportMenuIcon = modal.querySelector('#m-export-menu-icon');
+
+            const hideExportMenu = () => {
+                if (!exportMenu) return;
+                exportMenu.style.opacity = '0';
+                exportMenu.style.pointerEvents = 'none';
+                exportMenu.style.transform = 'translateY(-8px) scale(0.96)';
+                if (exportMenuIcon) exportMenuIcon.style.transform = 'rotate(0deg)';
+            };
+
+            const showExportMenu = () => {
+                if (!exportMenu) return;
+                exportMenu.style.opacity = '1';
+                exportMenu.style.pointerEvents = 'auto';
+                exportMenu.style.transform = 'translateY(0) scale(1)';
+                if (exportMenuIcon) exportMenuIcon.style.transform = 'rotate(180deg)';
+            };
+
+            if (exportMenuTrigger) {
+                exportMenuTrigger.onclick = (e) => {
+                    e.stopPropagation();
+                    if (!exportMenu) return;
+                    const visible = exportMenu.style.opacity === '1';
+                    if (visible) hideExportMenu();
+                    else showExportMenu();
+                };
+            }
+
+            modal.addEventListener('click', (e) => {
+                const target = e.target;
+                if (!exportMenu || !exportMenuTrigger) return;
+                if (exportMenu.contains(target) || exportMenuTrigger.contains(target)) return;
+                hideExportMenu();
+            });
+
+            modal.querySelector('#m-toggle-all').onclick = () => {
+                const allChecked = allMsgs.length > 0 && allMsgs.every((_, i) => {
+                    const ck = modal.querySelector(`.m-row-ck[data-i="${i}"]`);
+                    return Boolean(ck && ck.checked);
+                });
+                modal.querySelectorAll('.m-row-ck').forEach(c => c.checked = !allChecked);
+                upCount();
+            };
+            modal.querySelector('#m-ans').onclick = () => {
+                allMsgs.forEach((m, i) => modal.querySelector(`.m-row-ck[data-i="${i}"]`).checked = (m.role === 'assistant'));
+                upCount();
+            };
+
+            if (isDeepSeek && modal.querySelector('#m-no-thought')) {
+                modal.querySelector('#m-no-thought').onclick = () => {
+                    allMsgs.forEach((m, i) => {
+                        const ck = modal.querySelector(`.m-row-ck[data-i="${i}"]`);
+                        const rowText = modal.querySelector(`.m-row-ck[data-i="${i}"]`)?.closest('.m-item-row')?.querySelector('.m-row-text');
+                        if (m.isThought) {
+                            if (ck) ck.checked = false;
+                            return;
+                        }
+                        if (m.hasThought && m.textWithoutThought) {
+                            m.text = String(m.textWithoutThought || '');
+                            if (rowText) rowText.textContent = getDisplayTextForExport(m.text);
+                        }
+                    });
+                    upCount();
+                };
+            }
+
+            updateToggleAllButton();
+            hideExportMenu();
+
+            modal.querySelector('#modal-x').onclick = closeModal;
+
+            modal.querySelectorAll('.m-export-item').forEach(b => b.onclick = () => {
+                persistSelection();
+                hideExportMenu();
+                const picked = Array.from(modal.querySelectorAll('.m-row-ck:checked')).map(c => allMsgs[parseInt(c.getAttribute('data-i'))]);
+                if (!picked.length) return alert('请至少选择一项');
+                handleExport(picked, b.getAttribute('data-f'));
+            });
+        }
+
+        function openBatchConversationPreviewModal(platformLabel, conversationTitle, loader) {
+            return openMessagePreviewExportModal({
+                headerTitle: '查看对话消息',
+                headerMetaText: `${platformLabel} · ${conversationTitle || '未命名会话'}`,
+                loadingTitle: '正在加载对话消息...',
+                loadingHint: '请稍候，预览和导出列表即将就绪',
+                emptyText: '该会话暂无可预览的消息内容。',
+                initialSelectedIndices: loader?.initialSelectedIndices || null,
+                onSelectionChange: loader?.onSelectionChange || null,
+                loader: async () => {
+                    const result = await loader();
+                    return {
+                        messages: Array.isArray(result?.messages) ? result.messages : [],
+                        source: result?.source || 'API',
+                        deepseekMeta: result?.deepseekMeta || null
+                    };
+                }
+            });
         }
 
         function bindBatchConversationListInteractions(listEl, lookupConversation, onView, onSelectionChange) {
@@ -7249,6 +7651,29 @@
                     onSelectionChange();
                 }
             });
+        }
+
+        function normalizeMessageSelectionIndices(indices, totalCount) {
+            if (!Array.isArray(indices)) return null;
+            const max = Math.max(0, Number(totalCount) || 0);
+            const uniq = Array.from(new Set(
+                indices
+                    .map((n) => Number(n))
+                    .filter((n) => Number.isInteger(n) && n >= 0 && n < max)
+            )).sort((a, b) => a - b);
+            return uniq;
+        }
+
+        function buildDefaultMessageSelection(totalCount) {
+            const count = Math.max(0, Number(totalCount) || 0);
+            return Array.from({ length: count }, (_, i) => i);
+        }
+
+        function applyMessageSelection(messages, indices) {
+            const list = Array.isArray(messages) ? messages : [];
+            const normalized = normalizeMessageSelectionIndices(indices, list.length);
+            if (normalized === null) return list.slice();
+            return normalized.map((i) => list[i]).filter((item) => item != null);
         }
 
         function openChatGPTBatchExportModal() {
@@ -7303,6 +7728,7 @@
             document.body.appendChild(overlay);
 
             let recentConversations = [];
+            const messageSelectionByConversation = new Map();
             let loading = false;
             const listEl = modal.querySelector('#gpt-batch-list');
             const statusEl = modal.querySelector('#gpt-batch-status');
@@ -7397,9 +7823,16 @@
                     .map((el) => map.get(el.getAttribute('data-key')))
                     .filter(Boolean);
             };
+            const getStoredSelection = (conv) => normalizeMessageSelectionIndices(
+                messageSelectionByConversation.get(String(conv.key || conv.id)),
+                Number.MAX_SAFE_INTEGER
+            );
+            const storeSelection = (conv, indices) => {
+                messageSelectionByConversation.set(String(conv.key || conv.id), Array.isArray(indices) ? indices.slice() : []);
+            };
 
             const openConversationPreview = async (conv) => {
-                openBatchConversationPreviewModal('ChatGPT', conv.title || conv.id, async () => {
+                const previewLoader = async () => {
                     const convData = await fetchChatGPTConversationById(conv.id, conv.workspaceId);
                     const messages = extractChatGPTMessagesFromMapping(convData);
                     return {
@@ -7409,7 +7842,10 @@
                             text: String(m.text || '')
                         }))
                     };
-                });
+                };
+                previewLoader.initialSelectedIndices = getStoredSelection(conv);
+                previewLoader.onSelectionChange = (indices) => storeSelection(conv, indices);
+                openBatchConversationPreviewModal('ChatGPT', conv.title || conv.id, previewLoader);
             };
             const runBatchExport = async (format) => {
                 hideExportMenu();
@@ -7427,7 +7863,11 @@
                     statusEl.textContent = `正在导出第 ${i + 1}/${selected.length} 个会话: ${conv.title || conv.id}`;
                     try {
                         const convData = await fetchChatGPTConversationById(conv.id, conv.workspaceId);
-                        const messages = extractChatGPTMessagesFromMapping(convData);
+                        const messages = extractChatGPTMessagesFromMapping(convData).map((m) => ({
+                            role: m.role,
+                            text: String(m.text || '')
+                        }));
+                        const pickedMessages = applyMessageSelection(messages, getStoredSelection(conv));
                         out.push({
                             conversationId: conv.id,
                             title: String(convData?.title || conv.title || '').trim() || `会话 ${conv.id}`,
@@ -7435,16 +7875,13 @@
                             updatedAtText: conv.updatedAtText || '',
                             createdAt: conv.createdAt || 0,
                             createdAtText: conv.createdAtText || '',
-                            messageCount: messages.length,
+                            messageCount: pickedMessages.length,
                             workspaceId: conv.workspaceId || '',
                             workspaceLabel: conv.workspaceLabel || '',
                             projectId: conv.projectId || '',
                             projectTitle: conv.projectTitle || '',
                             archived: Boolean(conv.archived),
-                            messages: messages.map((m) => ({
-                                role: m.role,
-                                text: String(m.text || '')
-                            }))
+                            messages: pickedMessages
                         });
                     } catch (e) {
                         failCount += 1;
@@ -7768,6 +8205,7 @@
             document.body.appendChild(overlay);
 
             let recentConversations = [];
+            const messageSelectionByConversation = new Map();
             let loading = false;
             const listEl = modal.querySelector('#ds-batch-list');
             const statusEl = modal.querySelector('#ds-batch-status');
@@ -7867,20 +8305,33 @@
                     .map((el) => map.get(el.getAttribute('data-id')))
                     .filter(Boolean);
             };
+            const getStoredSelection = (conv) => normalizeMessageSelectionIndices(
+                messageSelectionByConversation.get(String(conv.id)),
+                Number.MAX_SAFE_INTEGER
+            );
+            const storeSelection = (conv, indices) => {
+                messageSelectionByConversation.set(String(conv.id), Array.isArray(indices) ? indices.slice() : []);
+            };
 
             const openConversationPreview = async (conv) => {
-                openBatchConversationPreviewModal('DeepSeek', conv.title || conv.id, async () => {
+                const previewLoader = async () => {
                     const allRes = await fetchDeepSeekConversationMessages(conv.id);
                     return {
-                        title: conv.title || `会话 ${conv.id}`,
+                        source: 'API(/api/v0/chat/history_messages)',
+                        deepseekMeta: allRes.meta || null,
                         messages: allRes.messages.map((m) => ({
                             role: m.role,
                             text: String(m.text || ''),
                             isThought: Boolean(m.isThought),
-                            fragmentType: String(m.fragmentType || '')
+                            fragmentType: String(m.fragmentType || ''),
+                            hasThought: Boolean(m.hasThought),
+                            textWithoutThought: String(m.textWithoutThought || m.text || '')
                         }))
                     };
-                });
+                };
+                previewLoader.initialSelectedIndices = getStoredSelection(conv);
+                previewLoader.onSelectionChange = (indices) => storeSelection(conv, indices);
+                openBatchConversationPreviewModal('DeepSeek', conv.title || conv.id, previewLoader);
             };
 
             const runBatchExport = async (format) => {
@@ -7899,6 +8350,13 @@
                     statusEl.textContent = `正在导出第 ${i + 1}/${selected.length} 个会话: ${conv.title || conv.id}`;
                     try {
                         const allRes = await fetchDeepSeekConversationMessages(conv.id);
+                        const messages = allRes.messages.map((m) => ({
+                            role: m.role,
+                            text: String(m.text || ''),
+                            isThought: Boolean(m.isThought),
+                            fragmentType: String(m.fragmentType || '')
+                        }));
+                        const pickedMessages = applyMessageSelection(messages, getStoredSelection(conv));
                         out.push({
                             conversationId: conv.id,
                             title: conv.title,
@@ -7907,13 +8365,8 @@
                             createdAt: conv.createdAt || 0,
                             createdAtText: conv.createdAtText || '',
                             pinned: Boolean(conv.pinned),
-                            messageCount: allRes.messages.length,
-                            messages: allRes.messages.map((m) => ({
-                                role: m.role,
-                                text: String(m.text || ''),
-                                isThought: Boolean(m.isThought),
-                                fragmentType: String(m.fragmentType || '')
-                            }))
+                            messageCount: pickedMessages.length,
+                            messages: pickedMessages
                         });
                     } catch (e) {
                         failCount += 1;
@@ -8024,6 +8477,7 @@
             document.body.appendChild(overlay);
 
             let recentConversations = [];
+            const messageSelectionByConversation = new Map();
             let loading = false;
             const listEl = modal.querySelector('#db-batch-list');
             const statusEl = modal.querySelector('#db-batch-status');
@@ -8136,8 +8590,17 @@
                     .filter(Boolean);
             };
 
+            const getStoredSelection = (conv) => normalizeMessageSelectionIndices(
+                messageSelectionByConversation.get(String(conv.id)),
+                Number.MAX_SAFE_INTEGER
+            );
+
+            const storeSelection = (conv, indices) => {
+                messageSelectionByConversation.set(String(conv.id), Array.isArray(indices) ? indices.slice() : []);
+            };
+
             const openConversationPreview = async (conv) => {
-                openBatchConversationPreviewModal('豆包', conv.title || conv.id, async () => {
+                const previewLoader = async () => {
                     const allRes = await fetchDoubaoAllConversationMessages(conv.id, 30, () => {});
                     return {
                         title: conv.title || `会话 ${conv.id}`,
@@ -8147,7 +8610,10 @@
                             isArtifact: Boolean(m.isArtifact)
                         }))
                     };
-                });
+                };
+                previewLoader.initialSelectedIndices = getStoredSelection(conv);
+                previewLoader.onSelectionChange = (indices) => storeSelection(conv, indices);
+                openBatchConversationPreviewModal('豆包', conv.title || conv.id, previewLoader);
             };
 
             const runBatchExport = async (format) => {
@@ -8165,6 +8631,12 @@
                     const conv = selected[i];
                     try {
                         const allRes = await fetchDoubaoAllConversationMessages(conv.id, 30, () => {});
+                        const messages = allRes.messages.map((m) => ({
+                            role: m.role,
+                            text: String(m.text || ''),
+                            isArtifact: Boolean(m.isArtifact)
+                        }));
+                        const pickedMessages = applyMessageSelection(messages, getStoredSelection(conv));
 
                         out.push({
                             conversationId: conv.id,
@@ -8172,12 +8644,8 @@
                             updatedAt: conv.updatedAt || 0,
                             updatedAtText: conv.updatedAtText || '',
                             pages: allRes.pages,
-                            messageCount: allRes.messages.length,
-                            messages: allRes.messages.map((m) => ({
-                                role: m.role,
-                                text: String(m.text || ''),
-                                isArtifact: Boolean(m.isArtifact)
-                            }))
+                            messageCount: pickedMessages.length,
+                            messages: pickedMessages
                         });
                     } catch (e) {
                         failCount += 1;
@@ -8299,6 +8767,7 @@
             document.body.appendChild(overlay);
 
             let recentConversations = [];
+            const messageSelectionByConversation = new Map();
             let loading = false;
             const listEl = modal.querySelector('#qw-batch-list');
             const statusEl = modal.querySelector('#qw-batch-status');
@@ -8381,8 +8850,17 @@
                     .filter(Boolean);
             };
 
+            const getStoredSelection = (conv) => normalizeMessageSelectionIndices(
+                messageSelectionByConversation.get(String(conv.id)),
+                Number.MAX_SAFE_INTEGER
+            );
+
+            const storeSelection = (conv, indices) => {
+                messageSelectionByConversation.set(String(conv.id), Array.isArray(indices) ? indices.slice() : []);
+            };
+
             const openConversationPreview = async (conv) => {
-                openBatchConversationPreviewModal('千问', conv.title || conv.id, async () => {
+                const previewLoader = async () => {
                     const allRes = await fetchQwenAllConversationMessages(conv.id, 20, () => {});
                     return {
                         title: conv.title || `会话 ${conv.id}`,
@@ -8391,7 +8869,10 @@
                             text: String(m.text || '')
                         }))
                     };
-                });
+                };
+                previewLoader.initialSelectedIndices = getStoredSelection(conv);
+                previewLoader.onSelectionChange = (indices) => storeSelection(conv, indices);
+                openBatchConversationPreviewModal('千问', conv.title || conv.id, previewLoader);
             };
 
             const runBatchExport = async (format) => {
@@ -8407,17 +8888,19 @@
                     const conv = selected[i];
                     try {
                         const allRes = await fetchQwenAllConversationMessages(conv.id, 20, () => {});
+                        const messages = allRes.messages.map((m) => ({
+                            role: m.role,
+                            text: String(m.text || '')
+                        }));
+                        const pickedMessages = applyMessageSelection(messages, getStoredSelection(conv));
                         out.push({
                             conversationId: conv.id,
                             title: conv.title,
                             updatedAt: conv.updatedAt || 0,
                             updatedAtText: conv.updatedAtText || '',
                             pages: allRes.pages,
-                            messageCount: allRes.messages.length,
-                            messages: allRes.messages.map((m) => ({
-                                role: m.role,
-                                text: String(m.text || '')
-                            }))
+                            messageCount: pickedMessages.length,
+                            messages: pickedMessages
                         });
                     } catch (e) {
                         failCount += 1;
@@ -8783,331 +9266,16 @@
 
         // 导出管理模态框
         async function openExportModal() {
-            const normalizeSourceLabel = (raw) => {
-                const s = String(raw || 'DOM').toUpperCase();
-                if (s.includes('API')) return 'API';
-                return 'DOM';
-            };
-
-            const renderDeepSeekSessionPanel = (meta) => {
-                if (!isDeepSeek || !meta) return '';
-                const cs = meta.chatSession || {};
-                const st = meta.messageStats || {};
-                const sample = Array.isArray(st.sample) ? st.sample : [];
-
-                const tags = [
-                    `会话ID: ${cs.id || '-'}`,
-                    `标题: ${cs.title || '-'}`,
-                    `已置顶: ${cs.pinned ? '是' : '否'}`,
-                    `创建时间: ${cs.insertedAt || '-'}`,
-                    `更新时间: ${cs.updatedAt || '-'}`
-                ];
-
-                const thinkingOn = sample.some((s) => Boolean(s?.thinkingEnabled));
-                const searchOn = sample.some((s) => Boolean(s?.searchEnabled));
-                const sampleTags = [
-                    `<span class="m-ds-tag m-ds-tag-soft">深度思考: ${thinkingOn ? '开启' : '关闭'}</span>`,
-                    `<span class="m-ds-tag m-ds-tag-soft">智能搜索: ${searchOn ? '开启' : '关闭'}</span>`
-                ].join('');
-
-                return `
-                    <details class="m-ds-session-panel">
-                        <summary class="m-ds-session-title">DeepSeek 对话信息（点击展开）</summary>
-                        <div class="m-ds-session-body">
-                            <div class="m-ds-tag-wrap">${tags.map((t) => `<span class="m-ds-tag">${t}</span>`).join('')}</div>
-                            ${sampleTags ? `<div class="m-ds-session-subtitle">chat_messages 状态</div><div class="m-ds-tag-wrap">${sampleTags}</div>` : ''}
-                        </div>
-                    </details>
-                `;
-            };
-
-            const renderHeader = (sourceLabel) => `
-                <div style="padding:20px 24px;border-bottom:1px solid #eee;display:flex;justify-content:space-between;align-items:center;">
-                    <div style="display:flex;align-items:center;gap:10px;">
-                        <h3 style="margin:0;font-size:18px;">导出当前对话</h3>
-                        <span style="font-size:12px;padding:4px 8px;border-radius:999px;background:#f3f4f6;color:#374151;border:1px solid #e5e7eb;">来源：${sourceLabel}</span>
-                    </div>
-                    <button id="modal-x" style="cursor:pointer;border:none;background:#eee;width:28px;height:28px;border-radius:50%;font-size:16px;display:flex;align-items:center;justify-content:center;">&times;</button>
-                </div>
-            `;
-
-            const overlay = document.createElement('div');
-            overlay.style.cssText = `position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.6);z-index:999999;display:flex;align-items:center;justify-content:center;backdrop-filter:blur(4px);padding:40px;`;
-
-            const modal = document.createElement('div');
-            modal.style.cssText = `background:#fff;width:100%;max-width:850px;height:85vh;border-radius:20px;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 15px 45px rgba(0,0,0,0.3);`;
-
-            const closeModal = () => {
-                if (overlay.parentNode) document.body.removeChild(overlay);
-            };
-
-            overlay.onclick = (e) => { if (e.target === overlay) closeModal(); };
-
-            modal.innerHTML = `
-                ${renderHeader('检测中...')}
-                <div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;color:#4b5563;">
-                    <div class="m-loading-spinner" style="width:34px;height:34px;border:3px solid #e5e7eb;border-top-color:#1E88E5;border-radius:50%;animation:m-spin 0.9s linear infinite;"></div>
-                    <div style="font-size:14px;font-weight:600;">正在加载对话内容...</div>
-                    <div style="font-size:12px;color:#9ca3af;">请稍候，导出列表即将就绪</div>
-                </div>
-                <style>
-                    @keyframes m-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
-                </style>
-            `;
-
-            document.body.appendChild(overlay);
-            overlay.appendChild(modal);
-            modal.querySelector('#modal-x').onclick = closeModal;
-
-            let allMsgs = [];
-            let sourceLabel = 'DOM';
-            let deepseekMeta = null;
-            try {
-                const result = await getAllMessages();
-                allMsgs = Array.isArray(result) ? result : (result.messages || []);
-                const rawSource = Array.isArray(result) ? 'DOM' : (result.source || 'DOM');
-                sourceLabel = normalizeSourceLabel(rawSource);
-                if (isDeepSeek) deepseekMeta = deepseekLastSessionMeta;
-            } catch (e) {
-                console.warn('AI-Chat-Nodes: 获取导出消息失败', e);
-            }
-
-            if (!overlay.parentNode) return;
-
-            if (!allMsgs.length) {
-                modal.innerHTML = `
-                    ${renderHeader(sourceLabel)}
-                    <div style="flex:1;display:flex;align-items:center;justify-content:center;color:#6b7280;font-size:14px;">未检测到可导出的内容</div>
-                `;
-                modal.querySelector('#modal-x').onclick = closeModal;
-                return;
-            }
-
-            modal.innerHTML = `
-                ${renderHeader(sourceLabel)}
-                <div style="padding:10px 24px;background:#f8f9fa;border-bottom:1px solid #eee;display:flex;gap:12px;align-items:center;">
-                    <button class="m-util-btn" id="m-toggle-all">全不选</button>
-                    <button class="m-util-btn" id="m-ans" style="background:#e7f3ff;color:#0d6efd;">仅选回答</button>
-                    ${isDeepSeek ? '<button class="m-util-btn" id="m-no-thought" style="background:#fff7e6;color:#d46b08;border-color:#ffd591;">排除思考过程</button>' : ''}
-                    <div style="flex:1"></div>
-                    <span style="font-size:12px;color:#666;">已选 <b id="m-count-view">${allMsgs.length}</b> 条</span>
-                    <div style="position:relative;display:flex;align-items:center;">
-                        <button id="m-export-menu-trigger" style="border:1px solid #2563eb;background:#2563eb;color:#fff;border-radius:8px;font-size:12px;padding:7px 12px;cursor:pointer;font-weight:700;display:flex;align-items:center;gap:6px;">
-                            <span>导出</span><span id="m-export-menu-icon" style="font-size:10px;opacity:.9;display:inline-block;transition:transform .2s ease;transform:rotate(0deg);">▼</span>
-                        </button>
-                        <div id="m-export-menu" style="position:absolute;right:0;top:36px;width:148px;background:#fff;border:1px solid #dbe3ee;border-radius:10px;box-shadow:0 10px 30px rgba(15,23,42,.15);padding:8px;z-index:7;opacity:0;pointer-events:none;transform:translateY(-8px) scale(0.96);transition:opacity .22s cubic-bezier(0.22,0.61,0.36,1), transform .22s cubic-bezier(0.22,0.61,0.36,1);">
-                            <button class="m-export-item" data-f="md" style="display:block;width:100%;text-align:left;background:#333;color:#fff;border:none;border-radius:8px;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;">Markdown</button>
-                            <button class="m-export-item" data-f="pdf" style="display:block;width:100%;text-align:left;background:#dc3545;color:#fff;border:none;border-radius:8px;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;margin-top:6px;">PDF</button>
-                            <button class="m-export-item" data-f="txt" style="display:block;width:100%;text-align:left;background:#28a745;color:#fff;border:none;border-radius:8px;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;margin-top:6px;">TXT</button>
-                            <button class="m-export-item" data-f="json" style="display:block;width:100%;text-align:left;background:#f39c12;color:#fff;border:none;border-radius:8px;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;margin-top:6px;">JSON</button>
-                        </div>
-                    </div>
-                </div>
-                ${renderDeepSeekSessionPanel(deepseekMeta)}
-                <div id="m-list-box" style="flex:1;overflow-y:auto;padding:10px 24px;"></div>
-                <style>
-                    .m-util-btn { cursor:pointer;padding:6px 12px;border:1px solid #ddd;border-radius:8px;background:#fff;font-size:12px; }
-                    .m-item-row { display:flex;gap:15px;padding:16px;border-bottom:1px solid #f2f2f2;position:relative;transition:background 0.2s; }
-                    .m-item-row:hover { background:#fcfdfe; }
-                    .m-msg-wrap { width:100%; display:flex; align-items:center; gap:12px; }
-                    .m-msg-wrap.assistant { justify-content:flex-start; }
-                    .m-msg-wrap.user { justify-content:flex-end; }
-                    .m-view-btn { opacity:0; pointer-events:none; border:none; background:#007bff; padding:5px 12px; border-radius:8px; font-size:11px; font-weight:600; cursor:pointer; color:#fff; transition:all 0.2s; box-shadow:0 4px 12px rgba(0,123,255,0.25); z-index:10; flex-shrink:0; }
-                    .m-view-btn:hover { background:#0056b3; transform:scale(1.05); }
-                    .m-item-row:hover .m-view-btn { opacity:1; pointer-events:auto; }
-                    .m-ds-session-panel { margin:8px 24px 0; border:1px solid #e5e7eb; border-radius:10px; background:linear-gradient(180deg,#fbfdff 0%, #f8fafc 100%); }
-                    .m-ds-session-title { cursor:pointer; list-style:none; font-size:12px; font-weight:700; color:#1f2937; padding:8px 12px; user-select:none; }
-                    .m-ds-session-title::-webkit-details-marker { display:none; }
-                    .m-ds-session-body { padding:0 12px 10px; max-height:180px; overflow:auto; }
-                    .m-ds-session-subtitle { font-size:11px; font-weight:700; color:#4b5563; margin-top:8px; margin-bottom:6px; }
-                    .m-ds-tag-wrap { display:flex; flex-wrap:wrap; gap:6px; }
-                    .m-ds-tag { display:inline-flex; align-items:center; padding:3px 8px; border:1px solid #dbeafe; border-radius:999px; background:#eff6ff; color:#1e3a8a; font-size:11px; line-height:1.4; }
-                    .m-ds-tag-soft { border-color:#e5e7eb; background:#f9fafb; color:#374151; }
-                </style>
-            `;
-
-            const listBox = modal.querySelector('#m-list-box');
-
-            const getDisplayLabel = (msg) => {
-                if (msg.role === 'user') return '用户问题';
-                if (isDoubao && msg.isArtifact) return '豆包 代码编辑器内容';
-                if (isDeepSeek) {
-                    if (msg.isThought) return 'DeepSeek 思考过程';
-                    if (msg.isSearch || String(msg.fragmentType || '').toUpperCase() === 'SEARCH') return 'DeepSeek 智能搜索';
-                    if (String(msg.fragmentType || '').toUpperCase() === 'RESPONSE') return 'DeepSeek AI回答';
+            await openMessagePreviewExportModal({
+                headerTitle: '导出当前对话',
+                loader: async () => {
+                    const result = await getAllMessages();
+                    return {
+                        messages: Array.isArray(result) ? result : (result?.messages || []),
+                        source: Array.isArray(result) ? 'DOM' : (result?.source || 'DOM'),
+                        deepseekMeta: isDeepSeek ? deepseekLastSessionMeta : null
+                    };
                 }
-                return AI_NAME;
-            };
-
-            allMsgs.forEach((m, i) => {
-                const item = document.createElement('div');
-                item.className = 'm-item-row';
-                if (m.isThought) item.setAttribute('data-is-thought', 'true');
-                const isU = m.role === 'user';
-                const modalText = getDisplayTextForExport(m.text);
-                const displayLabel = getDisplayLabel(m);
-                
-                item.style.cssText = `display:flex; gap:10px; padding:15px 20px; border-bottom:1px solid #f8f8f8; position:relative;`;
-
-                item.innerHTML = `
-                    <div style="width:25px; flex-shrink:0; display:flex; align-items:center;">
-                        <input type="checkbox" class="m-row-ck" data-i="${i}" checked style="width:18px;height:18px;cursor:pointer;">
-                    </div>
-                    <div style="flex:1; display:flex; flex-direction:column; gap:4px;">
-                        <div class="m-msg-wrap ${isU ? 'user' : 'assistant'}">
-                            ${isU ? '<button class="m-view-btn">查看全文</button>' : ''}
-                            <div class="m-bubble" style="
-                            max-width:85%;
-                            padding:12px 16px;
-                            border-radius:16px;
-                            font-size:13px;
-                            line-height:1.6;
-                            word-break:break-all;
-                            position:relative;
-                            ${isU ? 'align-self:flex-end; background:#e7f3ff; border-bottom-right-radius:4px; color:#2c3e50;' : 'align-self:flex-start; background:#f5f5f5; border-bottom-left-radius:4px; color:#333;'}
-                        ">
-                            <div style="font-size:10px; font-weight:700; margin-bottom:5px; opacity:0.7;">${displayLabel}</div>
-                            <div class="m-row-text" style="display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; overflow:hidden; text-overflow:ellipsis;"></div>
-                            </div>
-                            ${isU ? '' : '<button class="m-view-btn">查看全文</button>'}
-                        </div>
-                    </div>
-                `;
-                
-                // 核心加固：使用 textContent 
-                item.querySelector('.m-row-text').textContent = modalText;
-
-                const detailBtn = item.querySelector('.m-view-btn');
-                item.onmouseenter = () => detailBtn.style.opacity = '1';
-                item.onmouseleave = () => detailBtn.style.opacity = '0';
-
-                detailBtn.onclick = (e) => {
-                    e.stopPropagation();
-                    showFullText(modalText, `${displayLabel}全文`);
-                };
-
-                listBox.appendChild(item);
-            });
-
-            function showFullText(txt, title) {
-                const subOverlay = document.createElement('div');
-                subOverlay.style.cssText = `position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.4);z-index:1000000;display:flex;align-items:center;justify-content:center;`;
-                const subModal = document.createElement('div');
-                subModal.style.cssText = `background:#fff;width:80%;max-width:600px;max-height:80vh;border-radius:12px;padding:24px;display:flex;flex-direction:column;box-shadow:0 10px 30px rgba(0,0,0,0.2);`;
-                subModal.innerHTML = `
-                    <div style="display:flex;justify-content:space-between;margin-bottom:15px;align-items:center;"><h4 style="margin:0">${title}</h4><button id="sub-x" style="border:none;background:none;font-size:22px;cursor:pointer;">&times;</button></div>
-                    <div id="sub-body" style="flex:1;overflow-y:auto;font-size:14px;line-height:1.6;color:#333;white-space:pre-wrap;padding-top:10px;border-top:1px solid #eee;"></div>
-                `;
-                subModal.querySelector('#sub-body').textContent = txt;
-                subOverlay.onclick = (e) => { if(e.target === subOverlay) document.body.removeChild(subOverlay); };
-                subModal.querySelector('#sub-x').onclick = () => document.body.removeChild(subOverlay);
-                subOverlay.appendChild(subModal);
-                document.body.appendChild(subOverlay);
-            }
-
-            const updateToggleAllButton = () => {
-                const allChecked = allMsgs.length > 0 && allMsgs.every((_, i) => {
-                    const ck = modal.querySelector(`.m-row-ck[data-i="${i}"]`);
-                    return Boolean(ck && ck.checked);
-                });
-                const btn = modal.querySelector('#m-toggle-all');
-                if (!btn) return;
-                btn.innerText = allChecked ? '全不选' : '全选';
-                if (allChecked) {
-                    btn.style.background = '#fff1f2';
-                    btn.style.color = '#be123c';
-                    btn.style.borderColor = '#fecdd3';
-                } else {
-                    btn.style.background = '#eff6ff';
-                    btn.style.color = '#1d4ed8';
-                    btn.style.borderColor = '#93c5fd';
-                }
-            };
-
-            const upCount = () => {
-                modal.querySelector('#m-count-view').innerText = modal.querySelectorAll('.m-row-ck:checked').length;
-                updateToggleAllButton();
-            };
-            modal.querySelectorAll('.m-row-ck').forEach(c => c.onchange = upCount);
-
-            const exportMenuTrigger = modal.querySelector('#m-export-menu-trigger');
-            const exportMenu = modal.querySelector('#m-export-menu');
-            const exportMenuIcon = modal.querySelector('#m-export-menu-icon');
-
-            const hideExportMenu = () => {
-                if (!exportMenu) return;
-                exportMenu.style.opacity = '0';
-                exportMenu.style.pointerEvents = 'none';
-                exportMenu.style.transform = 'translateY(-8px) scale(0.96)';
-                if (exportMenuIcon) exportMenuIcon.style.transform = 'rotate(0deg)';
-            };
-
-            const showExportMenu = () => {
-                if (!exportMenu) return;
-                exportMenu.style.opacity = '1';
-                exportMenu.style.pointerEvents = 'auto';
-                exportMenu.style.transform = 'translateY(0) scale(1)';
-                if (exportMenuIcon) exportMenuIcon.style.transform = 'rotate(180deg)';
-            };
-
-            if (exportMenuTrigger) {
-                exportMenuTrigger.onclick = (e) => {
-                    e.stopPropagation();
-                    if (!exportMenu) return;
-                    const visible = exportMenu.style.opacity === '1';
-                    if (visible) hideExportMenu();
-                    else showExportMenu();
-                };
-            }
-
-            modal.addEventListener('click', (e) => {
-                const target = e.target;
-                if (!exportMenu || !exportMenuTrigger) return;
-                if (exportMenu.contains(target) || exportMenuTrigger.contains(target)) return;
-                hideExportMenu();
-            });
-
-            modal.querySelector('#m-toggle-all').onclick = () => {
-                const allChecked = allMsgs.length > 0 && allMsgs.every((_, i) => {
-                    const ck = modal.querySelector(`.m-row-ck[data-i="${i}"]`);
-                    return Boolean(ck && ck.checked);
-                });
-                modal.querySelectorAll('.m-row-ck').forEach(c => c.checked = !allChecked);
-                upCount();
-            };
-            modal.querySelector('#m-ans').onclick = () => { 
-                allMsgs.forEach((m, i) => modal.querySelector(`.m-row-ck[data-i="${i}"]`).checked = (m.role === 'assistant'));
-                upCount();
-            };
-            
-            if (isDeepSeek && modal.querySelector('#m-no-thought')) {
-                modal.querySelector('#m-no-thought').onclick = () => {
-                    allMsgs.forEach((m, i) => {
-                        const ck = modal.querySelector(`.m-row-ck[data-i="${i}"]`);
-                        const rowText = modal.querySelector(`.m-row-ck[data-i="${i}"]`)?.closest('.m-item-row')?.querySelector('.m-row-text');
-                        if (m.isThought) {
-                            if (ck) ck.checked = false;
-                            return;
-                        }
-                        if (m.hasThought && m.textWithoutThought) {
-                            m.text = String(m.textWithoutThought || '');
-                            if (rowText) rowText.textContent = getDisplayTextForExport(m.text);
-                        }
-                    });
-                    upCount();
-                };
-            }
-
-            updateToggleAllButton();
-            hideExportMenu();
-
-            modal.querySelector('#modal-x').onclick = closeModal;
-
-            modal.querySelectorAll('.m-export-item').forEach(b => b.onclick = () => {
-                hideExportMenu();
-                const picked = Array.from(modal.querySelectorAll('.m-row-ck:checked')).map(c => allMsgs[parseInt(c.getAttribute('data-i'))]);
-                if (!picked.length) return alert('请至少选择一项');
-                handleExport(picked, b.getAttribute('data-f'));
             });
         }
 
