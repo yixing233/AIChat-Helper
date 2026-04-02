@@ -1,20 +1,16 @@
 // ==UserScript==
 // @name         AI对话助手
 // @namespace    http://tampermonkey.net/
-// @version      1.6.15
+// @version      1.7.0
 // @description  支持 ChatGPT、通义千问、豆包、DeepSeek：自动生成对话节点导航、一键导出对话（PDF/Markdown/JSON/CSV/TXT）。
 // @author       xchengb
 // @updateURL    https://gitee.com/xcb157342/ai-chat-nodes/raw/master/AIChat-Helper.user.js
 // @downloadURL  https://gitee.com/xcb157342/ai-chat-nodes/raw/master/AIChat-Helper.user.js
 // @icon         data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIzMiIgaGVpZ2h0PSIzMiIgdmlld0JveD0iMCAwIDMyIDMyIj48cmVjdCB3aWR0aD0iMzIiIGhlaWdodD0iMzIiIGZpbGw9Im5vbmUiLz48cGF0aCBmaWxsPSIjMDQwMGU2IiBkPSJNMTYgMTlhNi45OSAxNi45OSAwIDAgMS01LjgzMy0zLjEyOWwxLjY2Ni0xLjEwN2E1IDUgMCAwIDAgOC4zMzQgMGwxLjY2NiAxLjEwN0E2Ljk5IDYuOTkgMCAwIDEgMTYgMTl6Ii8+PGNpcmNsZSBjeD0iMjAyMCIgY3k9IjEwIiByPSIyIiBmaWxsPSIjMDQwMGU2Ii8+PGNpcmNsZSBjeD0iMTIiIGN5PSIxMCIgcj0iMiIgZmlsbD0iIzA0MDBlNiIvPjxjaXJjbGUgY3g9IjEyIiBjeT0iMTAiIHI9IjIiIGZpbGw9IiMwNDAwZTYiLz48Y2lyY2xlIGN4PSIxMiIgY3k9IjEwIiByPSIyIiBmaWxsPSIjMDQwMGU2Ii8+PHBhdGggZmlsbD0iIzA0MDBlNiIgZD0iTTE3LjczNiAzMEwxNiAyOWw0LTdoNmEyIDIgMCAwIDAgMi0yVjZhMiAyIDAgMCAwLTItMkg2YTIgMiAwIDAgMC0yIDJ2MTRhMiAyIDAgMCAwIDIgMmg5djJINmE0IDQgMCAwIDEtNC00VjZhNCA0IDAgMCAxIDQtNGgyMGE0IDQgMCAwIDEgNCA0djE0YTQgNCAwIDAgMS00IDRoLTQuODM1eiIvPjwvc3ZnPg==
-// @match        *://chatgpt.com/*
-// @match        *://chat.openai.com/*
-// @match        *://tongyi.aliyun.com/*
-// @match        *://*.qianwen.com/*
-// @match        *://chat.qwen.ai/*
-// @match        *://*.qwen.ai/*
-// @match        *://www.doubao.com/*
-// @match        *://chat.deepseek.com/*
+// @match        *://chatgpt.com/c/*
+// @match        *://www.qianwen.com/chat/*
+// @match        *://www.doubao.com/chat/*
+// @match        *://chat.deepseek.com/a/chat/s/*
 // @grant        GM_addStyle
 // @run-at       document-start
 // ==/UserScript==
@@ -23,11 +19,26 @@
     'use strict';
 
     const host = window.location.hostname;
-    const isChatGPT = /(^|\.)chatgpt\.com$|(^|\.)chat\.openai\.com$/i.test(host);
-    const isQwen = host.includes('aliyun.com') || host.includes('qianwen.com') || /(^|\.)qwen\.ai$/i.test(host);
-    const isDoubao = host.includes('doubao.com');
-    const isDeepSeek = host.includes('deepseek.com');
+    const pathname = window.location.pathname;
+    const search = window.location.search;
+
+    const isChatGPTHost = /(^|\.)chatgpt\.com$/i.test(host);
+    const isQwenHost = /^www\.qianwen\.com$/i.test(host);
+    const isDoubaoHost = /^www\.doubao\.com$/i.test(host);
+    const isDeepSeekHost = /^chat\.deepseek\.com$/i.test(host);
+
+    const isChatGPTPath = /^\/c\/[a-z0-9-]+\/?$/i.test(pathname);
+    const isQwenPath = /^\/chat\/[a-f0-9]{32}\/?$/i.test(pathname) && (!search || /^\?ch=[^&]+$/i.test(search));
+    const isDoubaoPath = /^\/chat\/\d+\/?$/i.test(pathname);
+    const isDeepSeekPath = /^\/a\/chat\/s\/[0-9a-f-]{36}\/?$/i.test(pathname);
+
+    const isChatGPT = isChatGPTHost && isChatGPTPath;
+    const isQwen = isQwenHost && isQwenPath;
+    const isDoubao = isDoubaoHost && isDoubaoPath;
+    const isDeepSeek = isDeepSeekHost && isDeepSeekPath;
     const AI_NAME = isChatGPT ? 'ChatGPT' : (isDeepSeek ? 'DeepSeek' : (isDoubao ? '豆包' : (isQwen ? '通义千问' : 'AI 助手')));
+
+    if (!isChatGPT && !isQwen && !isDoubao && !isDeepSeek) return;
 
     let nodes = [];
     let nodesMap = new Map(); // 用于持久化记录节点，防止虚拟列表回收导致消失
@@ -3396,11 +3407,11 @@
                 <div style="margin-top: 12px; padding-top: 8px; border-top: 1px dashed #eee; display: flex; flex-direction: column; gap: 8px;">
                     <label style="display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer;">
                         <input type="checkbox" id="ai-nodes-opt-collapse" ${autoCollapse ? 'checked' : ''} style="cursor: pointer; width: 14px; height: 14px;">
-                        <span>自动收起千问侧边栏</span>
+                        <span>自动收起侧边栏</span>
                     </label>
                     <label style="display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer;">
                         <input type="checkbox" id="ai-nodes-opt-ads" ${removeAds ? 'checked' : ''} style="cursor: pointer; width: 14px; height: 14px;">
-                        <span>移除千问推荐广告</span>
+                        <span>移除推荐广告</span>
                     </label>
                 </div>
             ` : ''}
@@ -3408,7 +3419,7 @@
                 <div style="margin-top: 12px; padding-top: 8px; border-top: 1px dashed #eee; display: flex; flex-direction: column; gap: 8px;">
                     <label style="display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer;">
                         <input type="checkbox" id="ai-nodes-opt-hide-deepseek-native-nav" ${hideDeepSeekNativeNav ? 'checked' : ''} style="cursor: pointer; width: 14px; height: 14px;">
-                        <span>隐藏 DeepSeek 原生节点导航</span>
+                        <span>隐藏原生节点导航</span>
                     </label>
                 </div>
             ` : ''}
@@ -9407,15 +9418,28 @@
             const container = anchor.parentElement;
 
             if (buttonHost.parentElement !== container) {
-                container.insertBefore(buttonHost, anchor);
-                return true;
+                container.appendChild(buttonHost);
             }
 
-            // 已在目标容器内，但顺序不正确时强制纠正到锚点前
-            if (buttonHost.nextSibling !== anchor) {
-                container.insertBefore(buttonHost, anchor);
-                return true;
+            const anchorRect = anchor.getBoundingClientRect();
+            const containerRect = container.getBoundingClientRect();
+            const hostWidth = Math.max(32, Math.round(buttonHost.getBoundingClientRect().width || 32));
+            const gap = 8;
+            const minLeft = 8;
+            const maxLeft = Math.max(minLeft, Math.round(containerRect.width - hostWidth - 8));
+
+            let left = Math.round(anchorRect.right - containerRect.left + gap);
+            if (left > maxLeft) {
+                left = Math.round(anchorRect.left - containerRect.left - hostWidth - gap);
             }
+            left = Math.max(minLeft, Math.min(left, maxLeft));
+
+            buttonHost.style.position = 'absolute';
+            buttonHost.style.left = `${left}px`;
+            buttonHost.style.right = 'auto';
+            buttonHost.style.top = `${Math.round(anchorRect.top - containerRect.top)}px`;
+            buttonHost.style.margin = '0';
+            buttonHost.style.zIndex = '10060';
             return true;
         }
 
