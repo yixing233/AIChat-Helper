@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         豆包API网络导出测试
 // @namespace    http://tampermonkey.net/
-// @version      0.2.0
+// @version      0.2.3
 // @description  在豆包页面测试 /im/chain/single 与 /im/chain/recent_conv，支持批量对话导出
 // @author       xchengb
 // @match        *://www.doubao.com/*
@@ -297,6 +297,200 @@
         return d.toLocaleString();
     }
 
+    function getStringByPath(obj, path) {
+        const parts = String(path || '').split('.').filter(Boolean);
+        let cur = obj;
+        for (const p of parts) {
+            if (!cur || typeof cur !== 'object') return '';
+            cur = cur[p];
+        }
+        return typeof cur === 'string' ? cur.trim() : '';
+    }
+
+    function findNestedConversationTitle(obj, maxDepth = 4) {
+        if (!obj || typeof obj !== 'object' || maxDepth < 0) return '';
+
+        const directKeys = [
+            'name',
+            'title',
+            'conversation_title',
+            'conv_title',
+            'chat_title',
+            'display_title'
+        ];
+
+        for (const key of directKeys) {
+            const val = typeof obj[key] === 'string' ? obj[key].trim() : '';
+            if (val && !/^[0-9]{8,}$/.test(val)) return val;
+        }
+
+        if (maxDepth === 0) return '';
+
+        for (const v of Object.values(obj)) {
+            if (!v || typeof v !== 'object') continue;
+            const nested = findNestedConversationTitle(v, maxDepth - 1);
+            if (nested) return nested;
+        }
+
+        return '';
+    }
+
+    function resolveConversationTitle(item, id) {
+        const preferredPaths = [
+            'name',
+            'title',
+            'conversation_title',
+            'conv_title',
+            'chat_title',
+            'conversation.name',
+            'conversation.title',
+            'conversation_info.name',
+            'conversation_info.title',
+            'conv.name',
+            'conv.title',
+            'coco_conversation.name',
+            'coco_conversation.title',
+            'chain_info.name',
+            'chain_info.title',
+            'meta.name',
+            'meta.title'
+        ];
+
+        for (const p of preferredPaths) {
+            const val = getStringByPath(item, p);
+            if (val && !/^[0-9]{8,}$/.test(val)) return val;
+        }
+
+        const nested = findNestedConversationTitle(item, 5);
+        if (nested) return nested;
+
+        return `会话 ${id}`;
+    }
+
+    function getNumberByPath(obj, path) {
+        const parts = String(path || '').split('.').filter(Boolean);
+        let cur = obj;
+        for (const p of parts) {
+            if (!cur || typeof cur !== 'object') return null;
+            cur = cur[p];
+        }
+        const n = Number(cur);
+        return Number.isFinite(n) ? n : null;
+    }
+
+    function findNestedBadgeCount(obj, maxDepth = 5) {
+        if (!obj || typeof obj !== 'object' || maxDepth < 0) return null;
+
+        const direct = Number(obj.badge_count);
+        if (Number.isFinite(direct)) return direct;
+
+        if (maxDepth === 0) return null;
+        for (const v of Object.values(obj)) {
+            if (!v || typeof v !== 'object') continue;
+            const found = findNestedBadgeCount(v, maxDepth - 1);
+            if (Number.isFinite(found)) return found;
+        }
+        return null;
+    }
+
+    function resolveConversationBadgeCount(item) {
+        const preferredPaths = [
+            'badge_count',
+            'conversation.badge_count',
+            'conversation_info.badge_count',
+            'conv.badge_count',
+            'coco_conversation.badge_count',
+            'chain_info.badge_count'
+        ];
+
+        for (const p of preferredPaths) {
+            const n = getNumberByPath(item, p);
+            if (Number.isFinite(n)) return n;
+        }
+
+        return findNestedBadgeCount(item, 5);
+    }
+
+    function findNestedTimestamp(obj, keys, maxDepth = 5) {
+        if (!obj || typeof obj !== 'object' || maxDepth < 0) return null;
+
+        for (const key of keys) {
+            const n = Number(obj[key]);
+            if (Number.isFinite(n) && n > 0) return n;
+        }
+
+        if (maxDepth === 0) return null;
+        for (const v of Object.values(obj)) {
+            if (!v || typeof v !== 'object') continue;
+            const found = findNestedTimestamp(v, keys, maxDepth - 1);
+            if (Number.isFinite(found) && found > 0) return found;
+        }
+        return null;
+    }
+
+    function resolveConversationTimestamps(item) {
+        const createPaths = [
+            'create_time',
+            'created_at',
+            'create_timestamp',
+            'conversation.create_time',
+            'conversation.created_at',
+            'conversation_info.create_time',
+            'conversation_info.created_at',
+            'conv.create_time',
+            'conv.created_at',
+            'coco_conversation.create_time',
+            'coco_conversation.created_at',
+            'chain_info.create_time',
+            'chain_info.created_at'
+        ];
+
+        const updatePaths = [
+            'update_time',
+            'updated_at',
+            'update_timestamp',
+            'conversation.update_time',
+            'conversation.updated_at',
+            'conversation_info.update_time',
+            'conversation_info.updated_at',
+            'conv.update_time',
+            'conv.updated_at',
+            'coco_conversation.update_time',
+            'coco_conversation.updated_at',
+            'chain_info.update_time',
+            'chain_info.updated_at'
+        ];
+
+        let createdAt = null;
+        for (const p of createPaths) {
+            const n = getNumberByPath(item, p);
+            if (Number.isFinite(n) && n > 0) {
+                createdAt = n;
+                break;
+            }
+        }
+        if (!Number.isFinite(createdAt) || createdAt <= 0) {
+            createdAt = findNestedTimestamp(item, ['create_time', 'created_at', 'create_timestamp'], 6);
+        }
+
+        let updatedAt = null;
+        for (const p of updatePaths) {
+            const n = getNumberByPath(item, p);
+            if (Number.isFinite(n) && n > 0) {
+                updatedAt = n;
+                break;
+            }
+        }
+        if (!Number.isFinite(updatedAt) || updatedAt <= 0) {
+            updatedAt = findNestedTimestamp(item, ['update_time', 'updated_at', 'update_timestamp'], 6);
+        }
+
+        return {
+            createdAt: Number.isFinite(createdAt) && createdAt > 0 ? createdAt : 0,
+            updatedAt: Number.isFinite(updatedAt) && updatedAt > 0 ? updatedAt : 0
+        };
+    }
+
     function extractRecentConversations(respJson) {
         const direct = respJson?.downlink_body?.pull_recent_conv_chain_downlink_body
             || respJson?.downlink_body?.pull_recent_conv_downlink_body;
@@ -321,26 +515,23 @@
             ).trim();
             if (!id || seen.has(id)) return;
 
-            const title = String(
-                item.title
-                || item.conversation_title
-                || item.name
-                || item.brief
-                || item.summary
-                || `会话 ${id}`
-            ).trim();
-
-            const updatedAt = Number(
-                item.update_time
-                || item.updated_at
-                || item.update_timestamp
-                || item.create_time
-                || item.inserted_at
-                || 0
-            );
+            const title = resolveConversationTitle(item, id);
+            const badgeCount = resolveConversationBadgeCount(item);
+            const ts = resolveConversationTimestamps(item);
+            const createdAt = ts.createdAt || 0;
+            const updatedAt = ts.updatedAt || createdAt || 0;
 
             seen.add(id);
-            out.push({ id, title: title || `会话 ${id}`, updatedAt, updatedAtText: formatTime(updatedAt), raw: item });
+            out.push({
+                id,
+                title: title || `会话 ${id}`,
+                badgeCount: Number.isFinite(badgeCount) ? badgeCount : null,
+                createdAt,
+                createdAtText: formatTime(createdAt),
+                updatedAt,
+                updatedAtText: formatTime(updatedAt),
+                raw: item
+            });
         };
 
         arr.forEach(pushConv);
@@ -824,7 +1015,7 @@
                         <input type="checkbox" class="db-recent-ck" data-id="${escapeHtml(c.id)}" checked>
                         <div style="flex:1;min-width:0;">
                             <div class="db-recent-title">${escapeHtml(c.title || `会话 ${c.id}`)}</div>
-                            <div class="db-recent-meta">ID: ${escapeHtml(c.id)}${c.updatedAtText ? ` | 更新时间: ${escapeHtml(c.updatedAtText)}` : ''}</div>
+                            <div class="db-recent-meta">ID: ${escapeHtml(c.id)}${Number.isFinite(c.badgeCount) ? ` | 消息数量: ${escapeHtml(String(c.badgeCount))}` : ''}${c.createdAtText ? ` | 创建时间: ${escapeHtml(c.createdAtText)}` : ''}${c.updatedAtText ? ` | 更新时间: ${escapeHtml(c.updatedAtText)}` : ''}</div>
                         </div>
                     </label>
                 `).join('');

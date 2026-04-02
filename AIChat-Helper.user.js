@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AI对话助手
 // @namespace    http://tampermonkey.net/
-// @version      1.6.6
+// @version      1.6.15
 // @description  支持 ChatGPT、通义千问、豆包、DeepSeek：自动生成对话节点导航、一键导出对话（PDF/Markdown/JSON/CSV/TXT）。
 // @author       xchengb
 // @updateURL    https://gitee.com/xcb157342/ai-chat-nodes/raw/master/AIChat-Helper.user.js
@@ -11,9 +11,12 @@
 // @match        *://chat.openai.com/*
 // @match        *://tongyi.aliyun.com/*
 // @match        *://*.qianwen.com/*
+// @match        *://chat.qwen.ai/*
+// @match        *://*.qwen.ai/*
 // @match        *://www.doubao.com/*
 // @match        *://chat.deepseek.com/*
 // @grant        GM_addStyle
+// @run-at       document-start
 // ==/UserScript==
 
 (function () {
@@ -21,7 +24,7 @@
 
     const host = window.location.hostname;
     const isChatGPT = /(^|\.)chatgpt\.com$|(^|\.)chat\.openai\.com$/i.test(host);
-    const isQwen = host.includes('aliyun.com') || host.includes('qianwen.com');
+    const isQwen = host.includes('aliyun.com') || host.includes('qianwen.com') || /(^|\.)qwen\.ai$/i.test(host);
     const isDoubao = host.includes('doubao.com');
     const isDeepSeek = host.includes('deepseek.com');
     const AI_NAME = isChatGPT ? 'ChatGPT' : (isDeepSeek ? 'DeepSeek' : (isDoubao ? '豆包' : (isQwen ? '通义千问' : 'AI 助手')));
@@ -33,6 +36,7 @@
     let storageKey = '';
     const COLLAPSE_KEY = 'ai-nodes-auto-collapse-qwen';
     const ADS_KEY = 'ai-nodes-remove-qwen-ads';
+    const DEEPSEEK_NATIVE_NAV_KEY = 'ai-nodes-hide-deepseek-native-nav';
     
     let isHistoryFullyLoaded = false; // 用户要求的缓存机制：标记当前对话历史是否已全量加载过
     let activeNodeId = null; // 存储 ID 而非 DOM 引用，防止重绘后状态失效
@@ -40,9 +44,23 @@
     let isNodeSearching = false;
     let qwenInitUnlockInProgress = false;
     let qwenVirtualNodesCache = [];
+    let qwenVirtualNodesSessionId = '';
     let qwenVirtualNodesLoading = false;
     let qwenVirtualNodesLoaded = false;
     let qwenVirtualNodesLastFetchAt = 0;
+    let qwenVirtualNodesDirty = true;
+    let qwenLastUpdateDebugSig = '';
+    let qwenEmptyRetryTimer = null;
+    let qwenHistoryHydrationInFlight = false;
+    let qwenLastHydratedSessionId = '';
+    let qwenLastHydrationSignature = '';
+    let qwenCapturedTemplate = null;
+    let qwenEarlyCaptureHooksInstalled = false;
+    let qwenCaptureHooksInstalled = false;
+    let qwenPendingApiPayloads = [];
+    let qwenInternalFetchDepth = 0;
+    let qwenSuppressCapturedPayloads = 0;
+    let qwenInternalRequestMarks = new Map();
     let deepseekVirtualNodesCache = [];
     let deepseekVirtualNodesLoading = false;
     let deepseekVirtualNodesLoaded = false;
@@ -51,6 +69,208 @@
     let deepseekCaptureHooksInstalled = false;
     let deepseekLastSessionMeta = null;
     const DEEPSEEK_HISTORY_PATH = '/api/v0/chat/history_messages';
+    const QWEN_NODE_DEBUG = true;
+
+    // 先放占位实现，避免页面初始阶段因执行时序触发 ReferenceError。
+    let installQwenCaptureHooks = function () {
+        return;
+    };
+
+    let getQwenMessagesByApi = async function () {
+        return [];
+    };
+
+    let collectQwenMessagesFromPendingPayloads = function () {
+        return [];
+    };
+
+    // 早期辅助函数：给顶部刷新链/切换保护使用，避免后续实现尚未进入当前作用域时触发 ReferenceError。
+    function getQwenSessionIdFromUrl() {
+        try {
+            const url = new URL(window.location.href);
+            const q = url.searchParams.get('session_id');
+            if (q) return q;
+
+            const m1 = url.pathname.match(/\/chat\/([a-zA-Z0-9_-]{16,})/);
+            if (m1) return m1[1];
+
+            const m2 = url.pathname.match(/\/session\/([a-zA-Z0-9_-]{16,})/);
+            if (m2) return m2[1];
+        } catch (e) {
+            // ignore
+        }
+        return '';
+    }
+
+    function queueQwenPendingApiPayload(url, rawText, source) {
+        if (!url || !rawText) return;
+        if (qwenInternalFetchDepth > 0) return;
+        if (qwenSuppressCapturedPayloads > 0) {
+            qwenNodeLog('pending:skip-suppressed', { source, url, suppressDepth: qwenSuppressCapturedPayloads });
+            return;
+        }
+        if (isMarkedQwenInternalRequest(url)) {
+            qwenNodeLog('pending:skip-internal', { source, url });
+            return;
+        }
+        try {
+            const payloadUrl = new URL(url, window.location.origin);
+            const payloadSessionId = String(payloadUrl.searchParams.get('session_id') || '').trim();
+            const currentUrl = new URL(window.location.href);
+            const currentSessionId = String(currentUrl.searchParams.get('session_id') || '').trim();
+            if (payloadSessionId && currentSessionId && payloadSessionId !== currentSessionId) {
+                qwenNodeLog('pending:skip-stale', { source, payloadSessionId, currentSessionId });
+                return;
+            }
+        } catch (e) {
+            // ignore session parse errors
+        }
+        qwenPendingApiPayloads.push({ url, rawText, source });
+        qwenNodeLog('pending:push', { source, url, size: qwenPendingApiPayloads.length });
+        qwenVirtualNodesDirty = true;
+
+        setTimeout(() => {
+            if (!isQwen) return;
+            const changed = flushQwenPendingApiPayloads();
+            if (changed) {
+                maybeHydrateQwenHistory(source || 'pending-push');
+                return;
+            }
+            scheduleQwenVirtualNodesRefresh(true);
+        }, 0);
+    }
+
+    function installEarlyQwenCaptureHook() {
+        if (!isQwen || qwenEarlyCaptureHooksInstalled) return;
+        qwenEarlyCaptureHooksInstalled = true;
+
+        const isMsgListUrl = (rawUrl) => {
+            try {
+                const u = new URL(rawUrl, window.location.origin);
+                return u.pathname.includes('/api/v1/session/msg/list');
+            } catch (e) {
+                return false;
+            }
+        };
+
+        const simpleParseHeaders = (headersLike) => {
+            if (!headersLike) return {};
+            if (headersLike instanceof Headers) {
+                const obj = {};
+                headersLike.forEach((v, k) => obj[k] = v);
+                return obj;
+            }
+            if (Array.isArray(headersLike)) {
+                const obj = {};
+                headersLike.forEach(([k, v]) => obj[String(k)] = String(v));
+                return obj;
+            }
+            if (typeof headersLike === 'object') return { ...headersLike };
+            return {};
+        };
+
+        const nativeFetch = window.fetch;
+        window.fetch = function (input, init) {
+            const resp = nativeFetch.apply(this, arguments);
+            try {
+                const url = typeof input === 'string' ? input : input?.url;
+                if (url && isMsgListUrl(url)) {
+                    qwenCapturedTemplate = {
+                        url,
+                        method: String(init?.method || input?.method || 'GET').toUpperCase(),
+                        headers: simpleParseHeaders(init?.headers || input?.headers),
+                        body: typeof (init?.body) === 'string' ? init.body : ''
+                    };
+
+                    Promise.resolve(resp).then((r) => {
+                        if (!r || !r.ok || typeof r.clone !== 'function') return;
+                        return r.clone().text().then((rawText) => {
+                            queueQwenPendingApiPayload(url, rawText, 'early-fetch');
+                        }).catch(() => {});
+                    }).catch(() => {});
+                }
+            } catch (e) {
+                // ignore early hook errors
+            }
+            return resp;
+        };
+
+        const nativeOpen = XMLHttpRequest.prototype.open;
+        const nativeSend = XMLHttpRequest.prototype.send;
+        const nativeSetHeader = XMLHttpRequest.prototype.setRequestHeader;
+
+        XMLHttpRequest.prototype.open = function (method, url) {
+            this.__aiNodesQwenMethod = String(method || 'GET').toUpperCase();
+            this.__aiNodesQwenUrl = url || '';
+            this.__aiNodesQwenHeaders = {};
+            return nativeOpen.apply(this, arguments);
+        };
+
+        XMLHttpRequest.prototype.setRequestHeader = function (name, value) {
+            if (this.__aiNodesQwenHeaders && name) {
+                this.__aiNodesQwenHeaders[String(name)] = String(value);
+            }
+            return nativeSetHeader.apply(this, arguments);
+        };
+
+        XMLHttpRequest.prototype.send = function (body) {
+            try {
+                if (this.__aiNodesQwenUrl && isMsgListUrl(this.__aiNodesQwenUrl)) {
+                    qwenCapturedTemplate = {
+                        url: this.__aiNodesQwenUrl,
+                        method: this.__aiNodesQwenMethod || 'GET',
+                        headers: this.__aiNodesQwenHeaders || {},
+                        body: typeof body === 'string' ? body : ''
+                    };
+                    this.addEventListener('load', () => {
+                        try {
+                            if (this.status < 200 || this.status >= 300) return;
+                            const rawText = typeof this.responseText === 'string' ? this.responseText : '';
+                            queueQwenPendingApiPayload(this.__aiNodesQwenUrl, rawText, 'early-xhr');
+                        } catch (e) {
+                            // ignore
+                        }
+                    }, { once: true });
+                }
+            } catch (e) {
+                // ignore early hook errors
+            }
+            return nativeSend.apply(this, arguments);
+        };
+    }
+
+    installEarlyQwenCaptureHook();
+
+    function qwenNodeLog(stage, payload) {
+        if (!isQwen || !QWEN_NODE_DEBUG) return;
+        try {
+            if (payload === undefined) console.log(`[AI-Chat-Nodes][Qwen] ${stage}`);
+            else console.log(`[AI-Chat-Nodes][Qwen] ${stage}`, payload);
+        } catch (e) {
+            // ignore debug log errors
+        }
+    }
+
+    function cleanupQwenInternalRequestMarks() {
+        if (!qwenInternalRequestMarks.size) return;
+        const now = Date.now();
+        Array.from(qwenInternalRequestMarks.entries()).forEach(([url, expiresAt]) => {
+            if (!expiresAt || expiresAt <= now) qwenInternalRequestMarks.delete(url);
+        });
+    }
+
+    function markQwenInternalRequest(url, ttlMs = 15000) {
+        if (!url) return;
+        cleanupQwenInternalRequestMarks();
+        qwenInternalRequestMarks.set(String(url), Date.now() + Math.max(1000, ttlMs));
+    }
+
+    function isMarkedQwenInternalRequest(url) {
+        if (!url) return false;
+        cleanupQwenInternalRequestMarks();
+        const expiresAt = qwenInternalRequestMarks.get(String(url));
+        return Boolean(expiresAt && expiresAt > Date.now());
+    }
 
     function getConvId() {
         const path = window.location.pathname;
@@ -64,10 +284,31 @@
             currentConvId = newId;
             storageKey = `ai-nodes-history-${currentConvId}`;
             isHistoryFullyLoaded = false; // 切换对话时重置加载状态
+            activeNodeId = null;
             if (isQwen) {
+                qwenInitUnlockInProgress = false;
+                try {
+                    sessionStorage.removeItem(`ai-nodes-qwen-init-unlock-${currentConvId}`);
+                } catch (e) {
+                    // ignore
+                }
                 qwenVirtualNodesCache = [];
+                qwenPendingApiPayloads = [];
+                qwenVirtualNodesSessionId = '';
+                qwenVirtualNodesLoading = false;
                 qwenVirtualNodesLoaded = false;
                 qwenVirtualNodesLastFetchAt = 0;
+                qwenSuppressCapturedPayloads = 0;
+                qwenInternalRequestMarks.clear();
+                qwenVirtualNodesDirty = true;
+                qwenHistoryHydrationInFlight = false;
+                qwenLastHydratedSessionId = '';
+                qwenLastHydrationSignature = '';
+                qwenLastUpdateDebugSig = '';
+                if (qwenEmptyRetryTimer) {
+                    clearTimeout(qwenEmptyRetryTimer);
+                    qwenEmptyRetryTimer = null;
+                }
             }
             if (isDeepSeek) {
                 deepseekVirtualNodesCache = [];
@@ -85,6 +326,7 @@
     let ticking = false;
     let autoCollapse = localStorage.getItem(COLLAPSE_KEY) === 'true';
     let removeAds = localStorage.getItem(ADS_KEY) === 'true';
+    let hideDeepSeekNativeNav = localStorage.getItem(DEEPSEEK_NATIVE_NAV_KEY) === 'true';
 
     const CONFIG = {
         topGap: 80,
@@ -96,7 +338,8 @@
         dotSize: 11,
         dotBorder: 2,
         dotGap: 36,
-        maxVisibleDotsBeforeScroll: 12
+        maxVisibleDotsBeforeScroll: 12,
+        maxTrackViewportRatio: 0.4
     };
 
     // ===== 全局共享 Tooltip (单例模式，防止渲染泄露) =====
@@ -127,29 +370,35 @@
         transition: none;
         transform: translateY(10px) scale(0.95);
     `;
-    document.body.appendChild(globalTooltip);
+    if (document.body) document.body.appendChild(globalTooltip);
 
     // ===== 最外层固定容器 =====
     const container = document.createElement('div');
+    container.id = 'ai-nodes-nav-wrapper';
+    container.className = 'ai-nodes-nav-wrapper';
     container.style.position = 'fixed';
     container.style.right = CONFIG.right + 'px';
     container.style.top = CONFIG.topGap + 'px';
     container.style.width = CONFIG.panelWidth + 'px';
-    container.style.height = `calc(100vh - ${CONFIG.topGap + CONFIG.bottomGap}px)`;
+    container.style.height = 'auto';
+    container.style.maxHeight = `calc(100vh - ${CONFIG.topGap + CONFIG.bottomGap}px)`;
     container.style.zIndex = '9999';
     container.style.pointerEvents = 'auto';
     container.style.overflow = 'visible';
     container.style.display = 'flex';
+    container.style.visibility = 'visible';
+    container.style.opacity = '1';
     container.style.alignItems = 'center';
     container.style.flexDirection = 'column';
     container.style.paddingTop = '10px';
-    document.body.appendChild(container);
+    if (document.body) document.body.appendChild(container);
 
     // ===== 滚动条样式优化 =====
     const styleTag = document.createElement('style');
     styleTag.innerHTML = `
         .ai-navigator-scroll::-webkit-scrollbar {
-            width: 3px;
+            width: 0;
+            height: 0;
         }
         .ai-navigator-scroll::-webkit-scrollbar-track {
             background: transparent;
@@ -161,12 +410,22 @@
         .ai-navigator-scroll::-webkit-scrollbar-thumb:hover {
             background: rgba(150, 150, 150, 0.5);
         }
+        .ai-navigator-scroll {
+            scrollbar-width: none;
+            -ms-overflow-style: none;
+        }
         /* 千问去广告样式 */
         body.ai-nodes-hide-ads [data-c="result_card"],
         body.ai-nodes-hide-ads [class*="card_card_video"],
         body.ai-nodes-hide-ads [data-tpl*="card_video"],
         body.ai-nodes-hide-ads [class*="video_note_list"],
         body.ai-nodes-hide-ads [class*="container-3D4Pp"] {
+            display: none !important;
+        }
+        /* DeepSeek 原生节点导航隐藏 */
+        body.ai-nodes-hide-deepseek-native-nav ._189b4a0,
+        body.ai-nodes-hide-deepseek-native-nav ._189b4a0:has(.ds-virtual-list),
+        body.ai-nodes-hide-deepseek-native-nav ._189b4a0 .ds-virtual-list {
             display: none !important;
         }
         /* 节点标识样式优化 */
@@ -193,29 +452,25 @@
             z-index: 10;
             box-shadow: 0 0 4px rgba(0,0,0,0.2);
         }
-        @keyframes ai-dot-glow {
-            0% { 
-                box-shadow: 0 0 0 0 rgba(77, 121, 255, 0.6); 
-                transform: translate(-50%, -50%) scale(1);
+        @keyframes ai-dot-active-ripple {
+            0% {
+                box-shadow: 0 0 0 2px #fff, 0 6px 16px rgba(0,0,0,0.2), 0 0 0 0 rgba(70, 167, 88, 0.38);
             }
-            50% {
-                transform: translate(-50%, -50%) scale(1.15);
+            70% {
+                box-shadow: 0 0 0 2px #fff, 0 6px 16px rgba(0,0,0,0.2), 0 0 0 10px rgba(70, 167, 88, 0);
             }
-            70% { 
-                box-shadow: 0 0 0 8px rgba(77, 121, 255, 0); 
-                transform: translate(-50%, -50%) scale(1);
-            }
-            100% { 
-                box-shadow: 0 0 0 0 rgba(77, 121, 255, 0); 
+            100% {
+                box-shadow: 0 0 0 2px #fff, 0 6px 16px rgba(0,0,0,0.2), 0 0 0 0 rgba(70, 167, 88, 0);
             }
         }
-        .ai-dot-latest {
-            animation: ai-dot-glow 2.5s infinite ease-in-out;
+        .ai-dot-active-ripple {
+            animation: ai-dot-active-ripple 1.8s ease-out infinite;
         }
     `;
-    document.head.appendChild(styleTag);
+    if (document.head) document.head.appendChild(styleTag);
 
-    if (removeAds) document.body.classList.add('ai-nodes-hide-ads');
+    if (removeAds && document.body) document.body.classList.add('ai-nodes-hide-ads');
+    if (hideDeepSeekNativeNav && document.body) document.body.classList.add('ai-nodes-hide-deepseek-native-nav');
 
     // ===== 拖拽手柄 =====
     const dragHandle = document.createElement('div');
@@ -259,9 +514,10 @@
         
         container.style.right = newRight + 'px';
         container.style.top = newTop + 'px';
-        container.style.height = `calc(100vh - ${newTop + CONFIG.bottomGap}px)`;
+        container.style.maxHeight = `calc(100vh - ${newTop + CONFIG.bottomGap}px)`;
         
         localStorage.setItem('ai-chat-nodes-pos', JSON.stringify({ right: newRight, top: newTop }));
+        updateFixedScrollIndicator();
     });
 
     document.addEventListener('mouseup', () => {
@@ -277,7 +533,7 @@
     if (savedPos) {
         container.style.right = savedPos.right + 'px';
         container.style.top = savedPos.top + 'px';
-        container.style.height = `calc(100vh - ${savedPos.top + CONFIG.bottomGap}px)`;
+        container.style.maxHeight = `calc(100vh - ${savedPos.top + CONFIG.bottomGap}px)`;
     }
 
     // ===== 滚动层：只负责垂直滚动，不裁切圆点横向空间 =====
@@ -285,12 +541,15 @@
     scrollArea.className = 'ai-navigator-scroll';
     scrollArea.style.position = 'relative';
     scrollArea.style.width = CONFIG.scrollWidth + 'px';
-    scrollArea.style.height = '100%';
+    scrollArea.style.height = '0';
     scrollArea.style.overflowY = 'auto';
     scrollArea.style.overflowX = 'visible';
     scrollArea.style.scrollBehavior = 'smooth';
     scrollArea.style.boxSizing = 'border-box';
     scrollArea.style.padding = '0';
+    scrollArea.addEventListener('scroll', () => {
+        updateFixedScrollIndicator();
+    }, { passive: true });
     container.appendChild(scrollArea);
 
     // ===== 内容层：给轨道和圆点留完整空间 =====
@@ -324,18 +583,167 @@
     dotsLayer.style.overflow = 'visible';
     content.appendChild(dotsLayer);
 
+    const fixedScrollRail = document.createElement('div');
+    fixedScrollRail.style.position = 'fixed';
+    fixedScrollRail.style.width = '6px';
+    fixedScrollRail.style.borderRadius = '999px';
+    fixedScrollRail.style.background = 'rgba(180, 180, 180, 0.14)';
+    fixedScrollRail.style.backdropFilter = 'blur(2px)';
+    fixedScrollRail.style.pointerEvents = 'auto';
+    fixedScrollRail.style.zIndex = '10001';
+    fixedScrollRail.style.opacity = '0';
+    fixedScrollRail.style.transition = 'opacity 0.18s ease';
+    fixedScrollRail.style.cursor = 'pointer';
+
+    const fixedScrollThumb = document.createElement('div');
+    fixedScrollThumb.style.position = 'fixed';
+    fixedScrollThumb.style.width = '6px';
+    fixedScrollThumb.style.borderRadius = '999px';
+    fixedScrollThumb.style.background = 'rgba(120, 120, 120, 0.58)';
+    fixedScrollThumb.style.boxShadow = '0 1px 4px rgba(0, 0, 0, 0.18)';
+    fixedScrollThumb.style.pointerEvents = 'auto';
+    fixedScrollThumb.style.zIndex = '10002';
+    fixedScrollThumb.style.opacity = '0';
+    fixedScrollThumb.style.transition = 'opacity 0.18s ease';
+    fixedScrollThumb.style.cursor = 'grab';
+
+    let fixedScrollDragging = false;
+    let fixedScrollDragOffsetY = 0;
+    let fixedScrollMetrics = {
+        railTop: 0,
+        railHeight: 0,
+        thumbHeight: 0,
+        maxScrollTop: 0
+    };
+
+    function ensureNavigatorMounted() {
+        if (!document.body || !document.head) return false;
+        if (!globalTooltip.isConnected) document.body.appendChild(globalTooltip);
+        if (!styleTag.isConnected) document.head.appendChild(styleTag);
+        document.body.classList.toggle('ai-nodes-hide-ads', Boolean(removeAds));
+        document.body.classList.toggle('ai-nodes-hide-deepseek-native-nav', Boolean(isDeepSeek && hideDeepSeekNativeNav));
+        if (!container.isConnected) {
+            document.body.appendChild(container);
+            qwenNodeLog('nav:reattach-container', { isConnected: container.isConnected });
+        }
+        if (!scrollArea.isConnected) container.appendChild(scrollArea);
+        if (!content.isConnected) scrollArea.appendChild(content);
+        if (!track.isConnected) content.appendChild(track);
+        if (!dotsLayer.isConnected) content.appendChild(dotsLayer);
+        if (!fixedScrollRail.isConnected) document.body.appendChild(fixedScrollRail);
+        if (!fixedScrollThumb.isConnected) document.body.appendChild(fixedScrollThumb);
+        return true;
+    }
+
+    function updateFixedScrollIndicator() {
+        if (!container.isConnected || !scrollArea.isConnected) {
+            fixedScrollRail.style.opacity = '0';
+            fixedScrollThumb.style.opacity = '0';
+            return;
+        }
+
+        const viewportHeight = scrollArea.clientHeight || 0;
+        const scrollHeight = scrollArea.scrollHeight || 0;
+        if (viewportHeight <= 0 || scrollHeight <= viewportHeight + 2) {
+            fixedScrollRail.style.opacity = '0';
+            fixedScrollThumb.style.opacity = '0';
+            return;
+        }
+
+        const rect = container.getBoundingClientRect();
+        const railLeft = Math.round(rect.right - 9);
+        const railTop = Math.round(rect.top + 12);
+        const railHeight = Math.max(24, Math.round(rect.height - 24));
+        const maxScrollTop = Math.max(1, scrollHeight - viewportHeight);
+        const thumbHeight = Math.max(28, Math.round((viewportHeight / scrollHeight) * railHeight));
+        const travel = Math.max(0, railHeight - thumbHeight);
+        const thumbOffset = Math.round((scrollArea.scrollTop / maxScrollTop) * travel);
+
+        fixedScrollMetrics = {
+            railTop,
+            railHeight,
+            thumbHeight,
+            maxScrollTop
+        };
+
+        fixedScrollRail.style.left = railLeft + 'px';
+        fixedScrollRail.style.top = railTop + 'px';
+        fixedScrollRail.style.height = railHeight + 'px';
+        fixedScrollRail.style.opacity = '1';
+
+        fixedScrollThumb.style.left = railLeft + 'px';
+        fixedScrollThumb.style.top = (railTop + thumbOffset) + 'px';
+        fixedScrollThumb.style.height = thumbHeight + 'px';
+        fixedScrollThumb.style.opacity = '1';
+    }
+
+    function setFixedScrollTopFromClientY(clientY, anchorMode = 'center') {
+        if (!scrollArea || !scrollArea.isConnected) return;
+        const { railTop, railHeight, thumbHeight, maxScrollTop } = fixedScrollMetrics;
+        if (railHeight <= 0 || maxScrollTop <= 0) return;
+
+        const travel = Math.max(1, railHeight - thumbHeight);
+        let thumbTop;
+        if (anchorMode === 'drag') {
+            thumbTop = clientY - railTop - fixedScrollDragOffsetY;
+        } else {
+            thumbTop = clientY - railTop - thumbHeight / 2;
+        }
+        thumbTop = Math.max(0, Math.min(travel, thumbTop));
+        const ratio = thumbTop / travel;
+        scrollArea.scrollTop = ratio * maxScrollTop;
+        updateFixedScrollIndicator();
+    }
+
+    fixedScrollThumb.addEventListener('mousedown', (e) => {
+        if (!scrollArea || !scrollArea.isConnected) return;
+        e.preventDefault();
+        e.stopPropagation();
+        const thumbRect = fixedScrollThumb.getBoundingClientRect();
+        fixedScrollDragging = true;
+        fixedScrollDragOffsetY = e.clientY - thumbRect.top;
+        fixedScrollThumb.style.cursor = 'grabbing';
+        document.body.style.userSelect = 'none';
+    });
+
+    fixedScrollRail.addEventListener('mousedown', (e) => {
+        if (!scrollArea || !scrollArea.isConnected) return;
+        e.preventDefault();
+        e.stopPropagation();
+        setFixedScrollTopFromClientY(e.clientY, 'center');
+    });
+
+    document.addEventListener('mousemove', (e) => {
+        if (!fixedScrollDragging) return;
+        e.preventDefault();
+        setFixedScrollTopFromClientY(e.clientY, 'drag');
+    });
+
+    document.addEventListener('mouseup', () => {
+        if (!fixedScrollDragging) return;
+        fixedScrollDragging = false;
+        fixedScrollThumb.style.cursor = 'grab';
+        document.body.style.userSelect = '';
+    });
+
     function getMessages() {
         const list = [];
         // 使用全局变量 host
         if (isChatGPT) {
-            const msgs = document.querySelectorAll('[data-message-author-role]');
+            const msgs = document.querySelectorAll('[data-message-author-role], article[data-testid^="conversation-turn-"] [data-message-author-role="user"], [data-testid="conversation-turn-user"]');
+            const seen = new Set();
             msgs.forEach((el, index) => {
-                const textEl = el.querySelector('.whitespace-pre-wrap');
+                const textEl = el.querySelector('.whitespace-pre-wrap, [data-message-content], .markdown, .prose, [dir="auto"]') || el;
                 if (!textEl) return;
                 const text = (textEl.innerText || '').trim();
                 if (!text) return;
-                if (el.getAttribute('data-message-author-role') === 'user') {
-                    const id = el.getAttribute('data-message-id') || index;
+                const role = String(el.getAttribute('data-message-author-role') || '').toLowerCase();
+                const isUser = role === 'user' || el.getAttribute('data-testid') === 'conversation-turn-user';
+                if (isUser) {
+                    const id = el.getAttribute('data-message-id') || el.getAttribute('data-testid') || `chatgpt-user-${index}`;
+                    const dedupeKey = `${id}::${text.slice(0, 60)}`;
+                    if (seen.has(dedupeKey)) return;
+                    seen.add(dedupeKey);
                     list.push({
                         id: id,
                         element: textEl, // 修改：高亮文字容器
@@ -344,9 +752,15 @@
                     });
                 }
             });
-        } else if (host.includes('aliyun.com') || host.includes('qianwen.com')) {
-            scheduleQwenVirtualNodesRefresh();
-            qwenVirtualNodesCache.forEach((item) => list.push(item));
+        } else if (isQwen) {
+            flushQwenPendingApiPayloads();
+            const currentSessionId = getQwenSessionIdFromUrl();
+            if (!qwenVirtualNodesLoaded || qwenVirtualNodesDirty || !qwenVirtualNodesSessionId || (currentSessionId && qwenVirtualNodesSessionId !== currentSessionId)) {
+                scheduleQwenVirtualNodesRefresh();
+            }
+            if (!qwenVirtualNodesSessionId || !currentSessionId || qwenVirtualNodesSessionId === currentSessionId) {
+                qwenVirtualNodesCache.forEach((item) => list.push(item));
+            }
         } else if (host.includes('doubao.com')) {
             // 豆包适配：精确查找用户消息块
             const msgs = document.querySelectorAll('[data-testid="send_message"]');
@@ -1045,7 +1459,13 @@
         const isElementValid = (element, expectedNode) => {
             if (!element || !element.isConnected) return false;
             if (isQwen) {
-                return isQwenElementMatchNode(element, expectedNode);
+                const row = getQwenRowFromElement(element);
+                const rows = getQwenConversationRows();
+                const resolvedNode = row ? resolveQwenNodeFromRow(row, rows) : null;
+                if (resolvedNode) {
+                    return String(resolvedNode.id || '') === String(expectedNode?.id || '');
+                }
+                return false;
             }
             if (isDeepSeek) {
                 return isDeepSeekElementMatchNode(element, expectedNode);
@@ -1067,6 +1487,9 @@
             }
             if (!targetEl && isDeepSeek) {
                 targetEl = findDeepSeekDomElementByNode(node);
+            }
+            if (targetEl && !isElementValid(targetEl, node)) {
+                targetEl = null;
             }
         }
 
@@ -1095,8 +1518,8 @@
 
         if (scrollEl) {
             executeJump(165);
-            // 针对千问增加“二次跳跃”机制
-            if ((isQwen || isDeepSeek) && !isNodeSearching) {
+            // DeepSeek 保留二次校正；Qwen 关闭，避免点击后被页面自动带回旧位置。
+            if (isDeepSeek && !isNodeSearching) {
                 setTimeout(() => { if(isElementValid(targetEl, node)) executeJump(165); }, 300);
             }
         } else {
@@ -1134,6 +1557,11 @@
         return false;
     }
 
+    function getQwenSessionIndexValue(value) {
+        const n = Number(value);
+        return Number.isInteger(n) && n >= 0 ? n : -1;
+    }
+
     function getQwenUserDomCandidates() {
         const selector = [
             '[class*="questionItem"][data-msgid]',
@@ -1147,6 +1575,7 @@
         const raw = Array.from(document.querySelectorAll(selector));
         const seen = new Set();
         const out = [];
+        let questionIndex = 0;
 
         raw.forEach((el) => {
             const row = el.matches('[class*="bubble"], [class*="contentBox"]')
@@ -1167,7 +1596,8 @@
             if (seen.has(key)) return;
             seen.add(key);
 
-            out.push({ id: rawId, element: bubble, text });
+            out.push({ id: rawId, element: bubble, text, sessionIndex: questionIndex });
+            questionIndex += 1;
         });
 
         return out;
@@ -1215,75 +1645,255 @@
         return normalizeQwenTextForMatch(bubble.innerText || '');
     }
 
-    function findQwenNodeByIdOrText(id, text) {
-        if (id && nodesMap.has(id)) return nodesMap.get(id);
+    function getQwenRowFromElement(element) {
+        if (!element || !element.closest) return null;
+        return element.closest('[class*="questionItem"], [class*="answerItem"], [class*="question-item"], [class*="answer-item"]');
+    }
+
+    function findQwenNodeBySignature(id, text, sessionIndex = -1) {
+        const normalizedSessionIndex = getQwenSessionIndexValue(sessionIndex);
+        if (id && nodesMap.has(id)) {
+            const byId = nodesMap.get(id);
+            if (normalizedSessionIndex === -1 || getQwenSessionIndexValue(byId?.sessionIndex) === normalizedSessionIndex) {
+                return byId;
+            }
+        }
 
         const normalized = normalizeQwenTextForMatch(text || '');
-        if (!normalized) return null;
+        const prefix = normalized.slice(0, Math.min(28, normalized.length));
+        let bestNode = null;
+        let bestScore = -1;
 
-        return nodes.find((n) => {
+        nodes.forEach((n) => {
             const t = normalizeQwenTextForMatch(n.text || '');
-            if (!t) return false;
-            const p1 = normalized.slice(0, Math.min(24, normalized.length));
-            const p2 = t.slice(0, Math.min(24, t.length));
-            return (p1 && t.includes(p1)) || (p2 && normalized.includes(p2));
-        }) || null;
+            if (!t) return;
+
+            let score = 0;
+            if (id && String(n.id || '') === id) score += 18;
+            if (normalized && t === normalized) score += 14;
+            if (prefix && t.includes(prefix)) score += 8;
+            if (normalized && t && normalized.includes(t.slice(0, Math.min(24, t.length)))) score += 3;
+
+            const nodeSessionIndex = getQwenSessionIndexValue(n.sessionIndex);
+            if (normalizedSessionIndex !== -1 && nodeSessionIndex !== -1) {
+                const distance = Math.abs(nodeSessionIndex - normalizedSessionIndex);
+                if (distance === 0) score += 18;
+                else if (distance === 1) score += 10;
+                else if (distance === 2) score += 5;
+            }
+
+            if (score > bestScore) {
+                bestScore = score;
+                bestNode = n;
+            }
+        });
+
+        return bestScore >= 8 ? bestNode : null;
+    }
+
+    function getQwenQuestionSessionIndexFromRows(rows, row) {
+        if (!row || !Array.isArray(rows) || !rows.length) return -1;
+        let questionIndex = -1;
+        for (const currentRow of rows) {
+            if (getQwenRowType(currentRow) === 'question') {
+                questionIndex += 1;
+            }
+            if (currentRow === row) {
+                return questionIndex;
+            }
+        }
+        return -1;
+    }
+
+    function isLikelySameQwenNodeText(a, b) {
+        const ta = normalizeQwenTextForMatch(a || '');
+        const tb = normalizeQwenTextForMatch(b || '');
+        if (!ta || !tb) return false;
+        if (ta === tb) return true;
+        const short = ta.length <= tb.length ? ta : tb;
+        const long = ta.length > tb.length ? ta : tb;
+        if (short.length >= 12 && long.includes(short.slice(0, Math.min(24, short.length)))) return true;
+        const prefixA = ta.slice(0, Math.min(24, ta.length));
+        const prefixB = tb.slice(0, Math.min(24, tb.length));
+        return Boolean(prefixA && prefixB && prefixA === prefixB);
+    }
+
+    function normalizeQwenNodeOrder(list) {
+        if (!Array.isArray(list) || !list.length) return [];
+
+        let ordered = list.slice();
+        const rows = getQwenConversationRows().filter((row) => getQwenRowType(row) === 'question');
+        if (rows.length >= 2 && ordered.length >= 2) {
+            const firstDomText = getQwenRowText(rows[0]);
+            const lastDomText = getQwenRowText(rows[rows.length - 1]);
+            const firstNodeText = ordered[0]?.text || '';
+            const lastNodeText = ordered[ordered.length - 1]?.text || '';
+
+            const directScore =
+                (isLikelySameQwenNodeText(firstNodeText, firstDomText) ? 1 : 0) +
+                (isLikelySameQwenNodeText(lastNodeText, lastDomText) ? 1 : 0);
+            const reverseScore =
+                (isLikelySameQwenNodeText(firstNodeText, lastDomText) ? 1 : 0) +
+                (isLikelySameQwenNodeText(lastNodeText, firstDomText) ? 1 : 0);
+
+            if (reverseScore > directScore) {
+                ordered = ordered.slice().reverse();
+            }
+        }
+
+        if (rows.length && ordered.length && rows.length === ordered.length) {
+            const remaining = ordered.slice();
+            const arranged = [];
+
+            rows.forEach((row) => {
+                const rowId = getQwenRowId(row);
+                const rowText = getQwenRowText(row);
+                const rowSessionIndex = getQwenQuestionSessionIndexFromRows(rows, row);
+
+                let bestIndex = -1;
+                let bestScore = -1;
+
+                remaining.forEach((node, idx) => {
+                    let score = 0;
+                    if (rowId && String(node?.id || '') === rowId) score += 20;
+                    if (isLikelySameQwenNodeText(node?.text || '', rowText)) score += 12;
+                    const nodeSessionIndex = getQwenSessionIndexValue(node?.sessionIndex);
+                    if (rowSessionIndex !== -1 && nodeSessionIndex !== -1) {
+                        const distance = Math.abs(rowSessionIndex - nodeSessionIndex);
+                        if (distance === 0) score += 10;
+                        else if (distance === 1) score += 6;
+                        else if (distance === 2) score += 3;
+                    }
+                    if (score > bestScore) {
+                        bestScore = score;
+                        bestIndex = idx;
+                    }
+                });
+
+                if (bestIndex !== -1 && bestScore >= 8) {
+                    arranged.push(remaining.splice(bestIndex, 1)[0]);
+                }
+            });
+
+            if (arranged.length) {
+                ordered = arranged.concat(remaining);
+            }
+        }
+
+        return ordered.map((item, idx) => ({
+            ...item,
+            sessionIndex: idx
+        }));
     }
 
     function resolveQwenNodeFromRow(row, rows) {
         if (!row) return null;
         const rowType = getQwenRowType(row);
+        const questionRows = Array.isArray(rows) ? rows.filter((item) => getQwenRowType(item) === 'question') : [];
+        const canUseGlobalSessionIndex = questionRows.length > 0 && questionRows.length === nodes.length;
+        const directQuestionIndex = canUseGlobalSessionIndex
+            ? getQwenQuestionSessionIndexFromRows(rows, row)
+            : -1;
 
         if (rowType === 'question') {
-            return findQwenNodeByIdOrText(getQwenRowId(row), getQwenRowText(row));
+            return findQwenNodeBySignature(
+                getQwenRowId(row),
+                getQwenRowText(row),
+                directQuestionIndex
+            );
         }
 
         if (rowType === 'answer') {
             const idx = rows.indexOf(row);
             for (let i = idx - 1; i >= 0; i--) {
                 if (getQwenRowType(rows[i]) !== 'question') continue;
-                const n = findQwenNodeByIdOrText(getQwenRowId(rows[i]), getQwenRowText(rows[i]));
+                const prevQuestionIndex = canUseGlobalSessionIndex
+                    ? getQwenQuestionSessionIndexFromRows(rows, rows[i])
+                    : -1;
+                const n = findQwenNodeBySignature(
+                    getQwenRowId(rows[i]),
+                    getQwenRowText(rows[i]),
+                    prevQuestionIndex
+                );
                 if (n) return n;
             }
         }
 
-        return findQwenNodeByIdOrText(getQwenRowId(row), getQwenRowText(row));
+        return findQwenNodeBySignature(
+            getQwenRowId(row),
+            getQwenRowText(row),
+            directQuestionIndex
+        );
     }
 
     function getQwenActiveNodeByConversationState(scrollEl) {
         const rows = getQwenConversationRows();
         if (!rows.length) return null;
 
-        const isAtBottom = scrollEl && (scrollEl.scrollHeight - scrollEl.scrollTop - scrollEl.clientHeight) < 50;
+        const viewportHeight = Math.max(window.innerHeight || 0, document.documentElement?.clientHeight || 0);
+        const visibleRows = rows.filter((row) => {
+            const rect = row.getBoundingClientRect();
+            return rect.bottom > 0 && rect.top < viewportHeight;
+        });
+        const visibleQuestionRows = visibleRows.filter((row) => getQwenRowType(row) === 'question');
 
-        if (isAtBottom) {
-            const lastRow = rows[rows.length - 1];
-            return resolveQwenNodeFromRow(lastRow, rows);
+        const isNearBottom = Boolean(scrollEl)
+            && ((scrollEl.scrollHeight - Math.max(0, Number(scrollEl.scrollTop || 0)) - scrollEl.clientHeight) < 140);
+
+        if (visibleQuestionRows.length) {
+            if (isNearBottom) {
+                return resolveQwenNodeFromRow(visibleQuestionRows[visibleQuestionRows.length - 1], rows);
+            }
+
+            const readingZoneTop = Math.max(96, Math.round(viewportHeight * 0.12));
+            const enteredQuestion = visibleQuestionRows.find((row) => {
+                const rect = row.getBoundingClientRect();
+                return rect.bottom >= readingZoneTop;
+            });
+            if (enteredQuestion) {
+                return resolveQwenNodeFromRow(enteredQuestion, rows);
+            }
+
+            return resolveQwenNodeFromRow(visibleQuestionRows[0], rows);
         }
 
-        const anchor = 150;
-        let bestRow = null;
-        let minDist = Infinity;
+        const candidateRows = visibleRows.length ? visibleRows : rows;
+        const readingAnchor = Math.max(110, Math.round(viewportHeight * 0.18));
 
-        rows.forEach((row) => {
+        let crossingRow = null;
+        for (const row of candidateRows) {
             const rect = row.getBoundingClientRect();
-            if (!(rect.bottom > 0 && rect.top < window.innerHeight)) return;
-            const dist = Math.abs(rect.top - anchor);
-            if (dist < minDist) {
-                minDist = dist;
+            if (rect.top <= readingAnchor && rect.bottom >= readingAnchor) {
+                crossingRow = row;
+                break;
+            }
+        }
+        if (crossingRow) {
+            return resolveQwenNodeFromRow(crossingRow, rows);
+        }
+
+        let bestRow = null;
+        let bestScore = -Infinity;
+        candidateRows.forEach((row) => {
+            const rect = row.getBoundingClientRect();
+            if (!(rect.bottom > 0 && rect.top < viewportHeight)) return;
+
+            // 优先当前阅读线之上的最近一条，其次才考虑阅读线之下的条目。
+            let score = 0;
+            if (rect.top <= readingAnchor) {
+                score = 2000 - Math.abs(readingAnchor - rect.top);
+            } else {
+                score = 1000 - Math.abs(rect.top - readingAnchor);
+            }
+
+            if (score > bestScore) {
+                bestScore = score;
                 bestRow = row;
             }
         });
 
         if (!bestRow) return null;
         return resolveQwenNodeFromRow(bestRow, rows);
-    }
-
-    function findQwenDomElementById(nodeId) {
-        if (!nodeId) return null;
-        const candidates = getQwenUserDomCandidates();
-        const hit = candidates.find((c) => c.id && c.id === String(nodeId));
-        return hit ? hit.element : null;
     }
 
     function findQwenDomElementByNode(node) {
@@ -1293,6 +1903,7 @@
         const targetText = normalizeQwenTextForMatch(node.text);
         const targetPrefix = targetText.slice(0, Math.min(48, targetText.length));
         const targetMiddle = targetText.slice(Math.max(0, Math.floor(targetText.length / 2) - 18), Math.floor(targetText.length / 2) + 18);
+        const targetSessionIndex = getQwenSessionIndexValue(node.sessionIndex);
 
         let bestEl = null;
         let bestScore = -1;
@@ -1304,9 +1915,9 @@
             if (!txt) return;
 
             let score = 0;
-            if (msgIdRaw && msgIdRaw === node.id) score += 10;
-            if (txt === targetText) score += 8;
-            if (targetPrefix && txt.includes(targetPrefix)) score += 6;
+            if (msgIdRaw && msgIdRaw === node.id) score += 16;
+            if (txt === targetText) score += 14;
+            if (targetPrefix && txt.includes(targetPrefix)) score += 8;
             if (targetMiddle && txt.includes(targetMiddle)) score += 4;
             if (targetPrefix && targetText.includes(txt.slice(0, Math.min(24, txt.length)))) score += 3;
             if (targetText && txt && (targetText.length > 20 || txt.length > 20)) {
@@ -1315,67 +1926,138 @@
                 if (a && b && a === b) score += 2;
             }
 
+            const candidateSessionIndex = getQwenSessionIndexValue(c.sessionIndex);
+            if (targetSessionIndex !== -1 && candidateSessionIndex !== -1) {
+                const distance = Math.abs(candidateSessionIndex - targetSessionIndex);
+                if (distance === 0) score += 18;
+                else if (distance === 1) score += 10;
+                else if (distance === 2) score += 5;
+            }
+
             if (score > bestScore) {
                 bestScore = score;
                 bestEl = bubble;
             }
         });
 
-        return bestScore >= 6 ? bestEl : null;
+        return bestScore >= 10 ? bestEl : null;
     }
 
     function scheduleQwenVirtualNodesRefresh(force = false) {
         if (!isQwen || qwenVirtualNodesLoading) return;
+        if (qwenVirtualNodesLoaded && !qwenVirtualNodesDirty) return;
 
+        const refreshStorageKey = storageKey;
         const now = Date.now();
-        if (!force && (now - qwenVirtualNodesLastFetchAt < 4000)) return;
+        const retryGap = qwenVirtualNodesCache.length ? 4000 : 900;
+        if (!force && (now - qwenVirtualNodesLastFetchAt < retryGap)) return;
 
         qwenVirtualNodesLoading = true;
         qwenVirtualNodesLastFetchAt = now;
+        qwenNodeLog('refresh:start', { force, now, cacheSize: qwenVirtualNodesCache.length });
 
         getQwenMessagesByApi().then((apiMsgs) => {
+            if (refreshStorageKey !== storageKey) return;
             if (!Array.isArray(apiMsgs) || !apiMsgs.length) {
+                qwenNodeLog('refresh:empty-api', { apiCount: Array.isArray(apiMsgs) ? apiMsgs.length : -1 });
                 qwenVirtualNodesLoaded = true;
+                qwenVirtualNodesDirty = false;
                 return;
             }
 
-            const userMsgs = apiMsgs.filter((m) => m && m.role === 'user' && m.text);
-            if (!userMsgs.length) {
-                qwenVirtualNodesLoaded = true;
-                return;
+            const changed = applyQwenApiMessagesToCache(apiMsgs, 'polling');
+            if (!changed) {
+                // 无变更时再走一次通用更新，兼容路由切换后首次刷新等场景。
+                requestAnimationFrame(() => {
+                    update();
+                });
             }
-
-            const built = userMsgs.map((m, idx) => {
-                const id = String(m.id || `qwen-user-${idx + 1}`);
-                const text = String(m.text || '').trim();
-                // 仅做 ID 直连绑定，避免模糊匹配误绑导致跳转抖动
-                const element = findQwenDomElementById(id);
-                return {
-                    id,
-                    role: 'user',
-                    text,
-                    element: element || null
-                };
-            }).filter((m) => m.text);
-
-            if (!built.length) {
-                qwenVirtualNodesLoaded = true;
-                return;
-            }
-
-            qwenVirtualNodesCache = built;
-            qwenVirtualNodesLoaded = true;
-
-            // API 节点数量变化时，触发一次增量刷新
-            requestAnimationFrame(() => {
-                update();
-            });
         }).catch((e) => {
             console.warn('AI-Chat-Nodes: 千问虚拟节点刷新失败', e);
         }).finally(() => {
+            if (refreshStorageKey !== storageKey) return;
             qwenVirtualNodesLoading = false;
+            qwenNodeLog('refresh:done', { loading: qwenVirtualNodesLoading, cacheSize: qwenVirtualNodesCache.length });
         });
     }
+
+    function applyQwenApiMessagesToCache(apiMsgs, source = 'unknown', sourceSessionId = '') {
+        if (!Array.isArray(apiMsgs) || !apiMsgs.length) return false;
+        if (source === 'fetch-hook' || source === 'xhr-hook' || source === 'pending') {
+            qwenNodeLog('apply:skip-partial-source', {
+                source,
+                apiCount: apiMsgs.length
+            });
+            return false;
+        }
+        const currentSessionId = getQwenSessionIdFromUrl();
+        const normalizedSourceSessionId = String(sourceSessionId || '').trim();
+        if (normalizedSourceSessionId && currentSessionId && normalizedSourceSessionId !== currentSessionId) {
+            qwenNodeLog('apply:skip-session-mismatch', {
+                source,
+                sourceSessionId: normalizedSourceSessionId,
+                currentSessionId
+            });
+            return false;
+        }
+
+        const userMsgs = apiMsgs.filter((m) => m && m.role === 'user' && m.text);
+        if (!userMsgs.length) {
+            qwenNodeLog('apply:no-user-messages', {
+                source,
+                apiCount: apiMsgs.length,
+                roleSample: apiMsgs.slice(0, 8).map((m) => String(m?.role || ''))
+            });
+            return false;
+        }
+
+        const built = userMsgs.map((m, idx) => {
+            const id = String(m.id || `qwen-user-${idx + 1}`);
+            const text = String(m.text || '').trim();
+            return {
+                id,
+                role: 'user',
+                text,
+                sessionIndex: getQwenSessionIndexValue(m.sessionIndex) !== -1 ? getQwenSessionIndexValue(m.sessionIndex) : idx,
+                element: null
+            };
+        }).filter((m) => m.text);
+
+        if (!built.length) {
+            qwenNodeLog('apply:built-empty', { source, userCount: userMsgs.length });
+            return false;
+        }
+
+        const normalizedBuilt = normalizeQwenNodeOrder(built);
+        qwenVirtualNodesCache = normalizedBuilt;
+        qwenVirtualNodesSessionId = normalizedSourceSessionId || currentSessionId || '';
+        qwenVirtualNodesLoaded = true;
+        qwenVirtualNodesDirty = false;
+
+        const changed = syncQwenNodesFromApi(normalizedBuilt);
+        qwenNodeLog('apply:cache-updated', {
+            source,
+            apiCount: apiMsgs.length,
+            userCount: userMsgs.length,
+            builtCount: normalizedBuilt.length,
+            changed
+        });
+
+        if (changed) {
+            const cacheData = nodes.map((n) => ({ id: n.id, text: n.text, role: n.role, sessionIndex: n.sessionIndex }));
+            localStorage.setItem(storageKey, JSON.stringify(cacheData));
+            render();
+            updateActiveNodeOnScroll();
+        }
+        return changed;
+    }
+
+        function flushQwenPendingApiPayloads() {
+            const currentSessionId = getQwenSessionIdFromUrl();
+            const parsed = collectQwenMessagesFromPendingPayloads(currentSessionId);
+            if (!Array.isArray(parsed) || !parsed.length) return false;
+            return applyQwenApiMessagesToCache(parsed, 'pending-live', currentSessionId);
+        }
 
     function scrollDotIntoView(dot) {
         if (!dot) return;
@@ -1439,6 +2121,7 @@
             d.style.zIndex = '2';
             d.style.borderColor = 'rgba(0, 0, 0, 0.2)';
             d.style.opacity = '0.5';
+            d.classList.remove('ai-dot-active-ripple');
         });
 
         activeNodeId = nodeId;
@@ -1450,6 +2133,7 @@
             dot.style.zIndex = '10';
             dot.style.borderColor = '#fff';
             dot.style.opacity = '1';
+            dot.classList.add('ai-dot-active-ripple');
         }
     }
 
@@ -1478,11 +2162,6 @@
         // 应用历史/当前状态样式
         dot.className = `ai-nav-dot ${node.isHistory ? 'ai-dot-history' : 'ai-dot-session'}`;
         
-        // 为最新会话节点添加呼吸灯
-        if (!node.isHistory && nodes.indexOf(node) === nodes.length - 1) {
-            dot.classList.add('ai-dot-latest');
-        }
-
         // 首次发现提示
         if (!node.isHistory && !node.notified) {
             const badge = document.createElement('div');
@@ -1556,8 +2235,14 @@
             // 直接调用 jumpToMessage 内部包含的寻址与搜寻逻辑
             const jumpedNow = jumpToMessage(node.element, node.id);
             if (jumpedNow) {
-                setActiveDot(dot, node.id);
-                scrollDotIntoView(dot);
+                if (isQwen) {
+                    setTimeout(() => {
+                        updateActiveNodeOnScroll();
+                    }, 420);
+                } else {
+                    setActiveDot(dot, node.id);
+                    scrollDotIntoView(dot);
+                }
             } else {
                 // 搜寻模式下由滚动实时驱动激活节点，避免长时间锁定在目标点
                 updateActiveNodeOnScroll();
@@ -1657,9 +2342,13 @@
                 stopSearch();
                 console.log(` AI-Chat-Nodes: ✓ 找到节点 ${targetId}，正在跳转...`);
                 jumpToMessage(targetNode.element, targetId);
-                if (targetNode.dot) {
+                if (targetNode.dot && !isQwen) {
                     setActiveDot(targetNode.dot, targetId);
                     scrollDotIntoView(targetNode.dot);
+                } else if (isQwen) {
+                    setTimeout(() => {
+                        updateActiveNodeOnScroll();
+                    }, 420);
                 }
                 return;
             }
@@ -1755,6 +2444,7 @@
                 setTimeout(() => {
                     scrollEl.scrollTo({ top: maxTop, behavior: 'auto' });
                     sessionStorage.setItem(doneKey, '1');
+                    requestAnimationFrame(() => updateActiveNodeOnScroll());
                     qwenInitUnlockInProgress = false;
                 }, 180);
             } else {
@@ -1767,6 +2457,7 @@
                 setTimeout(() => {
                     window.scrollTo({ top: maxTop, behavior: 'auto' });
                     sessionStorage.setItem(doneKey, '1');
+                    requestAnimationFrame(() => updateActiveNodeOnScroll());
                     qwenInitUnlockInProgress = false;
                 }, 180);
             }
@@ -1904,46 +2595,59 @@
 
 
     function render() {
+        if (!ensureNavigatorMounted()) return;
+        if (isQwen && Array.isArray(nodes) && nodes.length) {
+            const normalizedNodes = normalizeQwenNodeOrder(nodes);
+            const orderChanged = normalizedNodes.length === nodes.length && normalizedNodes.some((item, idx) => item?.id !== nodes[idx]?.id);
+            if (orderChanged) {
+                nodes = normalizedNodes;
+                nodesMap = new Map(normalizedNodes.map((item) => [String(item.id), item]));
+            }
+        }
+        if (isQwen) {
+            qwenNodeLog('render:start', {
+                nodes: nodes.length,
+                cache: qwenVirtualNodesCache.length,
+                connected: container.isConnected,
+                width: container.offsetWidth,
+                height: container.offsetHeight
+            });
+        }
         dotsLayer.innerHTML = '';
 
         if (!nodes.length) {
             track.style.top = '0';
-            track.style.height = '100%';
-            content.style.height = '100%';
+            track.style.height = '0';
+            content.style.height = '0';
+            dotsLayer.style.height = '0';
+            scrollArea.style.height = '0';
+            updateFixedScrollIndicator();
             return;
         }
 
-        const viewportHeight = scrollArea.clientHeight || (window.innerHeight - CONFIG.topGap - CONFIG.bottomGap);
-        const requiredHeight = (nodes.length - 1) * CONFIG.dotGap + CONFIG.dotSize + 24;
-        const useScrollMode = requiredHeight > viewportHeight;
+        const dotEdgePad = 24;
+        const requiredHeight = (nodes.length - 1) * CONFIG.dotGap + CONFIG.dotSize + dotEdgePad * 2;
+        const maxTrackHeight = Math.floor(window.innerHeight * CONFIG.maxTrackViewportRatio);
+        const availableHeight = Math.max(0, window.innerHeight - container.getBoundingClientRect().top - CONFIG.bottomGap - 12);
+        const visibleHeight = Math.max(0, Math.min(requiredHeight, maxTrackHeight, availableHeight));
 
-        let contentHeight;
+        let contentHeight = requiredHeight;
         let topPositions = [];
 
         if (nodes.length <= 1) {
-            contentHeight = viewportHeight;
-            topPositions = nodes.length === 1 ? [viewportHeight / 2] : [];
-        } else if (useScrollMode) {
-            contentHeight = requiredHeight;
-            for (let i = 0; i < nodes.length; i++) {
-                topPositions.push(12 + CONFIG.dotSize / 2 + i * CONFIG.dotGap);
-            }
+            topPositions = nodes.length === 1 ? [dotEdgePad + CONFIG.dotSize / 2] : [];
         } else {
-            contentHeight = viewportHeight;
-            const start = 12 + CONFIG.dotSize / 2;
-            const end = viewportHeight - 12 - CONFIG.dotSize / 2;
-            const step = (end - start) / (nodes.length - 1);
-
             for (let i = 0; i < nodes.length; i++) {
-                topPositions.push(start + i * step);
+                topPositions.push(dotEdgePad + CONFIG.dotSize / 2 + i * CONFIG.dotGap);
             }
         }
 
+        scrollArea.style.height = visibleHeight + 'px';
         content.style.height = contentHeight + 'px';
         dotsLayer.style.height = contentHeight + 'px';
 
-        track.style.top = '12px';
-        track.style.height = Math.max(0, contentHeight - 24) + 'px';
+        track.style.top = dotEdgePad + 'px';
+        track.style.height = Math.max(0, contentHeight - dotEdgePad * 2) + 'px';
 
         nodes.forEach((node, index) => {
             const dot = buildDot(node, topPositions[index]);
@@ -1958,18 +2662,46 @@
         
         // 渲染结束后尝试立即同步一次激活状态
         updateActiveNodeOnScroll();
+        updateFixedScrollIndicator();
     }
 
     function update() {
+        ensureNavigatorMounted();
         if (updateStorageKey()) {
-            console.log('AI-Chat-Nodes: Conversation switched, reloading...');
             nodes = [];
             nodesMap.clear();
+            render();
             init(true);
+            if (isQwen) {
+                setTimeout(() => maybeRunQwenInitialScrollUnlock(), 1200);
+            }
             return;
         }
 
         const currentBatch = getMessages();
+
+        if (isQwen) {
+            const sig = `${currentBatch.length}|${nodes.length}|${nodesMap.size}|${qwenVirtualNodesCache.length}`;
+            if (sig !== qwenLastUpdateDebugSig) {
+                qwenLastUpdateDebugSig = sig;
+                qwenNodeLog('update:snapshot', {
+                    currentBatch: currentBatch.length,
+                    nodes: nodes.length,
+                    nodesMap: nodesMap.size,
+                    virtualCache: qwenVirtualNodesCache.length
+                });
+            }
+
+            const changed = syncQwenNodesFromApi(currentBatch);
+            if (changed) {
+                const cacheData = nodes.map(n => ({ id: n.id, text: n.text, role: n.role, sessionIndex: n.sessionIndex }));
+                localStorage.setItem(storageKey, JSON.stringify(cacheData));
+                render();
+                updateActiveNodeOnScroll();
+            }
+            return;
+        }
+
         if (currentBatch.length === 0) return;
 
         // ====================================================
@@ -1980,7 +2712,7 @@
         // 1. 更新现有节点的元素引用
         currentBatch.forEach(msg => {
             if (nodesMap.has(msg.id)) {
-                nodesMap.get(msg.id).element = msg.element;
+                if (msg.element) nodesMap.get(msg.id).element = msg.element;
             }
         });
 
@@ -2015,7 +2747,7 @@
                 if (insertedIndex === -1) {
                     for (let i = 0; i < nodes.length; i++) {
                         const existing = nodes[i];
-                        if (existing.element && document.body.contains(existing.element)) {
+                        if (msg.element && existing.element && document.body.contains(existing.element)) {
                             const pos = msg.element.compareDocumentPosition(existing.element);
                             if (pos & Node.DOCUMENT_POSITION_FOLLOWING) { 
                                 insertedIndex = i; 
@@ -2027,11 +2759,16 @@
 
                 // 2.3 边界情况处理：如果仍然没找到（通常是在列表两端且邻居不在 DOM 中）
                 if (insertedIndex === -1 && nodes.length > 0) {
-                    const rect = msg.element.getBoundingClientRect();
-                    // 如果消息在视口上方较远，大概率是加载的历史消息，插入到首部
-                    if (rect.top < 200) insertedIndex = 0;
-                    // 否则插入到末尾
-                    else insertedIndex = nodes.length;
+                    if (msg.element) {
+                        const rect = msg.element.getBoundingClientRect();
+                        // 如果消息在视口上方较远，大概率是加载的历史消息，插入到首部
+                        if (rect.top < 200) insertedIndex = 0;
+                        // 否则插入到末尾
+                        else insertedIndex = nodes.length;
+                    } else {
+                        // API 节点暂未绑定到 DOM 时，按批次顺序追加，避免中断更新。
+                        insertedIndex = nodes.length;
+                    }
                 }
                 
                 if (insertedIndex === -1) insertedIndex = nodes.length;
@@ -2047,13 +2784,81 @@
         const reordered = sortNodesByDom();
 
         if (hasNew || reordered) {
-            const cacheData = nodes.map(n => ({ id: n.id, text: n.text, role: n.role }));
+            const cacheData = nodes.map(n => ({ id: n.id, text: n.text, role: n.role, sessionIndex: n.sessionIndex }));
             localStorage.setItem(storageKey, JSON.stringify(cacheData));
             render();
             updateActiveNodeOnScroll();
         }
 
     }
+
+    function syncQwenNodesFromApi(currentBatch) {
+        if (!Array.isArray(currentBatch) || !currentBatch.length) return false;
+        const normalizedBatch = normalizeQwenNodeOrder(currentBatch);
+
+        const incoming = [];
+        const seen = new Set();
+        let hasAnyChange = false;
+
+        normalizedBatch.forEach((msg) => {
+            const id = String(msg?.id || '').trim();
+            const text = String(msg?.text || '').trim();
+            if (!id || !text || seen.has(id)) return;
+
+            seen.add(id);
+
+            const prev = nodesMap.get(id) || null;
+            const merged = {
+                ...(prev || {}),
+                ...msg,
+                id,
+                role: 'user',
+                text,
+                // 千问轨道数据只依赖 API，element 不参与节点生成/排序
+                element: null,
+                isLinked: true,
+                isHistory: prev ? Boolean(prev.isHistory) : false
+            };
+
+            nodesMap.set(id, merged);
+            incoming.push(merged);
+
+            if (!prev) {
+                hasAnyChange = true;
+                return;
+            }
+
+            if (String(prev.text || '') !== text || String(prev.role || '') !== 'user' || prev.element !== null) {
+                hasAnyChange = true;
+            }
+
+            if (getQwenSessionIndexValue(prev.sessionIndex) !== getQwenSessionIndexValue(merged.sessionIndex)) {
+                hasAnyChange = true;
+            }
+        });
+
+        if (!incoming.length) return false;
+
+        const nextNodes = incoming;
+        nodesMap = new Map(incoming.map((item) => [String(item.id), item]));
+
+        if (!hasAnyChange) {
+            if (nodes.length !== nextNodes.length) {
+                hasAnyChange = true;
+            } else {
+                for (let i = 0; i < nodes.length; i++) {
+                    if (nodes[i]?.id !== nextNodes[i]?.id) {
+                        hasAnyChange = true;
+                        break;
+                    }
+                }
+            }
+        }
+
+        nodes = nextNodes;
+        return hasAnyChange;
+    }
+
     function sortNodesByDom() {
         // 筛选出当前存在于 DOM 中的节点
         const domNodes = nodes.filter(n => {
@@ -2114,6 +2919,9 @@
         
         setTimeout(update, 1000);
         if (isQwen) {
+            setTimeout(() => scheduleQwenVirtualNodesRefresh(true), 120);
+            setTimeout(() => scheduleQwenVirtualNodesRefresh(), 600);
+            setTimeout(() => scheduleQwenVirtualNodesRefresh(), 1200);
             setTimeout(() => maybeRunQwenInitialScrollUnlock(), 1200);
         }
         if (isDeepSeek) {
@@ -2131,25 +2939,7 @@
         });
     });
 
-    observer.observe(document.body, {
-        childList: true,
-        subtree: true
-    });
-
-    window.addEventListener('resize', () => {
-        render();
-    });
-
-    // ===== 自动滚动跟踪 =====
     let scrollTicking = false;
-    window.addEventListener('scroll', () => {
-        if (scrollTicking) return;
-        scrollTicking = true;
-        requestAnimationFrame(() => {
-            updateActiveNodeOnScroll();
-            scrollTicking = false;
-        });
-    }, true); // 使用捕获模式，捕获内部容器的滚动事件
 
     function updateActiveNodeOnScroll() {
         if (!nodes.length) return;
@@ -2272,6 +3062,19 @@
             btn.style.transform = 'rotate(0)';
         });
 
+        const fallbackHost = document.createElement('div');
+        fallbackHost.className = 'ai-nodes-settings-fallback-host';
+        fallbackHost.style.cssText = `
+            position: fixed;
+            top: 16px;
+            right: 16px;
+            z-index: 10050;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            pointer-events: auto;
+        `;
+
         // 创建弹出气泡 (Popup)
         const popup = document.createElement('div');
         popup.className = 'ai-nodes-settings-popup';
@@ -2286,12 +3089,15 @@
             z-index: 10001;
             opacity: 0;
             pointer-events: none;
-            transition: opacity 0.2s, transform 0.2s;
-            transform: translateY(10px) scale(0.95);
+            transition: opacity 0.24s cubic-bezier(0.22, 0.61, 0.36, 1), transform 0.24s cubic-bezier(0.22, 0.61, 0.36, 1);
+            transform: translateY(-10px) scale(0.95);
             backdrop-filter: blur(10px);
         `;
         popup.innerHTML = `
-            <div style="font-weight: 600; font-size: 14px; margin-bottom: 12px; border-bottom: 1px solid #eee; padding-bottom: 8px;"> AI 聊天节点设置 </div>
+            <div style="margin-bottom: 12px; border-bottom: 1px solid #eee; padding-bottom: 8px; display:flex; align-items:baseline; gap:6px;">
+                <span style="font-weight:700;font-size:15px;letter-spacing:.2px;color:#0f172a;">AI对话助手</span>
+                <span style="font-weight:500;font-size:12px;color:#64748b;">设置</span>
+            </div>
             <div style="display: flex; align-items: center; gap: 8px; font-size: 13px; color: #666;">
                 <i class="fas fa-robot" style="color: #46a758;"></i>
                 <span>当前 AI 平台: <b>${aiName}</b></span>
@@ -2308,6 +3114,14 @@
                     </label>
                 </div>
             ` : ''}
+            ${isDeepSeek ? `
+                <div style="margin-top: 12px; padding-top: 8px; border-top: 1px dashed #eee; display: flex; flex-direction: column; gap: 8px;">
+                    <label style="display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer;">
+                        <input type="checkbox" id="ai-nodes-opt-hide-deepseek-native-nav" ${hideDeepSeekNativeNav ? 'checked' : ''} style="cursor: pointer; width: 14px; height: 14px;">
+                        <span>隐藏 DeepSeek 原生节点导航</span>
+                    </label>
+                </div>
+            ` : ''}
 
             <div style="margin-top: 12px; padding-top: 12px; border-top: 1px dashed #eee; display: flex; flex-direction: column; gap: 8px;">
                 <button id="ai-nodes-clear-refresh" style="width: 100%; border: 1px solid #ff4d4f; background: #fff; color: #ff4d4f; padding: 6px; border-radius: 8px; cursor: pointer; font-size: 12px; font-weight: 500; transition: all 0.2s;">
@@ -2316,16 +3130,75 @@
                 
                 <button id="ai-nodes-export-trigger" style="width: 100%; padding: 10px; background: #1E88E5; color: white; border: none; border-radius: 10px; cursor: pointer; font-size: 13px; font-weight: 600; display: flex; align-items: center; justify-content: center; gap: 8px; transition: all 0.2s; box-shadow: 0 4px 10px rgba(30, 136, 229, 0.2);">
                     <svg width="16" height="16" fill="currentColor" viewBox="0 0 16 16"><path d="M.5 9.9a.5.5 0 0 1 .5.5v2.5a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-2.5a.5.5 0 0 1 1 0v2.5a2 2 0 0 1-2 2H2a2 2 0 0 1-2-2v-2.5a.5.5 0 0 1 .5-.5z"/><path d="M7.646 11.854a.5.5 0 0 0 .708 0l3-3a.5.5 0 0 0-.708-.708L8.5 10.293V1.5a.5.5 0 0 0-1 0v8.793L5.354 8.146a.5.5 0 1 0-.708.708l3 3z"/></svg>
-                    <span>导出当前对话</span>
+                    <span>导出记录</span>
                 </button>
             </div>
         `;
         document.body.appendChild(popup);
 
+        // 导出二级卡片
+        const exportMenu = document.createElement('div');
+        exportMenu.className = 'ai-nodes-export-menu';
+        exportMenu.style.cssText = `
+            position: fixed;
+            width: auto;
+            min-width: 0;
+            max-width: calc(100vw - 24px);
+            background: rgba(255,255,255,0.98);
+            border: 1px solid rgba(0, 0, 0, 0.08);
+            border-radius: 12px;
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.12);
+            padding: 10px;
+            z-index: 10002;
+            opacity: 0;
+            pointer-events: none;
+            transform: translateY(-8px) scale(0.96);
+            transition: opacity 0.24s cubic-bezier(0.22, 0.61, 0.36, 1), transform 0.24s cubic-bezier(0.22, 0.61, 0.36, 1);
+            backdrop-filter: blur(10px);
+        `;
+        exportMenu.innerHTML = `
+            <div style="display:flex;flex-direction:column;gap:8px;align-items:center;">
+                <button id="ai-nodes-export-current" style="width:152px;padding:8px 10px;background:#1E88E5;color:#fff;border:none;border-radius:9px;cursor:pointer;font-size:12px;font-weight:600;display:flex;align-items:center;justify-content:center;gap:4px;">
+                    <svg viewBox="9 7 6 10" fill="none" xmlns="http://www.w3.org/2000/svg" style="width:10px;height:10px;flex:none;"><path d="M10 16L14 12L10 8" stroke="#ffffff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+                    <span>导出当前对话</span>
+                </button>
+                <button id="ai-nodes-export-batch" style="width:152px;padding:8px 10px;background:${(isDoubao || isQwen) ? '#0f766e' : '#f3f4f6'};color:${(isDoubao || isQwen) ? '#fff' : '#6b7280'};border:${(isDoubao || isQwen) ? 'none' : '1px solid #e5e7eb'};border-radius:9px;cursor:pointer;font-size:12px;font-weight:600;display:flex;align-items:center;justify-content:center;gap:4px;">
+                    <svg viewBox="9 7 6 10" fill="none" xmlns="http://www.w3.org/2000/svg" style="width:10px;height:10px;flex:none;"><path d="M10 16L14 12L10 8" stroke="${(isDoubao || isQwen) ? '#ffffff' : '#6b7280'}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+                    <span>批量导出对话</span>
+                </button>
+            </div>
+        `;
+        document.body.appendChild(exportMenu);
+
         // 核心修复：阻止弹出层内部点击事件冒泡到 document，防止点击开关时关闭卡片
         popup.addEventListener('click', (e) => {
             e.stopPropagation();
         });
+        exportMenu.addEventListener('click', (e) => {
+            e.stopPropagation();
+        });
+
+        const hidePopup = () => {
+            popup.style.opacity = '0';
+            popup.style.pointerEvents = 'none';
+            popup.style.transform = 'translateY(-10px) scale(0.95)';
+        };
+
+        const hideExportMenu = () => {
+            exportMenu.style.opacity = '0';
+            exportMenu.style.pointerEvents = 'none';
+            exportMenu.style.transform = 'translateY(-8px) scale(0.96)';
+        };
+
+        const openCurrentConversationExport = async () => {
+            hidePopup();
+            hideExportMenu();
+            // GPT、豆包、千问、DeepSeek 导出不走导出前回溯历史
+            if (!isChatGPT && !isDoubao && !isQwen && !isDeepSeek) {
+                await startLoadAllHistory();
+            }
+            await openExportModal();
+        };
 
         // 监听设置项变化
 
@@ -2352,10 +3225,18 @@
                     // 关闭弹窗
                     popup.style.opacity = '0';
                     popup.style.pointerEvents = 'none';
-                    popup.style.transform = 'translateY(10px) scale(0.95)';
+                    popup.style.transform = 'translateY(-10px) scale(0.95)';
                     startLoadAllHistory(loadAllBtn);
                 };
             }
+        }
+
+        if (isDeepSeek) {
+            popup.querySelector('#ai-nodes-opt-hide-deepseek-native-nav').addEventListener('change', (e) => {
+                hideDeepSeekNativeNav = e.target.checked;
+                localStorage.setItem(DEEPSEEK_NATIVE_NAV_KEY, hideDeepSeekNativeNav);
+                document.body.classList.toggle('ai-nodes-hide-deepseek-native-nav', hideDeepSeekNativeNav);
+            });
         }
 
         // 强制清除缓存重新获取按钮
@@ -2367,31 +3248,82 @@
                 nodesMap.clear();
                 nodes = [];
                 lastCount = 0;
+                activeNodeId = null;
                 localStorage.removeItem(storageKey);
+                if (isQwen) {
+                    qwenVirtualNodesCache = [];
+                    qwenPendingApiPayloads = [];
+                    qwenVirtualNodesSessionId = '';
+                    qwenVirtualNodesLoading = false;
+                    qwenVirtualNodesLoaded = false;
+                    qwenVirtualNodesLastFetchAt = 0;
+                    qwenVirtualNodesDirty = true;
+                    qwenLastUpdateDebugSig = '';
+                    qwenHistoryHydrationInFlight = false;
+                    qwenLastHydratedSessionId = '';
+                    qwenLastHydrationSignature = '';
+                    if (qwenEmptyRetryTimer) {
+                        clearTimeout(qwenEmptyRetryTimer);
+                        qwenEmptyRetryTimer = null;
+                    }
+                }
                 // 清掉侧边栏 DOM
                 const wrapper = document.querySelector('#ai-nodes-nav-wrapper');
                 if (wrapper) wrapper.innerHTML = '';
                 // 触发重新获取
                 update();
                 render(); // 核心修复：强制重新渲染圆点
+                if (isQwen) {
+                    setTimeout(() => scheduleQwenVirtualNodesRefresh(true), 80);
+                }
                 // 关闭弹窗
-                popup.style.opacity = '0';
-                popup.style.pointerEvents = 'none';
-                popup.style.transform = 'translateY(10px) scale(0.95)';
+                hidePopup();
+                hideExportMenu();
             };
         }
 
-        // 绑定管理导出点击事件
-        popup.querySelector('#ai-nodes-export-trigger').onclick = async (e) => {
+        // 绑定导出二级入口
+        popup.querySelector('#ai-nodes-export-trigger').onclick = (e) => {
             e.stopPropagation();
-            popup.style.opacity = '0';
-            popup.style.pointerEvents = 'none';
-            // GPT、豆包、千问、DeepSeek 导出不走导出前回溯历史
-            if (!isChatGPT && !isDoubao && !isQwen && !isDeepSeek) {
-                await startLoadAllHistory();
+            const visible = exportMenu.style.opacity === '1';
+            if (visible) {
+                hideExportMenu();
+                return;
             }
-            await openExportModal();
+            const btnRect = popup.querySelector('#ai-nodes-export-trigger').getBoundingClientRect();
+            const menuWidth = Math.min(240, window.innerWidth - 24);
+            const margin = 12;
+            const alignedLeft = btnRect.right - menuWidth;
+            const clampedLeft = Math.max(margin, Math.min(alignedLeft, window.innerWidth - menuWidth - margin));
+            exportMenu.style.left = `${Math.round(clampedLeft)}px`;
+            exportMenu.style.top = `${Math.round(btnRect.bottom + 8)}px`;
+            exportMenu.style.opacity = '1';
+            exportMenu.style.pointerEvents = 'auto';
+            exportMenu.style.transform = 'translateY(0) scale(1)';
         };
+
+        const exportCurrentBtn = exportMenu.querySelector('#ai-nodes-export-current');
+        if (exportCurrentBtn) {
+            exportCurrentBtn.onclick = async (e) => {
+                e.stopPropagation();
+                await openCurrentConversationExport();
+            };
+        }
+
+        const exportBatchBtn = exportMenu.querySelector('#ai-nodes-export-batch');
+        if (exportBatchBtn) {
+            exportBatchBtn.onclick = (e) => {
+                e.stopPropagation();
+                if (!isDoubao && !isQwen) {
+                    alert(`${aiName} 暂未实现该功能`);
+                    return;
+                }
+                hidePopup();
+                hideExportMenu();
+                if (isDoubao) openDoubaoBatchExportModal();
+                else if (isQwen) openQwenBatchExportModal();
+            };
+        }
 
         function getChatGPTConversationIdFromUrl() {
             const m = window.location.pathname.match(/\/c\/([a-z0-9-]+)/i);
@@ -2615,9 +3547,10 @@
         }
 
         const QWEN_MSG_LIST_PATH = '/api/v1/session/msg/list';
+        const QWEN_PAGE_LIST_PATH = '/api/v2/session/page/list';
         const QWEN_DEFAULT_MSG_LIST_URL = 'https://chat2-api.qianwen.com/api/v1/session/msg/list?return_response_messages=true&biz_id=ai_qwen&event_filter=all&page_size=50&chat_client=h5&device=pc&fr=pc&pr=qwen&la=zh-CN&tz=Asia%2FShanghai';
-        let qwenCapturedTemplate = null;
-        let qwenCaptureHooksInstalled = false;
+        const QWEN_DEFAULT_PAGE_LIST_URL = 'https://chat2-api.qianwen.com/api/v2/session/page/list?biz_id=ai_qwen&chat_client=h5&device=pc&fr=pc&pr=qwen&la=zh-CN&tz=Asia%2FShanghai';
+        const QWEN_FALLBACK_UT_KEY = 'ai-chat-nodes-qwen-fallback-ut';
 
         function createNonce(len) {
             const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
@@ -2626,6 +3559,34 @@
                 out += chars[Math.floor(Math.random() * chars.length)];
             }
             return out;
+        }
+
+        function getCookieValue(name) {
+            try {
+                const escaped = String(name).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                const match = String(document.cookie || '').match(new RegExp(`(?:^|;\\s*)${escaped}=([^;]*)`));
+                return match ? decodeURIComponent(match[1]) : '';
+            } catch (e) {
+                return '';
+            }
+        }
+
+        function createFallbackQwenUt() {
+            try {
+                if (window.crypto && typeof window.crypto.randomUUID === 'function') {
+                    return window.crypto.randomUUID();
+                }
+            } catch (e) {
+                // ignore
+            }
+
+            return [
+                createNonce(8),
+                createNonce(4),
+                createNonce(4),
+                createNonce(4),
+                createNonce(12)
+            ].join('-');
         }
 
         function findAny(obj, keys) {
@@ -2653,56 +3614,6 @@
             return '';
         }
 
-        function getQwenSessionIdFromTemplate() {
-            try {
-                if (!qwenCapturedTemplate?.url) return '';
-                const u = new URL(qwenCapturedTemplate.url, window.location.origin);
-                const sid = (u.searchParams.get('session_id') || '').trim();
-                return sid;
-            } catch (e) {
-                return '';
-            }
-        }
-
-        function getRecentQwenMsgListUrl() {
-            try {
-                const entries = performance.getEntriesByType('resource') || [];
-                for (let i = entries.length - 1; i >= 0; i--) {
-                    const name = entries[i] && entries[i].name ? String(entries[i].name) : '';
-                    if (/\/api\/v1\/session\/msg\/list\?/i.test(name) && /(qianwen\.com|aliyun\.com)/i.test(name)) {
-                        return name;
-                    }
-                }
-            } catch (e) {
-                // ignore
-            }
-            return '';
-        }
-
-        function getQwenSessionIdFromRecentApi() {
-            try {
-                const recentUrl = getRecentQwenMsgListUrl();
-                if (!recentUrl) return '';
-                const u = new URL(recentUrl, window.location.origin);
-                return (u.searchParams.get('session_id') || '').trim();
-            } catch (e) {
-                return '';
-            }
-        }
-
-        function getQwenSessionIdFromStorage() {
-            const keys = [
-                'session_id', 'current_session_id', 'qwen_session_id', 'active_session_id'
-            ];
-            for (const k of keys) {
-                const v1 = localStorage.getItem(k);
-                if (v1) return String(v1).trim();
-                const v2 = sessionStorage.getItem(k);
-                if (v2) return String(v2).trim();
-            }
-            return '';
-        }
-
         function getQwenSessionIdFromRawUrl(rawUrl) {
             try {
                 if (!rawUrl) return '';
@@ -2713,46 +3624,6 @@
             }
         }
 
-        function getQwenSessionIdFromHash() {
-            try {
-                const h = window.location.hash || '';
-                const m = h.match(/session[_/-]?id=([a-zA-Z0-9_-]{16,})/i)
-                    || h.match(/\/chat\/([a-zA-Z0-9_-]{16,})/i)
-                    || h.match(/\/session\/([a-zA-Z0-9_-]{16,})/i);
-                return m ? m[1] : '';
-            } catch (e) {
-                return '';
-            }
-        }
-
-        function getQwenSessionIdFromConvFallback() {
-            try {
-                const convId = String(getConvId() || '').trim();
-                if (!convId || convId === 'default') return '';
-                if (/^[a-zA-Z0-9_-]{16,}$/.test(convId)) return convId;
-            } catch (e) {
-                // ignore
-            }
-            return '';
-        }
-
-        function getQwenSessionIdCandidates() {
-            const candidates = [
-                getQwenSessionIdFromUrl(),
-                getQwenSessionIdFromTemplate(),
-                getQwenSessionIdFromRecentApi(),
-                getQwenSessionIdFromHash(),
-                getQwenSessionIdFromConvFallback(),
-                getQwenSessionIdFromStorage()
-            ].map(v => String(v || '').trim()).filter(Boolean);
-            return Array.from(new Set(candidates));
-        }
-
-        function getQwenSessionId() {
-            const candidates = getQwenSessionIdCandidates();
-            return candidates[0] || '';
-        }
-
         function getQwenUtFromPage() {
             try {
                 if (qwenCapturedTemplate?.url) {
@@ -2760,6 +3631,23 @@
                     const ut = u.searchParams.get('ut');
                     if (ut) return ut;
                 }
+            } catch (e) {
+                // ignore
+            }
+
+            try {
+                const headers = qwenCapturedTemplate?.headers || {};
+                const lower = {};
+                Object.entries(headers).forEach(([k, v]) => {
+                    lower[String(k).toLowerCase()] = String(v);
+                });
+                const headerUt = (
+                    lower['x-deviceid']
+                    || lower['x-qwen-ut']
+                    || lower['qwen-ut']
+                    || lower['ut']
+                );
+                if (headerUt) return String(headerUt);
             } catch (e) {
                 // ignore
             }
@@ -2776,7 +3664,97 @@
                 if (v2) return String(v2);
             }
 
-            return '';
+            const cookieUt = [
+                getCookieValue('ut'),
+                getCookieValue('qwen_ut'),
+                getCookieValue('deviceId'),
+                getCookieValue('device_id'),
+                getCookieValue('x-deviceid')
+            ].find(Boolean);
+            if (cookieUt) return String(cookieUt);
+
+            try {
+                const stored = localStorage.getItem(QWEN_FALLBACK_UT_KEY);
+                if (stored) return String(stored);
+
+                const generated = createFallbackQwenUt();
+                localStorage.setItem(QWEN_FALLBACK_UT_KEY, generated);
+                return generated;
+            } catch (e) {
+                return createFallbackQwenUt();
+            }
+        }
+
+        function hasUsableQwenRequestTemplate() {
+            if (!qwenCapturedTemplate?.url) return false;
+            try {
+                const u = new URL(qwenCapturedTemplate.url, window.location.origin);
+                const ut = (u.searchParams.get('ut') || '').trim() || String(getQwenUtFromPage() || '').trim();
+                if (!ut) return false;
+
+                const headers = qwenCapturedTemplate?.headers || {};
+                const lower = {};
+                Object.entries(headers).forEach(([k, v]) => {
+                    lower[String(k).toLowerCase()] = String(v);
+                });
+
+                return Boolean(
+                    lower['x-deviceid']
+                    || lower['x-xsrf-token']
+                    || lower['clt-acs-sign']
+                    || lower['eo-clt-actkn']
+                );
+            } catch (e) {
+                return false;
+            }
+        }
+
+        collectQwenMessagesFromPendingPayloads = function (targetSessionId = '') {
+            if (!qwenPendingApiPayloads.length) return [];
+
+            const pending = qwenPendingApiPayloads.splice(0, qwenPendingApiPayloads.length);
+            const merged = [];
+            const seenIds = new Set();
+
+            pending.forEach((item) => {
+                const itemSessionId = getQwenSessionIdFromRawUrl(item?.url || '');
+                if (targetSessionId && itemSessionId && itemSessionId !== targetSessionId) {
+                    qwenNodeLog('pending:drop-session-mismatch', {
+                        source: item?.source || 'pending',
+                        itemSessionId,
+                        targetSessionId
+                    });
+                    return;
+                }
+                const json = safeParseJson(item?.rawText || '');
+                if (!json) return;
+                const parsed = parseQwenMessagesFromResponse(json);
+                if (!parsed.length) return;
+                qwenNodeLog('pending:consume', {
+                    source: item?.source || 'pending',
+                    url: item?.url || '',
+                    parsedCount: parsed.length
+                });
+                parsed.forEach((msg) => {
+                    const id = String(msg?.id || '').trim();
+                    if (!id || seenIds.has(id)) return;
+                    seenIds.add(id);
+                    merged.push(msg);
+                });
+            });
+
+            return merged.sort((a, b) => (a.order || 0) - (b.order || 0));
+        };
+
+        async function waitForQwenTemplateOrPending(timeoutMs = 6000) {
+            const startedAt = Date.now();
+            while (Date.now() - startedAt < timeoutMs) {
+                if (qwenPendingApiPayloads.length > 0 || hasUsableQwenRequestTemplate()) {
+                    return true;
+                }
+                await new Promise((resolve) => setTimeout(resolve, 250));
+            }
+            return qwenPendingApiPayloads.length > 0 || hasUsableQwenRequestTemplate();
         }
 
         function isQwenMsgListUrl(rawUrl) {
@@ -2808,9 +3786,32 @@
             return out;
         }
 
-        function ensureQwenRequestUrl(rawUrl, sessionId) {
+        function buildQwenRequestHeaders(extraHeaders = null) {
+            const headers = sanitizeQwenHeaders({
+                ...(qwenCapturedTemplate?.headers || {}),
+                ...(extraHeaders || {}),
+                accept: 'application/json, text/plain, */*'
+            });
+
+            const xsrfToken = getCookieValue('XSRF-TOKEN');
+            if (xsrfToken && !headers['x-xsrf-token']) {
+                headers['x-xsrf-token'] = xsrfToken;
+            }
+
+            const ut = getQwenUtFromPage();
+            if (ut && !headers['x-deviceid']) {
+                headers['x-deviceid'] = ut;
+            }
+
+            return headers;
+        }
+
+        function ensureQwenRequestUrl(rawUrl, sessionId, extraParams = null) {
             const base = rawUrl || qwenCapturedTemplate?.url || QWEN_DEFAULT_MSG_LIST_URL;
             const u = new URL(base, window.location.origin);
+            const isHistoryPage = Boolean(extraParams && Object.prototype.hasOwnProperty.call(extraParams, 'pos'));
+            const preservedPageSize = (u.searchParams.get('page_size') || '').trim();
+            const defaultPageSize = isHistoryPage ? '10' : (preservedPageSize || '5');
 
             if (!u.pathname.includes(QWEN_MSG_LIST_PATH)) {
                 u.hostname = 'chat2-api.qianwen.com';
@@ -2821,7 +3822,7 @@
                 return_response_messages: 'true',
                 biz_id: 'ai_qwen',
                 event_filter: 'all',
-                page_size: '50',
+                page_size: defaultPageSize,
                 chat_client: 'h5',
                 device: 'pc',
                 fr: 'pc',
@@ -2831,26 +3832,283 @@
             };
 
             Object.entries(defaults).forEach(([k, v]) => {
-                if (!u.searchParams.get(k)) u.searchParams.set(k, v);
+                u.searchParams.set(k, v);
             });
+
+            // 基于抓包模板构造请求时，清掉历史翻页游标，避免直接落到某个旧分页。
+            [
+                'pos', 'cursor', 'offset', 'page', 'page_no', 'page_num',
+                'next_cursor', 'nextCursor', 'start', 'start_time', 'end_time'
+            ].forEach((k) => u.searchParams.delete(k));
 
             if (sessionId) u.searchParams.set('session_id', sessionId);
 
             const ut = getQwenUtFromPage();
             if (ut && !u.searchParams.get('ut')) u.searchParams.set('ut', ut);
 
+            if (extraParams && typeof extraParams === 'object') {
+                Object.entries(extraParams).forEach(([k, v]) => {
+                    if (v == null || v === '') return;
+                    u.searchParams.set(k, String(v));
+                });
+            }
+
             u.searchParams.set('nonce', createNonce(11));
             u.searchParams.set('timestamp', String(Date.now()));
             return u.toString();
         }
 
-        function getQwenRequestUrlCandidates() {
+        function ensureQwenPageListUrl(rawUrl = '', extraParams = null) {
+            const base = rawUrl || QWEN_DEFAULT_PAGE_LIST_URL;
+            const u = new URL(base, window.location.origin);
+            u.hostname = 'chat2-api.qianwen.com';
+            u.pathname = QWEN_PAGE_LIST_PATH;
+
+            const defaults = {
+                biz_id: 'ai_qwen',
+                chat_client: 'h5',
+                device: 'pc',
+                fr: 'pc',
+                pr: 'qwen',
+                la: 'zh-CN',
+                tz: 'Asia/Shanghai'
+            };
+
+            Object.entries(defaults).forEach(([k, v]) => {
+                u.searchParams.set(k, v);
+            });
+
+            const ut = getQwenUtFromPage();
+            if (ut) u.searchParams.set('ut', ut);
+
+            if (extraParams && typeof extraParams === 'object') {
+                Object.entries(extraParams).forEach(([k, v]) => {
+                    if (v == null || v === '') return;
+                    u.searchParams.set(k, String(v));
+                });
+            }
+
+            return u.toString();
+        }
+
+        function normalizeQwenBatchTimestamp(raw) {
+            if (raw == null || raw === '') return { value: 0, text: '-' };
+            const str = String(raw).trim();
+            if (!str) return { value: 0, text: '-' };
+            if (/^\d+$/.test(str)) {
+                const num = Number(str);
+                const ms = str.length <= 10 ? num * 1000 : num;
+                const dt = new Date(ms);
+                return { value: ms, text: Number.isFinite(dt.getTime()) ? dt.toLocaleString() : str };
+            }
+            const parsed = Date.parse(str);
+            if (Number.isFinite(parsed)) return { value: parsed, text: new Date(parsed).toLocaleString() };
+            return { value: 0, text: str };
+        }
+
+        function extractQwenRecentConversations(respJson) {
+            const buckets = [
+                respJson?.data?.list,
+                respJson?.data?.session_list,
+                respJson?.data?.sessions,
+                respJson?.data?.page_list,
+                respJson?.list,
+                respJson?.sessions
+            ];
+            const rawList = buckets.find((item) => Array.isArray(item)) || [];
+            const seen = new Set();
             const out = [];
-            if (qwenCapturedTemplate?.url) out.push(qwenCapturedTemplate.url);
-            const recent = getRecentQwenMsgListUrl();
-            if (recent) out.push(recent);
-            out.push(QWEN_DEFAULT_MSG_LIST_URL);
-            return Array.from(new Set(out));
+
+            rawList.forEach((item, idx) => {
+                const id = String(findAny(item, [
+                    'session_id', 'sessionId', 'id', 'uuid', 'conversation_id', 'conversationId'
+                ]) || '').trim();
+                if (!id || seen.has(id)) return;
+                seen.add(id);
+
+                const title = String(findAny(item, [
+                    'title', 'name', 'session_name', 'session_title', 'topic', 'summary', 'display_title'
+                ]) || `会话 ${idx + 1}`).trim();
+                const modified = normalizeQwenBatchTimestamp(findAny(item, [
+                    'modifiedTime', 'modified_time', 'updated_at', 'update_time', 'gmt_modified'
+                ]));
+                const created = normalizeQwenBatchTimestamp(findAny(item, [
+                    'createdTime', 'created_time', 'created_at', 'create_time', 'gmt_create'
+                ]));
+                const badgeRaw = findAny(item, ['message_count', 'msg_count', 'badge_count', 'messageCount']);
+                const badgeCount = Number(badgeRaw);
+
+                out.push({
+                    id,
+                    title: title || `会话 ${id}`,
+                    updatedAt: modified.value,
+                    updatedAtText: modified.text,
+                    createdAt: created.value,
+                    createdAtText: created.text,
+                    badgeCount: Number.isFinite(badgeCount) ? badgeCount : null
+                });
+            });
+
+            return out.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+        }
+
+        function getQwenNextSessionToken(respJson) {
+            const candidates = [
+                respJson?.data?.next_token,
+                respJson?.data?.nextToken,
+                respJson?.data?.page_info?.next_token,
+                respJson?.data?.pageInfo?.nextToken,
+                respJson?.next_token,
+                respJson?.nextToken
+            ];
+            const token = candidates.find((item) => item != null && item !== '');
+            return token ? String(token) : '';
+        }
+
+        async function fetchQwenRecentConversations(limit = 50, maxPages = 5) {
+            const headers = buildQwenRequestHeaders({
+                'content-type': 'application/json',
+                'x-platform': 'pc_tongyi'
+            });
+            const merged = [];
+            const seen = new Set();
+            let nextToken = '';
+            let page = 0;
+            const totalLimit = Math.max(1, Number(limit) || 50);
+
+            while (page < maxPages && merged.length < totalLimit) {
+                page += 1;
+                const url = ensureQwenPageListUrl();
+                const remaining = Math.max(1, totalLimit - merged.length);
+                const pageLimit = Math.min(50, remaining);
+                const body = {
+                    limit: pageLimit,
+                    next_token: nextToken || '',
+                    sort_field: 'modifiedTime',
+                    need_filter_tag: true
+                };
+
+                const resp = await fetch(url, {
+                    method: 'POST',
+                    credentials: 'include',
+                    headers,
+                    body: JSON.stringify(body)
+                });
+                const rawText = await resp.text();
+                const json = safeParseJson(rawText);
+
+                if (!resp.ok) {
+                    throw new Error(`会话列表请求失败: HTTP ${resp.status} ${rawText.slice(0, 300)}`);
+                }
+                if (!json) {
+                    throw new Error('会话列表返回非 JSON');
+                }
+
+                const pageItems = extractQwenRecentConversations(json);
+                pageItems.forEach((item) => {
+                    if (merged.length >= totalLimit) return;
+                    if (seen.has(item.id)) return;
+                    seen.add(item.id);
+                    merged.push(item);
+                });
+
+                nextToken = getQwenNextSessionToken(json);
+                if (!nextToken || !pageItems.length || merged.length >= totalLimit) break;
+            }
+
+            return {
+                conversations: merged.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0)),
+                requested: totalLimit,
+                obtained: merged.length
+            };
+        }
+
+        async function fetchQwenAllConversationMessages(sessionId, maxPages = 20, onProgress = () => {}) {
+            const headers = buildQwenRequestHeaders();
+            const baseUrl = qwenCapturedTemplate?.url || QWEN_DEFAULT_MSG_LIST_URL;
+            let currentUrl = ensureQwenRequestUrl(baseUrl, sessionId, { page_size: 50 });
+            let lastPos = '';
+            let page = 0;
+            const all = [];
+            const seen = new Set();
+
+            while (currentUrl && page < maxPages) {
+                page += 1;
+                const resp = await fetch(currentUrl, {
+                    method: 'GET',
+                    credentials: 'include',
+                    headers
+                });
+                const rawText = await resp.text();
+                const json = safeParseJson(rawText);
+
+                if (!resp.ok) {
+                    throw new Error(`消息请求失败: HTTP ${resp.status} ${rawText.slice(0, 300)}`);
+                }
+                if (!json) {
+                    throw new Error('消息接口返回非 JSON');
+                }
+
+                const parsed = parseQwenMessagesFromResponse(json);
+                parsed.forEach((m) => {
+                    const id = String(m?.id || '').trim();
+                    if (!id || seen.has(id)) return;
+                    seen.add(id);
+                    all.push(m);
+                });
+
+                const hasNext = Boolean(json?.data?.have_next_page);
+                const nextPos = getQwenNextPagePos(json);
+                onProgress({ page, count: all.length, hasMore: hasNext, cursor: nextPos });
+                if (!hasNext || !nextPos || nextPos === lastPos) break;
+                lastPos = nextPos;
+                currentUrl = ensureQwenRequestUrl(baseUrl, sessionId, { page_size: 50, pos: nextPos });
+            }
+
+            return { messages: all.sort((a, b) => (a.order || 0) - (b.order || 0)), pages: page };
+        }
+
+        function getQwenNextPagePos(respJson) {
+            const arr = Array.isArray(respJson?.data?.list) ? respJson.data.list : [];
+            if (!arr.length) return '';
+
+            const candidates = arr.map((item) => {
+                const raw = item?.pos
+                    ?? item?.position
+                    ?? item?.request_timestamp
+                    ?? item?.created_at
+                    ?? item?.updated_at
+                    ?? item?.create_time
+                    ?? item?.update_time;
+                const s = String(raw == null ? '' : raw).trim();
+                return /^\d+$/.test(s) ? s : '';
+            }).filter(Boolean);
+
+            if (!candidates.length) return '';
+
+            // 默认使用当前页中最早的 pos 继续向历史翻页。
+            return candidates.reduce((min, cur) => (BigInt(cur) < BigInt(min) ? cur : min), candidates[0]);
+        }
+
+        function getQwenItemSortValue(item, fallbackIdx = 0) {
+            const candidates = [
+                item?.request_timestamp,
+                item?.created_at,
+                item?.updated_at,
+                item?.create_time,
+                item?.update_time,
+                item?.pos,
+                item?.position
+            ];
+
+            for (const raw of candidates) {
+                const s = String(raw == null ? '' : raw).trim();
+                if (/^\d+$/.test(s)) return Number(s);
+                const ts = Date.parse(s);
+                if (Number.isFinite(ts)) return ts;
+            }
+
+            return fallbackIdx;
         }
 
         function normalizeQwenMessageText(text) {
@@ -2858,6 +4116,43 @@
             if (!t) return '';
             // 去掉千问内部思考块标签前缀，如 [(multimodal_chat_think_1)]
             return t.replace(/^\[\([^)]+\)\]\s*/g, '').trim();
+        }
+
+        function collectQwenTextCandidates(value, out, depth = 0) {
+            if (value == null || depth > 4) return;
+
+            if (typeof value === 'string' || typeof value === 'number') {
+                const text = normalizeQwenMessageText(String(value));
+                if (text) out.push(text);
+                return;
+            }
+
+            if (Array.isArray(value)) {
+                value.forEach((v) => collectQwenTextCandidates(v, out, depth + 1));
+                return;
+            }
+
+            if (typeof value !== 'object') return;
+
+            const keys = [
+                'content', 'text', 'value', 'display_text', 'prompt', 'question',
+                'query', 'input', 'message', 'msg', 'caption', 'desc', 'description'
+            ];
+            keys.forEach((k) => {
+                if (Object.prototype.hasOwnProperty.call(value, k)) {
+                    collectQwenTextCandidates(value[k], out, depth + 1);
+                }
+            });
+
+            if (Array.isArray(value.parts)) collectQwenTextCandidates(value.parts, out, depth + 1);
+            if (Array.isArray(value.segments)) collectQwenTextCandidates(value.segments, out, depth + 1);
+            if (Array.isArray(value.blocks)) collectQwenTextCandidates(value.blocks, out, depth + 1);
+            if (Array.isArray(value.messages)) collectQwenTextCandidates(value.messages, out, depth + 1);
+        }
+
+        function isLikelyUserRole(rawRole) {
+            const role = String(rawRole || '').toLowerCase();
+            return role.includes('user') || role.includes('human') || role.includes('question') || role === 'u';
         }
 
         function shouldIgnoreQwenMimeType(mimeType) {
@@ -2876,10 +4171,41 @@
 
             req.forEach((m) => {
                 const mime = String(m?.mime_type || '').toLowerCase();
-                const content = normalizeQwenMessageText(m?.content || '');
-                if (!content) return;
                 if (mime === 'image/url') return;
-                out.push(content);
+
+                const bucket = [];
+                collectQwenTextCandidates(m, bucket);
+                bucket.forEach((text) => {
+                    const clean = normalizeQwenMessageText(text);
+                    if (clean) out.push(clean);
+                });
+            });
+
+            // 一些千问返回结构不再提供 request_messages，用户问题可能出现在 item 根字段或 messages 中。
+            const fallbackBucket = [];
+            collectQwenTextCandidates({
+                query: item?.query,
+                question: item?.question,
+                prompt: item?.prompt,
+                input: item?.input,
+                user_message: item?.user_message,
+                user_msg: item?.user_msg,
+                request: item?.request
+            }, fallbackBucket);
+            fallbackBucket.forEach((text) => {
+                const clean = normalizeQwenMessageText(text);
+                if (clean) out.push(clean);
+            });
+
+            const mixedMessages = Array.isArray(item?.messages) ? item.messages : [];
+            mixedMessages.forEach((m) => {
+                if (!isLikelyUserRole(m?.role || m?.sender_role || m?.author_role || m?.type)) return;
+                const bucket = [];
+                collectQwenTextCandidates(m, bucket);
+                bucket.forEach((text) => {
+                    const clean = normalizeQwenMessageText(text);
+                    if (clean) out.push(clean);
+                });
             });
 
             return Array.from(new Set(out));
@@ -2906,19 +4232,82 @@
 
             const out = [];
             arr.forEach((item, idx) => {
+                const baseOrder = getQwenItemSortValue(item, idx + 1) * 10;
                 const reqId = String(item?.req_id || item?.request_id || `qwen-req-${idx + 1}`);
                 const userTexts = extractQwenUserTexts(item);
                 userTexts.forEach((text, i) => {
-                    out.push({ id: `${reqId}-u-${i + 1}`, role: 'user', text, order: idx * 2 + 1 });
+                    out.push({ id: `${reqId}-u-${i + 1}`, role: 'user', text, order: baseOrder + i * 2 + 1 });
                 });
 
                 const assistantTexts = extractQwenAssistantTexts(item);
                 assistantTexts.forEach((text, i) => {
-                    out.push({ id: `${reqId}-a-${i + 1}`, role: 'assistant', text, order: idx * 2 + 2 });
+                    out.push({ id: `${reqId}-a-${i + 1}`, role: 'assistant', text, order: baseOrder + i * 2 + 2 });
                 });
             });
 
-            return out.sort((a, b) => (a.order || 0) - (b.order || 0));
+            qwenNodeLog('api:parsed', {
+                listCount: arr.length,
+                parsedCount: out.length,
+                userCount: out.filter((m) => m.role === 'user').length,
+                assistantCount: out.filter((m) => m.role === 'assistant').length,
+                firstItemKeys: Object.keys(arr[0] || {}).slice(0, 16)
+            });
+
+            const sorted = out.sort((a, b) => (a.order || 0) - (b.order || 0));
+            let userSessionIndex = 0;
+            sorted.forEach((msg) => {
+                if (msg && msg.role === 'user') {
+                    msg.sessionIndex = userSessionIndex;
+                    userSessionIndex += 1;
+                }
+            });
+            return sorted;
+        }
+
+        function captureQwenTemplateFromResponse(respJson, requestUrl, requestHeaders = null) {
+            const arr = Array.isArray(respJson?.data?.list) ? respJson.data.list : [];
+            let responseHeaders = {};
+
+            for (const item of arr) {
+                if (!item || typeof item !== 'object') continue;
+                const rawHeader = typeof item.header === 'string' ? item.header.trim() : '';
+                if (!rawHeader) continue;
+                const parsedHeader = safeParseJson(rawHeader);
+                if (parsedHeader && typeof parsedHeader === 'object') {
+                    responseHeaders = parsedHeader;
+                    break;
+                }
+            }
+
+            const mergedHeaders = {
+                ...parseHeadersObject(requestHeaders),
+                ...parseHeadersObject(responseHeaders)
+            };
+
+            let finalUrl = requestUrl || qwenCapturedTemplate?.url || QWEN_DEFAULT_MSG_LIST_URL;
+            try {
+                const u = new URL(finalUrl, window.location.origin);
+                const ut = (
+                    u.searchParams.get('ut')
+                    || responseHeaders['x-deviceid']
+                    || responseHeaders['X-DeviceId']
+                    || responseHeaders['ut']
+                    || getQwenUtFromPage()
+                );
+                if (ut && !u.searchParams.get('ut')) {
+                    u.searchParams.set('ut', String(ut));
+                }
+                finalUrl = u.toString();
+            } catch (e) {
+                // ignore
+            }
+
+            qwenCapturedTemplate = {
+                url: finalUrl,
+                method: 'GET',
+                headers: mergedHeaders,
+                body: ''
+            };
         }
 
         function captureQwenTemplate(url, method, headers, body) {
@@ -2931,12 +4320,13 @@
             };
         }
 
-        function installQwenCaptureHooks() {
+        installQwenCaptureHooks = function () {
             if (!isQwen || qwenCaptureHooksInstalled) return;
             qwenCaptureHooksInstalled = true;
 
             const nativeFetch = window.fetch;
             window.fetch = function (input, init) {
+                const resp = nativeFetch.apply(this, arguments);
                 try {
                     const url = typeof input === 'string' ? input : input?.url;
                     if (url && isQwenMsgListUrl(url)) {
@@ -2950,11 +4340,32 @@
                         } else {
                             captureQwenTemplate(url, method, headers, '');
                         }
+
+                        Promise.resolve(resp).then((r) => {
+                            if (!r || !r.ok || typeof r.clone !== 'function') return;
+                            return r.clone().text().then((rawText) => {
+                                if (qwenInternalFetchDepth > 0) return;
+                                const json = safeParseJson(rawText);
+                                if (!json) return;
+                                captureQwenTemplateFromResponse(json, url, headers);
+                                const parsed = parseQwenMessagesFromResponse(json);
+                                if (!parsed.length) return;
+                                qwenNodeLog('hook:fetch-response', {
+                                    url,
+                                    parsedCount: parsed.length
+                                });
+                                queueQwenPendingApiPayload(url, rawText, 'fetch-hook');
+                            }).catch(() => {
+                                // ignore response clone errors
+                            });
+                        }).catch(() => {
+                            // ignore response handling errors
+                        });
                     }
                 } catch (e) {
                     console.warn('AI-Chat-Nodes: 安装千问 fetch 抓包钩子时出现异常', e);
                 }
-                return nativeFetch.apply(this, arguments);
+                return resp;
             };
 
             const nativeOpen = XMLHttpRequest.prototype.open;
@@ -2984,80 +4395,117 @@
                             this.__aiNodesQwenHeaders,
                             body
                         );
+
+                        this.addEventListener('load', () => {
+                            try {
+                                if (qwenInternalFetchDepth > 0) return;
+                                if (this.status < 200 || this.status >= 300) return;
+                                const rawText = typeof this.responseText === 'string' ? this.responseText : '';
+                                const json = safeParseJson(rawText);
+                                if (!json) return;
+                                captureQwenTemplateFromResponse(json, this.__aiNodesQwenUrl, this.__aiNodesQwenHeaders);
+                                const parsed = parseQwenMessagesFromResponse(json);
+                                if (!parsed.length) return;
+                                qwenNodeLog('hook:xhr-response', {
+                                    url: this.__aiNodesQwenUrl,
+                                    parsedCount: parsed.length
+                                });
+                                queueQwenPendingApiPayload(this.__aiNodesQwenUrl, rawText, 'xhr-hook');
+                            } catch (e) {
+                                // ignore xhr parse errors
+                            }
+                        }, { once: true });
                     }
                 } catch (e) {
                     console.warn('AI-Chat-Nodes: 安装千问 XHR 抓包钩子时出现异常', e);
                 }
                 return nativeSend.apply(this, arguments);
             };
-        }
+        };
 
-        async function getQwenMessagesByApi() {
-            if (!isQwen) return [];
-            installQwenCaptureHooks();
-
-            const headers = sanitizeQwenHeaders({
-                ...(qwenCapturedTemplate?.headers || {}),
-                accept: 'application/json, text/plain, */*'
-            });
-
-            const urlCandidates = getQwenRequestUrlCandidates();
-            const sidCandidates = getQwenSessionIdCandidates();
-            const sidFromTemplateUrl = getQwenSessionIdFromRawUrl(qwenCapturedTemplate?.url);
-            const sidFromRecentUrl = getQwenSessionIdFromRawUrl(getRecentQwenMsgListUrl());
-
-            if (sidFromTemplateUrl) sidCandidates.unshift(sidFromTemplateUrl);
-            if (sidFromRecentUrl) sidCandidates.unshift(sidFromRecentUrl);
-
-            const uniqueSidCandidates = Array.from(new Set(sidCandidates.filter(Boolean)));
-            const requestUrls = [];
-
-            if (uniqueSidCandidates.length) {
-                urlCandidates.forEach((baseUrl) => {
-                    uniqueSidCandidates.forEach((sid) => {
-                        requestUrls.push(ensureQwenRequestUrl(baseUrl, sid));
-                    });
-                });
+        async function fetchQwenMessagesByTemplate() {
+            const headers = buildQwenRequestHeaders();
+            const sessionId = getQwenSessionIdFromUrl();
+            if (!sessionId) {
+                qwenNodeLog('api:no-session-id', { href: window.location.href });
+                return [];
             }
+            const baseUrl = qwenCapturedTemplate?.url || QWEN_DEFAULT_MSG_LIST_URL;
+            const initialUrl = ensureQwenRequestUrl(baseUrl, sessionId);
 
-            urlCandidates.forEach((baseUrl) => {
-                const sidInBase = getQwenSessionIdFromRawUrl(baseUrl);
-                if (sidInBase) requestUrls.push(ensureQwenRequestUrl(baseUrl, sidInBase));
+            qwenNodeLog('api:request-start', {
+                hasTemplate: Boolean(qwenCapturedTemplate?.url),
+                hasXsrf: Boolean(headers['x-xsrf-token']),
+                hasDeviceId: Boolean(headers['x-deviceid']),
+                headerKeys: Object.keys(headers).slice(0, 12),
+                reqUrl: initialUrl
             });
-
-            if (!requestUrls.length) {
-                requestUrls.push(ensureQwenRequestUrl(QWEN_DEFAULT_MSG_LIST_URL, ''));
-            }
-
-            const uniqueRequestUrls = Array.from(new Set(requestUrls));
 
             try {
-                for (const reqUrl of uniqueRequestUrls) {
-                    const resp = await fetch(reqUrl, {
-                        method: 'GET',
-                        credentials: 'include',
-                        headers
-                    });
+                qwenSuppressCapturedPayloads += 1;
+                const allParsed = [];
+                const seenIds = new Set();
+                let currentUrl = initialUrl;
+                let page = 0;
+                let lastPos = '';
+
+                while (currentUrl && page < 20) {
+                    page += 1;
+                    markQwenInternalRequest(currentUrl);
+                    qwenInternalFetchDepth += 1;
+                    let resp;
+                    try {
+                        resp = await fetch(currentUrl, {
+                            method: 'GET',
+                            credentials: 'include',
+                            headers
+                        });
+                    } finally {
+                        qwenInternalFetchDepth = Math.max(0, qwenInternalFetchDepth - 1);
+                    }
 
                     const rawText = await resp.text();
                     if (!resp.ok) {
                         console.warn(`AI-Chat-Nodes: 千问会话 API 请求失败 (${resp.status})`, rawText.slice(0, 400));
-                        continue;
+                        break;
                     }
 
                     const json = safeParseJson(rawText);
                     if (!json) {
                         console.warn('AI-Chat-Nodes: 千问会话 API 返回非 JSON 响应');
-                        continue;
+                        break;
                     }
+
+                    captureQwenTemplateFromResponse(json, currentUrl, headers);
 
                     const parsed = parseQwenMessagesFromResponse(json);
-                    if (parsed.length) return parsed;
+                    parsed.forEach((item) => {
+                        const id = String(item?.id || '').trim();
+                        if (!id || seenIds.has(id)) return;
+                        seenIds.add(id);
+                        allParsed.push(item);
+                    });
 
-                    const code = json.code != null ? json.code : json.status_code;
-                    if (code != null && Number(code) !== 0) {
-                        console.warn(`AI-Chat-Nodes: 千问会话 API 返回异常 code=${code}`);
-                    }
+                    const hasNext = Boolean(json?.data?.have_next_page);
+                    const nextPos = getQwenNextPagePos(json);
+
+                    qwenNodeLog('api:page', {
+                        page,
+                        reqUrl: currentUrl,
+                        parsedCount: parsed.length,
+                        totalParsed: allParsed.length,
+                        hasNext,
+                        nextPos
+                    });
+
+                    if (!hasNext || !nextPos || nextPos === lastPos) break;
+                    lastPos = nextPos;
+                    currentUrl = ensureQwenRequestUrl(baseUrl, sessionId, { pos: nextPos });
+                }
+
+                if (allParsed.length) {
+                    qwenNodeLog('api:success', { reqUrl: initialUrl, parsedCount: allParsed.length, pages: page });
+                    return allParsed.sort((a, b) => (a.order || 0) - (b.order || 0));
                 }
 
                 console.warn('AI-Chat-Nodes: 千问导出失败，候选请求均未获取到消息');
@@ -3065,8 +4513,102 @@
             } catch (e) {
                 console.warn('AI-Chat-Nodes: 千问会话 API 解析失败', e);
                 return [];
+            } finally {
+                qwenSuppressCapturedPayloads = Math.max(0, qwenSuppressCapturedPayloads - 1);
             }
         }
+
+    function maybeHydrateQwenHistory(triggerSource = 'unknown') {
+        if (!isQwen || qwenHistoryHydrationInFlight || !hasUsableQwenRequestTemplate()) return;
+
+        const sessionId = getQwenSessionIdFromUrl();
+        const hydrateStorageKey = storageKey;
+        if (!sessionId) return;
+        const cacheSig = qwenVirtualNodesCache.map((m) => String(m.id || '')).filter(Boolean).join('|');
+        if (qwenLastHydratedSessionId === sessionId && qwenLastHydrationSignature === cacheSig && cacheSig) {
+            return;
+        }
+
+            qwenHistoryHydrationInFlight = true;
+            qwenNodeLog('hydrate:start', {
+                triggerSource,
+                sessionId,
+                cacheSize: qwenVirtualNodesCache.length
+            });
+
+        fetchQwenMessagesByTemplate().then((apiMsgs) => {
+            if (hydrateStorageKey !== storageKey) return;
+            if (!Array.isArray(apiMsgs) || !apiMsgs.length) return;
+            applyQwenApiMessagesToCache(apiMsgs, 'hydrate');
+            qwenLastHydratedSessionId = sessionId;
+            qwenLastHydrationSignature = apiMsgs
+                .filter((m) => m && m.role === 'user')
+                    .map((m) => String(m.id || ''))
+                    .filter(Boolean)
+                    .join('|');
+                qwenNodeLog('hydrate:done', {
+                    sessionId,
+                    totalCount: apiMsgs.length,
+                    userCount: apiMsgs.filter((m) => m && m.role === 'user').length
+                });
+            }).catch((e) => {
+                console.warn('AI-Chat-Nodes: 千问历史补全失败', e);
+            }).finally(() => {
+                qwenHistoryHydrationInFlight = false;
+            });
+        }
+
+        getQwenMessagesByApi = async function () {
+            if (!isQwen) return [];
+            installQwenCaptureHooks();
+
+            if (!hasUsableQwenRequestTemplate()) {
+                qwenNodeLog('api:direct-fetch', {
+                    hasTemplate: Boolean(qwenCapturedTemplate?.url),
+                    hasUt: Boolean(getQwenUtFromPage()),
+                    headerKeys: Object.keys(qwenCapturedTemplate?.headers || {}).slice(0, 12)
+                });
+            }
+
+            return fetchQwenMessagesByTemplate();
+        };
+
+        async function getQwenMessagesForExport() {
+            if (!isQwen) return [];
+            installQwenCaptureHooks();
+
+            const pendingMsgs = collectQwenMessagesFromPendingPayloads();
+            if (pendingMsgs.length) {
+                qwenNodeLog('export:from-pending', { count: pendingMsgs.length });
+                return pendingMsgs;
+            }
+
+            if (!hasUsableQwenRequestTemplate()) {
+                qwenNodeLog('export:direct-fetch', {
+                    hasTemplate: Boolean(qwenCapturedTemplate?.url),
+                    hasUt: Boolean(getQwenUtFromPage()),
+                    headerKeys: Object.keys(qwenCapturedTemplate?.headers || {}).slice(0, 12)
+                });
+            }
+
+            const pendingAfterWait = collectQwenMessagesFromPendingPayloads();
+            if (pendingAfterWait.length) {
+                qwenNodeLog('export:from-pending', { count: pendingAfterWait.length });
+                return pendingAfterWait;
+            }
+
+            const apiMsgs = await fetchQwenMessagesByTemplate();
+            if (Array.isArray(apiMsgs) && apiMsgs.length) {
+                return apiMsgs;
+            }
+
+            qwenNodeLog('export:no-data', {
+                hasTemplate: Boolean(qwenCapturedTemplate?.url),
+                hasUt: Boolean(getQwenUtFromPage()),
+                headerKeys: Object.keys(qwenCapturedTemplate?.headers || {}).slice(0, 12)
+            });
+            return [];
+        };
 
         function getDoubaoConversationIdFromUrl() {
             const m = window.location.pathname.match(/\/chat\/([0-9]+)/i);
@@ -3086,6 +4628,9 @@
 
         const DOUBAO_QUERY_DEFAULTS = 'version_code=20800&language=zh&device_platform=web&aid=497858&real_aid=497858&pkg_type=release_version&device_id=7571732726702835209&pc_version=3.12.3&web_id=7572300776296236571&tea_uuid=7572300776296236571&region=CN&sys_region=CN&samantha_web=1&use-olympus-account=1';
         let doubaoCapturedTemplate = null;
+        let doubaoCapturedRecentConvUrl = '';
+        let doubaoCapturedRecentConvBodyText = '';
+        let doubaoCapturedMcsListRequest = null;
         let doubaoCaptureHooksInstalled = false;
         const doubaoArtifactContentCache = new Map();
 
@@ -3103,6 +4648,76 @@
                 return /\/im\/chain\/single$/i.test(u.pathname);
             } catch (e) {
                 return false;
+            }
+        }
+
+        function isDoubaoRecentConvUrl(rawUrl) {
+            try {
+                const u = new URL(rawUrl, window.location.origin);
+                return /\/im\/chain\/recent_conv$/i.test(u.pathname);
+            } catch (e) {
+                return false;
+            }
+        }
+
+        function isDoubaoMcsListUrl(rawUrl) {
+            try {
+                const u = new URL(rawUrl, window.location.origin);
+                return /(^|\.)mcs\.doubao\.com$/i.test(u.hostname) && /\/list$/i.test(u.pathname);
+            } catch (e) {
+                return false;
+            }
+        }
+
+        function captureDoubaoMcsListRequest(url, method, headers, bodyText) {
+            if (!isDoubaoMcsListUrl(url)) return;
+            doubaoCapturedMcsListRequest = {
+                url: String(url || 'https://mcs.doubao.com/list'),
+                method: String(method || 'GET').toUpperCase(),
+                headers: sanitizeDoubaoHeaders(parseHeadersObject(headers)),
+                bodyText: typeof bodyText === 'string' ? bodyText : (bodyText != null ? String(bodyText) : ''),
+                ts: Date.now()
+            };
+        }
+
+        async function preflightDoubaoMcsList() {
+            const captured = doubaoCapturedMcsListRequest;
+            const hasCaptured = Boolean(captured && captured.url);
+            const url = hasCaptured ? captured.url : 'https://mcs.doubao.com/list';
+            let method = hasCaptured ? String(captured.method || 'POST').toUpperCase() : 'POST';
+
+            // OPTIONS 是浏览器自动发起的预检，业务请求应发送 POST。
+            if (method === 'OPTIONS') method = 'POST';
+
+            const headers = hasCaptured
+                ? sanitizeDoubaoHeaders(captured.headers || {})
+                : { accept: '*/*', 'content-type': 'application/json;charset=utf-8' };
+
+            if (!headers.accept) headers.accept = 'application/json, text/plain, */*';
+            if (method === 'GET' || method === 'HEAD') {
+                delete headers['content-type'];
+            } else if (!headers['content-type']) {
+                headers['content-type'] = 'application/json;charset=utf-8';
+            }
+
+            const init = {
+                method,
+                credentials: 'include',
+                headers
+            };
+
+            if (method !== 'GET' && method !== 'HEAD') {
+                if (hasCaptured && captured.bodyText) {
+                    init.body = captured.bodyText;
+                } else {
+                    init.body = '{}';
+                }
+            }
+
+            try {
+                await fetch(url, init);
+            } catch (e) {
+                // mcs 预热失败不应阻断 recent_conv 分页
             }
         }
 
@@ -3174,6 +4789,40 @@
                     const inputUrl = typeof input === 'string' ? input : input?.url;
                     const url = inputUrl ? new URL(inputUrl, window.location.origin).toString() : '';
                     const method = (init?.method || input?.method || 'GET').toUpperCase();
+                    if (url && isDoubaoRecentConvUrl(url)) {
+                        doubaoCapturedRecentConvUrl = url;
+                        if (method === 'POST') {
+                            const body = init?.body;
+                            if (typeof body === 'string') {
+                                doubaoCapturedRecentConvBodyText = body;
+                            } else if (body != null) {
+                                doubaoCapturedRecentConvBodyText = String(body);
+                            } else if (typeof Request !== 'undefined' && input instanceof Request) {
+                                input.clone().text().then((txt) => {
+                                    doubaoCapturedRecentConvBodyText = txt || '';
+                                }).catch(() => {
+                                    // ignore
+                                });
+                            }
+                        }
+                    }
+                    if (url && isDoubaoMcsListUrl(url)) {
+                        const headers = init?.headers || input?.headers;
+                        const body = init?.body;
+                        if (typeof body === 'string') {
+                            captureDoubaoMcsListRequest(url, method, headers, body);
+                        } else if (body != null) {
+                            captureDoubaoMcsListRequest(url, method, headers, String(body));
+                        } else if (typeof Request !== 'undefined' && input instanceof Request) {
+                            input.clone().text().then((txt) => {
+                                captureDoubaoMcsListRequest(url, method, headers, txt || '');
+                            }).catch(() => {
+                                captureDoubaoMcsListRequest(url, method, headers, '');
+                            });
+                        } else {
+                            captureDoubaoMcsListRequest(url, method, headers, '');
+                        }
+                    }
                     if (isDoubaoSingleChainUrl(url) && method === 'POST') {
                         const headers = init?.headers || input?.headers;
                         const body = init?.body;
@@ -3221,6 +4870,20 @@
 
             XMLHttpRequest.prototype.send = function (body) {
                 try {
+                    if (isDoubaoRecentConvUrl(this.__aiNodesDoubaoUrl)) {
+                        doubaoCapturedRecentConvUrl = this.__aiNodesDoubaoUrl;
+                        if (this.__aiNodesDoubaoMethod === 'POST') {
+                            doubaoCapturedRecentConvBodyText = typeof body === 'string' ? body : (body != null ? String(body) : '');
+                        }
+                    }
+                    if (isDoubaoMcsListUrl(this.__aiNodesDoubaoUrl)) {
+                        captureDoubaoMcsListRequest(
+                            this.__aiNodesDoubaoUrl,
+                            this.__aiNodesDoubaoMethod,
+                            this.__aiNodesDoubaoHeaders,
+                            typeof body === 'string' ? body : (body != null ? String(body) : '')
+                        );
+                    }
                     if (this.__aiNodesDoubaoMethod === 'POST' && isDoubaoSingleChainUrl(this.__aiNodesDoubaoUrl)) {
                         const bodyText = typeof body === 'string' ? body : (body != null ? String(body) : '');
                         captureDoubaoTemplate(this.__aiNodesDoubaoUrl, 'POST', this.__aiNodesDoubaoHeaders, bodyText);
@@ -3257,6 +4920,72 @@
                 u.searchParams.set('web_tab_id', webTabId);
             }
             sessionStorage.setItem('ai-nodes-doubao-web-tab-id', webTabId);
+            return u.toString();
+        }
+
+        function rememberDoubaoWebTabId(id) {
+            const tabId = String(id || '').trim();
+            if (!tabId) return '';
+            sessionStorage.setItem('ai-nodes-doubao-web-tab-id', tabId);
+            return tabId;
+        }
+
+        function getDoubaoWebTabIdFromUrl(rawUrl) {
+            try {
+                const u = new URL(rawUrl, window.location.origin);
+                return String(u.searchParams.get('web_tab_id') || '').trim();
+            } catch (e) {
+                return '';
+            }
+        }
+
+        function getDoubaoWebTabIdCandidates(customUrl = '') {
+            const out = [];
+            const seen = new Set();
+
+            const push = (value) => {
+                const id = String(value || '').trim();
+                if (!id || seen.has(id)) return;
+                seen.add(id);
+                out.push(id);
+            };
+
+            push(getDoubaoWebTabIdFromUrl(customUrl));
+            push(getDoubaoWebTabIdFromUrl(window.location.href));
+            push(getDoubaoWebTabIdFromUrl(doubaoCapturedRecentConvUrl));
+            push(getDoubaoWebTabIdFromUrl(doubaoCapturedTemplate?.url || ''));
+            push(sessionStorage.getItem('ai-nodes-doubao-web-tab-id') || '');
+
+            try {
+                const entries = performance.getEntriesByType('resource') || [];
+                for (let i = entries.length - 1; i >= 0; i--) {
+                    const name = entries[i] && entries[i].name ? entries[i].name : '';
+                    if (!/\/im\/chain\/(single|recent_conv)\?/i.test(name)) continue;
+                    push(getDoubaoWebTabIdFromUrl(name));
+                    if (out.length >= 5) break;
+                }
+            } catch (e) {
+                // ignore
+            }
+
+            if (!out.length) push(genUuid());
+            return out;
+        }
+
+        function ensureDoubaoRecentConvUrl(rawUrl, preferredWebTabId = '', keepOriginalQuery = false) {
+            const base = rawUrl || doubaoCapturedRecentConvUrl || `${window.location.origin}/im/chain/recent_conv`;
+            const u = new URL(base, window.location.origin);
+
+            if (!keepOriginalQuery) {
+                const defaults = new URLSearchParams(DOUBAO_QUERY_DEFAULTS);
+                defaults.forEach((v, k) => {
+                    if (!u.searchParams.has(k)) u.searchParams.set(k, v);
+                });
+            }
+
+            const tabId = String(preferredWebTabId || u.searchParams.get('web_tab_id') || sessionStorage.getItem('ai-nodes-doubao-web-tab-id') || genUuid()).trim();
+            if (tabId) u.searchParams.set('web_tab_id', rememberDoubaoWebTabId(tabId));
+
             return u.toString();
         }
 
@@ -3364,9 +5093,23 @@
             const pushText = (text) => {
                 const t = String(text || '').trim();
                 if (!t || dedup.has(t)) return;
+
+                // content 内可能嵌入结构化 JSON，优先转成可读摘要，避免原始 JSON 泄露到导出。
+                const structured = parseDoubaoContentPayload(t);
+                if (structured && structured !== t) {
+                    structured
+                        .split(/\r?\n/)
+                        .map((line) => line.trim())
+                        .filter(Boolean)
+                        .forEach((line) => pushText(line));
+                    return;
+                }
+
                 if (/^[0-9]{14,}$/.test(t)) return;
                 if (/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(t)) return;
                 if (/^tos-cn-i-[a-z0-9-]+\//i.test(t)) return;
+                if (/^R[A-Za-z0-9]{20,}$/i.test(t)) return;
+                if (/^https?:\/\//i.test(t) && /(byteimg|byteimg\.com|byteimg\.com\.cn|byteimg\.com\.cn|tos-cn-|flow-sign\.byteimg\.com|flow-imagex-sign\.byteimg\.com)/i.test(t)) return;
                 dedup.add(t);
                 lines.push(t);
             };
@@ -3463,8 +5206,18 @@
             if (text) lines.push(text);
 
             const entities = Array.isArray(parsed.entities) ? parsed.entities : [];
+            const fileNames = [];
             entities.forEach((entity, idx) => {
                 if (!entity || typeof entity !== 'object') return;
+                const file = entity?.entity_content?.file || entity?.file || null;
+                const fileName = typeof file?.file_name === 'string'
+                    ? file.file_name.trim()
+                    : (typeof file?.name === 'string' ? file.name.trim() : '');
+                if (fileName) {
+                    fileNames.push(fileName);
+                    return;
+                }
+
                 const image = entity?.entity_content?.image || {};
                 const url = image?.image_ori?.url
                     || image?.preview_img?.url
@@ -3478,6 +5231,11 @@
                 } else if (key) {
                     lines.push(`[图片${serial}] ${key}`);
                 }
+            });
+
+            fileNames.forEach((name, idx) => {
+                const serial = fileNames.length > 1 ? String(idx + 1) : '';
+                lines.push(`[附件${serial}] ${name}`);
             });
 
             return lines.length ? lines.join('\n') : '';
@@ -3494,6 +5252,529 @@
             }
             const fromStorage = sessionStorage.getItem('ai-nodes-doubao-web-tab-id');
             return fromStorage || genUuid();
+        }
+
+        function formatDoubaoTime(ts) {
+            const n = Number(ts || 0);
+            if (!Number.isFinite(n) || n <= 0) return '';
+            const ms = n > 1e12 ? n : Math.round(n * 1000);
+            const d = new Date(ms);
+            if (Number.isNaN(d.getTime())) return '';
+            return d.toLocaleString();
+        }
+
+        function getDoubaoStringByPath(obj, path) {
+            const parts = String(path || '').split('.').filter(Boolean);
+            let cur = obj;
+            for (const p of parts) {
+                if (!cur || typeof cur !== 'object') return '';
+                cur = cur[p];
+            }
+            return typeof cur === 'string' ? cur.trim() : '';
+        }
+
+        function getDoubaoNumberByPath(obj, path) {
+            const parts = String(path || '').split('.').filter(Boolean);
+            let cur = obj;
+            for (const p of parts) {
+                if (!cur || typeof cur !== 'object') return null;
+                cur = cur[p];
+            }
+            const n = Number(cur);
+            return Number.isFinite(n) ? n : null;
+        }
+
+        function findDoubaoNestedConversationTitle(obj, maxDepth = 5) {
+            if (!obj || typeof obj !== 'object' || maxDepth < 0) return '';
+
+            const keys = ['name', 'title', 'conversation_title', 'conv_title', 'chat_title', 'display_title'];
+            for (const key of keys) {
+                const val = typeof obj[key] === 'string' ? obj[key].trim() : '';
+                if (val && !/^[0-9]{8,}$/.test(val)) return val;
+            }
+
+            if (maxDepth === 0) return '';
+            for (const v of Object.values(obj)) {
+                if (!v || typeof v !== 'object') continue;
+                const nested = findDoubaoNestedConversationTitle(v, maxDepth - 1);
+                if (nested) return nested;
+            }
+            return '';
+        }
+
+        function resolveDoubaoConversationTitle(item, id) {
+            const preferredPaths = [
+                'name',
+                'title',
+                'conversation_title',
+                'conv_title',
+                'chat_title',
+                'conversation.name',
+                'conversation.title',
+                'conversation_info.name',
+                'conversation_info.title',
+                'conv.name',
+                'conv.title',
+                'coco_conversation.name',
+                'coco_conversation.title',
+                'chain_info.name',
+                'chain_info.title',
+                'meta.name',
+                'meta.title'
+            ];
+
+            for (const p of preferredPaths) {
+                const val = getDoubaoStringByPath(item, p);
+                if (val && !/^[0-9]{8,}$/.test(val)) return val;
+            }
+
+            const nested = findDoubaoNestedConversationTitle(item, 5);
+            if (nested) return nested;
+            return `会话 ${id}`;
+        }
+
+        function findDoubaoNestedBadgeCount(obj, maxDepth = 5) {
+            if (!obj || typeof obj !== 'object' || maxDepth < 0) return null;
+
+            const direct = Number(obj.badge_count);
+            if (Number.isFinite(direct)) return direct;
+
+            if (maxDepth === 0) return null;
+            for (const v of Object.values(obj)) {
+                if (!v || typeof v !== 'object') continue;
+                const found = findDoubaoNestedBadgeCount(v, maxDepth - 1);
+                if (Number.isFinite(found)) return found;
+            }
+            return null;
+        }
+
+        function resolveDoubaoConversationBadgeCount(item) {
+            const preferredPaths = [
+                'badge_count',
+                'conversation.badge_count',
+                'conversation_info.badge_count',
+                'conv.badge_count',
+                'coco_conversation.badge_count',
+                'chain_info.badge_count'
+            ];
+
+            for (const p of preferredPaths) {
+                const n = getDoubaoNumberByPath(item, p);
+                if (Number.isFinite(n)) return n;
+            }
+
+            return findDoubaoNestedBadgeCount(item, 5);
+        }
+
+        function findDoubaoNestedTimestamp(obj, keys, maxDepth = 6) {
+            if (!obj || typeof obj !== 'object' || maxDepth < 0) return null;
+
+            for (const key of keys) {
+                const n = Number(obj[key]);
+                if (Number.isFinite(n) && n > 0) return n;
+            }
+
+            if (maxDepth === 0) return null;
+            for (const v of Object.values(obj)) {
+                if (!v || typeof v !== 'object') continue;
+                const found = findDoubaoNestedTimestamp(v, keys, maxDepth - 1);
+                if (Number.isFinite(found) && found > 0) return found;
+            }
+            return null;
+        }
+
+        function resolveDoubaoConversationTimestamps(item) {
+            const createPaths = [
+                'create_time',
+                'created_at',
+                'create_timestamp',
+                'conversation.create_time',
+                'conversation.created_at',
+                'conversation_info.create_time',
+                'conversation_info.created_at',
+                'conv.create_time',
+                'conv.created_at',
+                'coco_conversation.create_time',
+                'coco_conversation.created_at',
+                'chain_info.create_time',
+                'chain_info.created_at'
+            ];
+
+            const updatePaths = [
+                'update_time',
+                'updated_at',
+                'update_timestamp',
+                'conversation.update_time',
+                'conversation.updated_at',
+                'conversation_info.update_time',
+                'conversation_info.updated_at',
+                'conv.update_time',
+                'conv.updated_at',
+                'coco_conversation.update_time',
+                'coco_conversation.updated_at',
+                'chain_info.update_time',
+                'chain_info.updated_at'
+            ];
+
+            let createdAt = null;
+            for (const p of createPaths) {
+                const n = getDoubaoNumberByPath(item, p);
+                if (Number.isFinite(n) && n > 0) {
+                    createdAt = n;
+                    break;
+                }
+            }
+            if (!Number.isFinite(createdAt) || createdAt <= 0) {
+                createdAt = findDoubaoNestedTimestamp(item, ['create_time', 'created_at', 'create_timestamp'], 6);
+            }
+
+            let updatedAt = null;
+            for (const p of updatePaths) {
+                const n = getDoubaoNumberByPath(item, p);
+                if (Number.isFinite(n) && n > 0) {
+                    updatedAt = n;
+                    break;
+                }
+            }
+            if (!Number.isFinite(updatedAt) || updatedAt <= 0) {
+                updatedAt = findDoubaoNestedTimestamp(item, ['update_time', 'updated_at', 'update_timestamp'], 6);
+            }
+
+            return {
+                createdAt: Number.isFinite(createdAt) && createdAt > 0 ? createdAt : 0,
+                updatedAt: Number.isFinite(updatedAt) && updatedAt > 0 ? updatedAt : 0
+            };
+        }
+
+        function extractDoubaoRecentConversations(respJson) {
+            const direct = respJson?.downlink_body?.pull_recent_conv_chain_downlink_body
+                || respJson?.downlink_body?.pull_recent_conv_downlink_body;
+            const arr = [
+                ...(Array.isArray(direct?.conversation_list) ? direct.conversation_list : []),
+                ...(Array.isArray(direct?.conversations) ? direct.conversations : []),
+                ...(Array.isArray(respJson?.data?.conversation_list) ? respJson.data.conversation_list : []),
+                ...(Array.isArray(respJson?.data?.conversations) ? respJson.data.conversations : [])
+            ];
+
+            const out = [];
+            const seen = new Set();
+
+            const pushConv = (item) => {
+                if (!item || typeof item !== 'object') return;
+                const id = String(
+                    item.conversation_id
+                    || item.conv_id
+                    || item.id
+                    || item.chat_id
+                    || ''
+                ).trim();
+                if (!id || seen.has(id)) return;
+
+                const title = resolveDoubaoConversationTitle(item, id);
+                const badgeCount = resolveDoubaoConversationBadgeCount(item);
+                const ts = resolveDoubaoConversationTimestamps(item);
+                const createdAt = ts.createdAt || 0;
+                const updatedAt = ts.updatedAt || createdAt || 0;
+
+                seen.add(id);
+                out.push({
+                    id,
+                    title: title || `会话 ${id}`,
+                    badgeCount: Number.isFinite(badgeCount) ? badgeCount : null,
+                    createdAt,
+                    createdAtText: formatDoubaoTime(createdAt),
+                    updatedAt,
+                    updatedAtText: formatDoubaoTime(updatedAt),
+                    raw: item
+                });
+            };
+
+            arr.forEach(pushConv);
+
+            if (!out.length) {
+                const queue = [respJson];
+                while (queue.length) {
+                    const cur = queue.shift();
+                    if (!cur || typeof cur !== 'object') continue;
+                    if (Array.isArray(cur)) {
+                        cur.forEach((x) => queue.push(x));
+                        continue;
+                    }
+                    pushConv(cur);
+                    Object.values(cur).forEach((v) => {
+                        if (v && typeof v === 'object') queue.push(v);
+                    });
+                }
+            }
+
+            out.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+            return out;
+        }
+
+        function findDoubaoNestedVersion(obj, keys, maxDepth = 6) {
+            if (!obj || typeof obj !== 'object' || maxDepth < 0) return null;
+
+            for (const key of keys) {
+                const val = obj[key];
+                if (val === 0 || val === '0') return '0';
+                if (val != null && String(val).trim()) return String(val).trim();
+            }
+
+            if (maxDepth === 0) return null;
+            for (const v of Object.values(obj)) {
+                if (!v || typeof v !== 'object') continue;
+                const found = findDoubaoNestedVersion(v, keys, maxDepth - 1);
+                if (found != null && String(found).trim()) return String(found).trim();
+            }
+            return null;
+        }
+
+        function resolveDoubaoNextConvCursor(payload, pageConversations) {
+            const payloadCursor = String(
+                payload?.next_conv_version
+                || payload?.nextConvVersion
+                || payload?.next_cursor
+                || payload?.nextCursor
+                || payload?.cursor
+                || payload?.conv_version
+                || payload?.conversation_version
+                || ''
+            ).trim();
+            if (payloadCursor) return payloadCursor;
+
+            const arr = Array.isArray(pageConversations) ? pageConversations : [];
+            for (let i = arr.length - 1; i >= 0; i--) {
+                const raw = arr[i]?.raw;
+                const fromRaw = findDoubaoNestedVersion(raw, ['next_conv_version', 'nextConvVersion', 'conv_version', 'conversation_version'], 6);
+                if (fromRaw) return fromRaw;
+            }
+
+            const oldestTs = arr
+                .map((x) => Number(x?.updatedAt || x?.createdAt || 0))
+                .filter((n) => Number.isFinite(n) && n > 0)
+                .sort((a, b) => a - b)[0];
+            if (Number.isFinite(oldestTs) && oldestTs > 0) return String(oldestTs);
+
+            return '';
+        }
+
+        function normalizeDoubaoConvVersionValue(cursor) {
+            const s = String(cursor == null ? '' : cursor).trim();
+            if (!s) return 0;
+            if (/^\d+$/.test(s)) {
+                const n = Number(s);
+                if (Number.isSafeInteger(n)) return n;
+                // 超过 JS 安全整数范围时保留字符串，避免分页游标精度丢失导致重复首屏
+                return s;
+            }
+            return s;
+        }
+
+        async function fetchDoubaoRecentConversations(customUrl = '', limit = 20) {
+            const baseUrl = customUrl || doubaoCapturedRecentConvUrl || `${window.location.origin}/im/chain/recent_conv`;
+            const keepOriginalQuery = Boolean(customUrl && customUrl.trim());
+            const headers = sanitizeDoubaoHeaders(doubaoCapturedTemplate?.headers || {});
+            headers.accept = 'application/json, text/plain, */*';
+            const safeLimit = Math.max(1, Math.min(100, Number(limit) || 20));
+            const recentConvTemplateBody = safeParseJson(doubaoCapturedRecentConvBodyText || '');
+
+            const errors = [];
+            const candidates = getDoubaoWebTabIdCandidates(baseUrl);
+
+            for (const tabId of candidates) {
+                const url = ensureDoubaoRecentConvUrl(baseUrl, tabId, keepOriginalQuery);
+
+                const postHeaders = {
+                    ...headers,
+                    'content-type': 'application/json; encoding=utf-8',
+                    'agw-js-conv': 'str'
+                };
+
+                try {
+                    const merged = [];
+                    const seen = new Set();
+                    let rawText = '';
+                    let firstJson = null;
+                    let page = 0;
+                    let convVersionCursor = 0;
+                    let keepPaging = true;
+                    let lastCursorUsed = '';
+
+                    while (keepPaging && merged.length < safeLimit && page < 12) {
+                        if (page > 0) {
+                            await preflightDoubaoMcsList();
+                        }
+                        const remaining = Math.max(1, safeLimit - merged.length);
+                        const requestLimit = Math.min(20, remaining);
+                        const isContinuationPage = page > 0;
+                        const buildMainBody = (mode) => {
+                            const body = (mode === 'template' && recentConvTemplateBody && typeof recentConvTemplateBody === 'object')
+                                ? JSON.parse(JSON.stringify(recentConvTemplateBody))
+                                : {
+                                    cmd: 3200,
+                                    uplink_body: {
+                                        pull_recent_conv_chain_uplink_body: {
+                                            limit: requestLimit,
+                                            message_count_per_conv: 10,
+                                            api_version: 1,
+                                            conv_version: 0,
+                                            direction: 3,
+                                            option: {
+                                                not_need_message: true,
+                                                need_complete_conversation: true,
+                                                need_coco_conversation: true,
+                                                need_coco_bot: true,
+                                                need_pc_pin_chain: true,
+                                                pc_pin_query_type: 0
+                                            }
+                                        }
+                                    },
+                                    sequence_id: genUuid(),
+                                    channel: 2,
+                                    version: '1'
+                                };
+
+                            if (!body.uplink_body || typeof body.uplink_body !== 'object') {
+                                body.uplink_body = {};
+                            }
+                            if (!body.uplink_body.pull_recent_conv_chain_uplink_body || typeof body.uplink_body.pull_recent_conv_chain_uplink_body !== 'object') {
+                                body.uplink_body.pull_recent_conv_chain_uplink_body = {};
+                            }
+
+                            const pullBody = body.uplink_body.pull_recent_conv_chain_uplink_body;
+                            if (!pullBody.option || typeof pullBody.option !== 'object') {
+                                pullBody.option = {};
+                            }
+
+                            pullBody.limit = requestLimit;
+                            pullBody.conv_version = normalizeDoubaoConvVersionValue(convVersionCursor);
+                            if (pullBody.api_version == null) pullBody.api_version = 1;
+                            pullBody.direction = isContinuationPage ? 1 : (pullBody.direction == null ? 3 : pullBody.direction);
+                            if (pullBody.message_count_per_conv == null) pullBody.message_count_per_conv = 10;
+
+                            // 对齐豆包官方分页行为：第二页开始切换续页参数，避免重复首屏 20 条。
+                            if (isContinuationPage) {
+                                pullBody.option.need_coco_conversation = false;
+                                pullBody.option.need_coco_bot = false;
+                                pullBody.option.need_pc_pin_chain = true;
+                                pullBody.option.pc_pin_query_type = 1;
+                            } else {
+                                if (pullBody.option.need_coco_conversation == null) pullBody.option.need_coco_conversation = true;
+                                if (pullBody.option.need_coco_bot == null) pullBody.option.need_coco_bot = true;
+                                if (pullBody.option.need_pc_pin_chain == null) pullBody.option.need_pc_pin_chain = true;
+                                if (pullBody.option.pc_pin_query_type == null) pullBody.option.pc_pin_query_type = 0;
+                            }
+
+                            body.cmd = Number(body.cmd || 3200) || 3200;
+                            body.sequence_id = genUuid();
+                            if (body.channel == null) body.channel = 2;
+                            if (body.version == null) body.version = '1';
+                            return body;
+                        };
+
+                        const requestModes = recentConvTemplateBody && typeof recentConvTemplateBody === 'object'
+                            ? ['template', 'fallback']
+                            : ['fallback'];
+
+                        let json = null;
+                        let lastReqError = '';
+                        for (const mode of requestModes) {
+                            const postBody = buildMainBody(mode);
+                            const resp = await fetch(url, {
+                                method: 'POST',
+                                credentials: 'include',
+                                headers: postHeaders,
+                                body: JSON.stringify(postBody)
+                            });
+
+                            const text = await resp.text();
+                            const parsed = safeParseJson(text);
+                            rawText = text;
+
+                            if (!resp.ok) {
+                                lastReqError = `${mode}: HTTP ${resp.status}`;
+                                continue;
+                            }
+                            if (!parsed) {
+                                lastReqError = `${mode}: non-json`;
+                                continue;
+                            }
+                            if (Number(parsed.status_code || 0) !== 0) {
+                                lastReqError = `${mode}: code=${parsed.status_code}, msg=${parsed.status_desc || 'unknown'}`;
+                                continue;
+                            }
+
+                            json = parsed;
+                            break;
+                        }
+
+                        if (!json) {
+                            throw new Error(lastReqError || 'request failed');
+                        }
+
+                        if (!firstJson) firstJson = json;
+
+                        const pageConversations = extractDoubaoRecentConversations(json);
+                        if (!pageConversations.length) {
+                            break;
+                        }
+
+                        let added = 0;
+                        pageConversations.forEach((item) => {
+                            const id = String(item?.id || '').trim();
+                            if (!id || seen.has(id)) return;
+                            seen.add(id);
+                            merged.push(item);
+                            added += 1;
+                        });
+
+                        const payload = json?.downlink_body?.pull_recent_conv_chain_downlink_body
+                            || json?.downlink_body?.pull_recent_conv_downlink_body
+                            || {};
+
+                        const hasMore = Boolean(payload?.has_more || payload?.hasMore)
+                            || pageConversations.length >= requestLimit;
+
+                        const nextConvVersion = resolveDoubaoNextConvCursor(payload, pageConversations);
+
+                        page += 1;
+                        if (!hasMore || added === 0) {
+                            keepPaging = false;
+                        } else {
+                            const normalized = String(nextConvVersion || '').trim();
+                            const currentCursorText = String(convVersionCursor == null ? '' : convVersionCursor).trim();
+                            if (!normalized || normalized === currentCursorText || normalized === lastCursorUsed) {
+                                keepPaging = false;
+                            } else {
+                                lastCursorUsed = currentCursorText;
+                                convVersionCursor = normalizeDoubaoConvVersionValue(normalized);
+                            }
+                        }
+                    }
+
+                    if (merged.length) {
+                        rememberDoubaoWebTabId(tabId);
+                        const finalConversations = merged
+                            .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))
+                            .slice(0, safeLimit);
+                        return {
+                            url,
+                            rawText,
+                            json: firstJson || {},
+                            conversations: finalConversations,
+                            requested: safeLimit,
+                            obtained: finalConversations.length,
+                            pages: page
+                        };
+                    }
+
+                    errors.push(`POST(main) ${tabId}: empty`);
+                } catch (e) {
+                    errors.push(`POST(main) ${tabId}: ${e.message || String(e)}`);
+                }
+            }
+
+            throw new Error(`recent_conv 请求失败（已重试 ${candidates.length} 个 web_tab_id）。${errors.slice(0, 4).join(' | ')}`);
         }
 
         function buildDoubaoArtifactUrl(codeId, version = '') {
@@ -3661,7 +5942,54 @@
             if (rawText == null) return '';
             const text = String(rawText).trim();
             if (!text) return '';
-            return parseDoubaoContentPayload(text);
+
+            // 豆包以外平台不做豆包专属清洗，避免影响 ChatGPT / 千问 的原始导出逻辑。
+            if (!isDoubao) return text;
+
+            const normalizeLines = (inputText) => {
+                const lines = String(inputText || '')
+                    .split(/\r?\n/)
+                    .map((x) => String(x || '').trim())
+                    .filter(Boolean);
+
+                const out = [];
+                const seen = new Set();
+                const push = (line) => {
+                    const t = String(line || '').trim();
+                    if (!t) return;
+                    const key = t.replace(/\s+/g, ' ');
+                    if (seen.has(key)) return;
+                    seen.add(key);
+                    out.push(t);
+                };
+
+                lines.forEach((line) => {
+                    // 原生 entities payload 行，直接跳过，避免“原生响应”污染展示。
+                    if (/^\{.*"entities"\s*:\s*\[.*"text"\s*:/i.test(line)) return;
+                    if (/^\{.*"entity_content"\s*:\s*\{.*"file"\s*:/i.test(line)) return;
+
+                    // 过滤附件 key / 预览 URL 噪音。
+                    if (/^R[A-Za-z0-9]{20,}$/i.test(line)) return;
+                    if (/^https?:\/\//i.test(line) && /(byteimg|tos-cn-|flow-sign|flow-imagex-sign)/i.test(line)) return;
+
+                    const parsed = parseDoubaoContentPayload(line);
+                    if (parsed && parsed !== line) {
+                        parsed
+                            .split(/\r?\n/)
+                            .map((x) => String(x || '').trim())
+                            .filter(Boolean)
+                            .forEach(push);
+                    } else {
+                        push(line);
+                    }
+                });
+
+                return out.join('\n').trim();
+            };
+
+            const parsed = parseDoubaoContentPayload(text);
+            const normalized = normalizeLines(parsed || text);
+            return normalized || (parsed || text);
         }
 
         function normalizeDoubaoCompareText(text) {
@@ -3820,6 +6148,963 @@
             }
         }
 
+        async function fetchDoubaoConversationMessagesByApi(convId, msgCursor = '') {
+            const req = buildDoubaoRequest(convId);
+            const pullBody = req?.bodyText ? safeParseJson(req.bodyText) : null;
+            const bodyObj = pullBody && typeof pullBody === 'object' ? pullBody : {
+                cmd: 3100,
+                uplink_body: {
+                    pull_singe_chain_uplink_body: {
+                        conversation_id: convId,
+                        anchor_index: Number.MAX_SAFE_INTEGER,
+                        conversation_type: 3,
+                        direction: 1,
+                        limit: 50,
+                        ext: {},
+                        filter: {
+                            index_list: []
+                        }
+                    }
+                },
+                sequence_id: genUuid(),
+                channel: 2,
+                version: '1'
+            };
+
+            if (!bodyObj.uplink_body || typeof bodyObj.uplink_body !== 'object') {
+                bodyObj.uplink_body = {};
+            }
+            if (!bodyObj.uplink_body.pull_singe_chain_uplink_body || typeof bodyObj.uplink_body.pull_singe_chain_uplink_body !== 'object') {
+                bodyObj.uplink_body.pull_singe_chain_uplink_body = {};
+            }
+
+            const pull = bodyObj.uplink_body.pull_singe_chain_uplink_body;
+            pull.conversation_id = convId;
+            pull.limit = Number(pull.limit || 50) || 50;
+            if (msgCursor) pull.msg_cursor = String(msgCursor);
+            else if ('msg_cursor' in pull) delete pull.msg_cursor;
+
+            bodyObj.sequence_id = genUuid();
+
+            const resp = await fetch(req.url, {
+                method: 'POST',
+                credentials: 'include',
+                headers: req.headers,
+                body: JSON.stringify(bodyObj)
+            });
+
+            const rawText = await resp.text();
+            const json = safeParseJson(rawText);
+            if (!resp.ok) {
+                throw new Error(`chain/single HTTP ${resp.status}`);
+            }
+            if (!json) {
+                throw new Error('chain/single 返回非 JSON');
+            }
+            if (Number(json.status_code || 0) !== 0) {
+                throw new Error(`chain/single status_code=${json.status_code}, msg=${json.status_desc || 'unknown'}`);
+            }
+
+            const payload = json?.downlink_body?.pull_singe_chain_downlink_body || {};
+            const parsed = await parseDoubaoSingleChainMessages(json, req.headers);
+
+            return {
+                parsed,
+                hasMore: Boolean(payload.has_more),
+                nextCursor: String(payload.msg_cursor || ''),
+                rawText
+            };
+        }
+
+        async function fetchDoubaoAllConversationMessages(convId, maxPages = 30, onProgress = () => {}) {
+            let cursor = '';
+            let page = 0;
+            let done = false;
+            const all = [];
+            const seen = new Set();
+
+            while (!done && page < maxPages) {
+                page += 1;
+                const res = await fetchDoubaoConversationMessagesByApi(convId, cursor);
+
+                res.parsed.forEach((m) => {
+                    const idKey = String(m.id || `${m.role}_${(m.text || '').slice(0, 48)}`);
+                    if (seen.has(idKey)) return;
+                    seen.add(idKey);
+                    all.push(m);
+                });
+
+                onProgress({ page, count: all.length, hasMore: res.hasMore, cursor: res.nextCursor });
+
+                if (!res.hasMore || !res.nextCursor || res.nextCursor === cursor) {
+                    done = true;
+                } else {
+                    cursor = res.nextCursor;
+                }
+            }
+
+            return {
+                messages: all,
+                pages: page
+            };
+        }
+
+        function exportDoubaoBatchConversations(conversations, format) {
+            const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '_');
+
+            if (format === 'json') {
+                const content = JSON.stringify({
+                    platform: 'Doubao',
+                    exportedAt: new Date().toISOString(),
+                    conversationCount: conversations.length,
+                    conversations
+                }, null, 2);
+                const blob = new Blob([content], { type: 'application/json;charset=utf-8' });
+                const a = document.createElement('a');
+                a.href = URL.createObjectURL(blob);
+                a.download = `豆包_批量导出_${stamp}.json`;
+                a.click();
+                URL.revokeObjectURL(a.href);
+                return;
+            }
+
+            if (format === 'md') {
+                const content = conversations.map((c, i) => {
+                    const header = `# ${i + 1}. ${c.title}\n\n- 会话ID: ${c.conversationId}\n- 更新时间: ${c.updatedAtText || '-'}\n- 消息数: ${c.messageCount}`;
+                    const body = (Array.isArray(c.messages) ? c.messages : []).map((m, idx) => `\n## ${idx + 1}. ${m.role === 'user' ? '用户' : '豆包'}\n\n${getDisplayTextForExport(m.text || '')}\n`).join('\n');
+                    return `${header}\n${body}`;
+                }).join('\n\n---\n\n');
+
+                const blob = new Blob([content], { type: 'text/markdown;charset=utf-8' });
+                const a = document.createElement('a');
+                a.href = URL.createObjectURL(blob);
+                a.download = `豆包_批量导出_${stamp}.md`;
+                a.click();
+                URL.revokeObjectURL(a.href);
+                return;
+            }
+
+            if (format === 'pdf') {
+                const win = window.open('', '_blank');
+                if (!win) {
+                    alert('无法打开 PDF 打印窗口，请检查浏览器是否拦截了弹窗。');
+                    return;
+                }
+
+                const renderText = (txt) => escapeHtml(getDisplayTextForExport(txt || '')).replace(/\n/g, '<br>');
+                const html = `
+                    <html>
+                    <head>
+                        <title>豆包批量导出 PDF</title>
+                        <style>
+                            @page { size: A4; margin: 14mm; }
+                            body { font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; color:#0f172a; margin:0; padding:0; }
+                            .conv { page-break-after: always; }
+                            .conv:last-child { page-break-after: auto; }
+                            .head { margin-bottom: 14px; border-bottom: 2px solid #1d4ed8; padding-bottom: 8px; }
+                            .title { font-size: 18px; font-weight: 700; }
+                            .meta { margin-top: 6px; color: #475569; font-size: 12px; line-height: 1.6; }
+                            .msg { border: 1px solid #e2e8f0; border-radius: 10px; padding: 10px 12px; margin: 10px 0; }
+                            .role { font-size: 12px; font-weight: 700; color: #1e40af; margin-bottom: 6px; }
+                            .text { font-size: 13px; line-height: 1.7; white-space: normal; word-break: break-word; }
+                        </style>
+                    </head>
+                    <body>
+                        ${conversations.map((c, i) => {
+                            const rows = (Array.isArray(c.messages) ? c.messages : []).map((m, idx) => `
+                                <div class="msg">
+                                    <div class="role">${idx + 1}. ${m.role === 'user' ? '用户' : '豆包'}</div>
+                                    <div class="text">${renderText(m.text || '')}</div>
+                                </div>
+                            `).join('');
+                            return `
+                                <section class="conv">
+                                    <div class="head">
+                                        <div class="title">${i + 1}. ${escapeHtml(c.title || `会话 ${c.conversationId || '-'}`)}</div>
+                                        <div class="meta">
+                                            会话ID: ${escapeHtml(c.conversationId || '-')}<br>
+                                            更新时间: ${escapeHtml(c.updatedAtText || '-')}<br>
+                                            消息数: ${escapeHtml(String(c.messageCount || 0))}
+                                        </div>
+                                    </div>
+                                    ${rows || '<div class="meta">该会话暂无可导出的消息内容。</div>'}
+                                </section>
+                            `;
+                        }).join('')}
+                    </body>
+                    </html>
+                `;
+
+                win.document.open();
+                win.document.write(html);
+                win.document.close();
+                win.focus();
+                setTimeout(() => {
+                    try {
+                        win.print();
+                    } catch (_) {
+                        // ignore
+                    }
+                }, 120);
+                return;
+            }
+
+            const content = conversations.map((c, i) => {
+                const header = `${i + 1}. ${c.title}\n会话ID: ${c.conversationId}\n更新时间: ${c.updatedAtText || '-'}\n消息数: ${c.messageCount}`;
+                const body = (Array.isArray(c.messages) ? c.messages : []).map((m, idx) => `\n[${idx + 1}] ${m.role === 'user' ? '用户' : '豆包'}\n${getDisplayTextForExport(m.text || '')}`).join('\n');
+                return `${header}\n${body}`;
+            }).join('\n\n==============================\n\n');
+
+            const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(blob);
+            a.download = `豆包_批量导出_${stamp}.txt`;
+            a.click();
+            URL.revokeObjectURL(a.href);
+        }
+
+        function exportQwenBatchConversations(conversations, format) {
+            const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '_');
+
+            if (format === 'json') {
+                const content = JSON.stringify({
+                    platform: 'Qwen',
+                    exportedAt: new Date().toISOString(),
+                    conversationCount: conversations.length,
+                    conversations
+                }, null, 2);
+                const blob = new Blob([content], { type: 'application/json;charset=utf-8' });
+                const a = document.createElement('a');
+                a.href = URL.createObjectURL(blob);
+                a.download = `千问_批量导出_${stamp}.json`;
+                a.click();
+                URL.revokeObjectURL(a.href);
+                return;
+            }
+
+            if (format === 'md') {
+                const content = conversations.map((c, i) => {
+                    const header = `# ${i + 1}. ${c.title}\n\n- 会话ID: ${c.conversationId}\n- 更新时间: ${c.updatedAtText || '-'}\n- 消息数: ${c.messageCount}`;
+                    const body = (Array.isArray(c.messages) ? c.messages : []).map((m, idx) => `\n## ${idx + 1}. ${m.role === 'user' ? '用户' : '千问'}\n\n${getDisplayTextForExport(m.text || '')}\n`).join('\n');
+                    return `${header}\n${body}`;
+                }).join('\n\n---\n\n');
+
+                const blob = new Blob([content], { type: 'text/markdown;charset=utf-8' });
+                const a = document.createElement('a');
+                a.href = URL.createObjectURL(blob);
+                a.download = `千问_批量导出_${stamp}.md`;
+                a.click();
+                URL.revokeObjectURL(a.href);
+                return;
+            }
+
+            if (format === 'pdf') {
+                const win = window.open('', '_blank');
+                if (!win) {
+                    alert('无法打开 PDF 打印窗口，请检查浏览器是否拦截了弹窗。');
+                    return;
+                }
+
+                const renderText = (txt) => escapeHtml(getDisplayTextForExport(txt || '')).replace(/\n/g, '<br>');
+                const html = `
+                    <html>
+                    <head>
+                        <title>千问批量导出 PDF</title>
+                        <style>
+                            @page { size: A4; margin: 14mm; }
+                            body { font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; color:#0f172a; margin:0; padding:0; }
+                            .conv { page-break-after: always; }
+                            .conv:last-child { page-break-after: auto; }
+                            .head { margin-bottom: 14px; border-bottom: 2px solid #1d4ed8; padding-bottom: 8px; }
+                            .title { font-size: 18px; font-weight: 700; }
+                            .meta { margin-top: 6px; color: #475569; font-size: 12px; line-height: 1.6; }
+                            .msg { border: 1px solid #e2e8f0; border-radius: 10px; padding: 10px 12px; margin: 10px 0; }
+                            .role { font-size: 12px; font-weight: 700; color: #1e40af; margin-bottom: 6px; }
+                            .text { font-size: 13px; line-height: 1.7; white-space: normal; word-break: break-word; }
+                        </style>
+                    </head>
+                    <body>
+                        ${conversations.map((c, i) => {
+                            const rows = (Array.isArray(c.messages) ? c.messages : []).map((m, idx) => `
+                                <div class="msg">
+                                    <div class="role">${idx + 1}. ${m.role === 'user' ? '用户' : '千问'}</div>
+                                    <div class="text">${renderText(m.text || '')}</div>
+                                </div>
+                            `).join('');
+                            return `
+                                <section class="conv">
+                                    <div class="head">
+                                        <div class="title">${i + 1}. ${escapeHtml(c.title || `会话 ${c.conversationId || '-'}`)}</div>
+                                        <div class="meta">
+                                            会话ID: ${escapeHtml(c.conversationId || '-')}<br>
+                                            更新时间: ${escapeHtml(c.updatedAtText || '-')}<br>
+                                            消息数: ${escapeHtml(String(c.messageCount || 0))}
+                                        </div>
+                                    </div>
+                                    ${rows || '<div class="meta">该会话暂无可导出的消息内容。</div>'}
+                                </section>
+                            `;
+                        }).join('')}
+                    </body>
+                    </html>
+                `;
+
+                win.document.open();
+                win.document.write(html);
+                win.document.close();
+                win.focus();
+                setTimeout(() => {
+                    try { win.print(); } catch (_) {}
+                }, 120);
+                return;
+            }
+
+            const content = conversations.map((c, i) => {
+                const header = `${i + 1}. ${c.title}\n会话ID: ${c.conversationId}\n更新时间: ${c.updatedAtText || '-'}\n消息数: ${c.messageCount}`;
+                const body = (Array.isArray(c.messages) ? c.messages : []).map((m, idx) => `\n[${idx + 1}] ${m.role === 'user' ? '用户' : '千问'}\n${getDisplayTextForExport(m.text || '')}`).join('\n');
+                return `${header}\n${body}`;
+            }).join('\n\n==============================\n\n');
+
+            const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(blob);
+            a.download = `千问_批量导出_${stamp}.txt`;
+            a.click();
+            URL.revokeObjectURL(a.href);
+        }
+
+        function openDoubaoBatchExportModal() {
+            const overlay = document.createElement('div');
+            overlay.style.cssText = 'position:fixed;inset:0;z-index:1000001;background:rgba(2,6,23,0.55);display:flex;align-items:center;justify-content:center;padding:24px;backdrop-filter:blur(3px);';
+
+            const modal = document.createElement('div');
+            modal.style.cssText = 'width:min(980px,94vw);height:min(82vh,860px);background:#fff;border-radius:16px;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 20px 60px rgba(0,0,0,0.25);';
+
+            modal.innerHTML = `
+                <div style="padding:16px 20px;border-bottom:1px solid #e5e7eb;display:flex;justify-content:space-between;align-items:center;background:linear-gradient(180deg,#f8fafc 0%, #ffffff 100%);">
+                    <div>
+                        <div style="font-size:16px;font-weight:700;color:#0f172a;">豆包批量导出</div>
+                    </div>
+                    <button id="db-batch-close" style="border:1px solid #d1d5db;background:#fff;border-radius:8px;padding:6px 10px;cursor:pointer;font-size:12px;color:#334155;">关闭</button>
+                </div>
+                <div class="db-batch-scroll" style="padding:16px 20px;overflow:auto;background:#f8fafc;">
+                    <div style="border:1px solid #e2e8f0;border-radius:12px;padding:14px;background:#fff;">
+                        <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">
+                            <div style="font-size:13px;font-weight:700;color:#0f172a;">历史会话</div>
+                            <label style="display:flex;align-items:center;gap:8px;font-size:12px;color:#475569;">
+                                <span>获取数量</span>
+                                <input id="db-batch-limit" type="text" inputmode="numeric" value="20" style="width:72px;box-sizing:border-box;border:1px solid #d1d5db;border-radius:8px;padding:6px 8px;font-size:12px;background:#fff;color:#0f172a;" />
+                            </label>
+                        </div>
+                        <div id="db-batch-status" style="font-size:11px;color:#64748b;margin-top:8px;">正在加载历史会话...</div>
+                        <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-top:12px;">
+                            <div style="display:flex;align-items:center;gap:8px;">
+                                <button id="db-batch-toggle-select" style="border:1px solid #93c5fd;background:#eff6ff;border-radius:8px;font-size:12px;padding:8px 12px;cursor:pointer;color:#1d4ed8;font-weight:600;">全选</button>
+                            </div>
+                            <div style="position:relative;display:flex;justify-content:flex-end;align-items:center;">
+                                <button id="db-batch-export-menu-trigger" style="border:1px solid #2563eb;background:#2563eb;color:#fff;border-radius:8px;font-size:12px;padding:8px 14px;cursor:pointer;font-weight:600;display:flex;align-items:center;gap:6px;">
+                                    <span>导出</span><span id="db-batch-export-menu-icon" style="font-size:10px;opacity:.9;display:inline-block;transition:transform .2s ease;transform:rotate(0deg);">▼</span>
+                                </button>
+                                <div id="db-batch-export-menu" style="position:absolute;right:0;top:40px;width:140px;background:#fff;border:1px solid #dbe3ee;border-radius:10px;box-shadow:0 10px 30px rgba(15,23,42,.15);padding:8px;z-index:5;opacity:0;pointer-events:none;transform:translateY(-8px) scale(0.96);transition:opacity .22s cubic-bezier(0.22, 0.61, 0.36, 1), transform .22s cubic-bezier(0.22, 0.61, 0.36, 1);">
+                                    <button class="db-batch-export-item" data-format="json" style="display:block;width:100%;text-align:left;background:#f39c12;color:#ffffff;border-radius:8px;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;">JSON</button>
+                                    <button class="db-batch-export-item" data-format="md" style="display:block;width:100%;text-align:left;background:#333333;color:#ffffff;border-radius:8px;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;margin-top:6px;">Markdown</button>
+                                    <button class="db-batch-export-item" data-format="txt" style="display:block;width:100%;text-align:left;background:#28a745;color:#ffffff;border-radius:8px;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;margin-top:6px;">TXT</button>
+                                    <button class="db-batch-export-item" data-format="pdf" style="display:block;width:100%;text-align:left;background:#dc3545;color:#ffffff;border-radius:8px;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;margin-top:6px;">PDF</button>
+                                </div>
+                            </div>
+                        </div>
+                        <div id="db-batch-list" style="max-height:520px;overflow:auto;border:1px solid #e5e7eb;border-radius:10px;margin-top:12px;background:#fff;"></div>
+                    </div>
+                </div>
+                <style>
+                    .db-batch-scroll::-webkit-scrollbar,
+                    #db-batch-list::-webkit-scrollbar {
+                        width: 8px;
+                        height: 8px;
+                    }
+                    .db-batch-scroll::-webkit-scrollbar-track,
+                    #db-batch-list::-webkit-scrollbar-track {
+                        background: transparent;
+                    }
+                    .db-batch-scroll::-webkit-scrollbar-thumb,
+                    #db-batch-list::-webkit-scrollbar-thumb {
+                        background: #cbd5e1;
+                        border-radius: 999px;
+                    }
+                    .db-batch-scroll::-webkit-scrollbar-thumb:hover,
+                    #db-batch-list::-webkit-scrollbar-thumb:hover {
+                        background: #94a3b8;
+                    }
+                    .db-batch-loading {
+                        display:flex;
+                        align-items:center;
+                        justify-content:center;
+                        flex-direction:column;
+                        gap:10px;
+                        padding:28px 12px;
+                        color:#64748b;
+                        font-size:12px;
+                    }
+                    .db-batch-spinner {
+                        width:22px;
+                        height:22px;
+                        border-radius:999px;
+                        border:2px solid #cbd5e1;
+                        border-top-color:#2563eb;
+                        animation: db-batch-spin 0.9s linear infinite;
+                    }
+                    @keyframes db-batch-spin {
+                        from { transform: rotate(0deg); }
+                        to { transform: rotate(360deg); }
+                    }
+                    .db-batch-item {
+                        display:flex;
+                        gap:10px;
+                        align-items:flex-start;
+                        padding:10px 12px;
+                        border-bottom:1px solid #f1f5f9;
+                        cursor:pointer;
+                        transition:background .2s;
+                    }
+                    .db-batch-item:hover {
+                        background:#f8fafc;
+                    }
+                    .db-batch-ck {
+                        appearance:none;
+                        -webkit-appearance:none;
+                        width:16px;
+                        height:16px;
+                        border:1.5px solid #94a3b8;
+                        border-radius:4px;
+                        margin-top:2px;
+                        background:#fff;
+                        cursor:pointer;
+                        position:relative;
+                        flex-shrink:0;
+                        display:grid;
+                        place-items:center;
+                    }
+                    .db-batch-ck:checked {
+                        border-color:#2563eb;
+                        background:#2563eb;
+                    }
+                    .db-batch-ck:checked::after {
+                        content:'';
+                        position:absolute;
+                        left:50%;
+                        top:50%;
+                        width:5px;
+                        height:9px;
+                        border:solid #fff;
+                        border-width:0 2px 2px 0;
+                        transform:translate(-50%, -58%) rotate(45deg);
+                    }
+                    .db-batch-title {
+                        font-size:12px;
+                        color:#0f172a;
+                        line-height:1.5;
+                        font-weight:600;
+                        margin:0;
+                    }
+                    .db-batch-meta {
+                        display:grid;
+                        grid-template-columns: repeat(4, minmax(0, 1fr));
+                        gap:6px;
+                        margin-top:5px;
+                    }
+                    .db-batch-tag {
+                        font-size:11px;
+                        color:#475569;
+                        background:#f8fafc;
+                        border:1px solid #e2e8f0;
+                        border-radius:8px;
+                        padding:4px 8px;
+                        line-height:1.4;
+                        white-space:nowrap;
+                        overflow:hidden;
+                        text-overflow:ellipsis;
+                    }
+                    .db-batch-index {
+                        margin-left:auto;
+                        flex-shrink:0;
+                        align-self:center;
+                        min-width:34px;
+                        text-align:center;
+                        font-size:11px;
+                        font-weight:700;
+                        color:#1d4ed8;
+                        background:#eff6ff;
+                        border:1px solid #bfdbfe;
+                        border-radius:999px;
+                        padding:4px 8px;
+                        line-height:1.2;
+                    }
+                    @media (max-width: 860px) {
+                        .db-batch-meta {
+                            grid-template-columns: repeat(2, minmax(0, 1fr));
+                        }
+                    }
+                </style>
+            `;
+
+            overlay.appendChild(modal);
+            document.body.appendChild(overlay);
+
+            let recentConversations = [];
+            let loading = false;
+            const listEl = modal.querySelector('#db-batch-list');
+            const statusEl = modal.querySelector('#db-batch-status');
+            const limitInput = modal.querySelector('#db-batch-limit');
+            const toggleSelectBtn = modal.querySelector('#db-batch-toggle-select');
+            const exportMenuTrigger = modal.querySelector('#db-batch-export-menu-trigger');
+            const exportMenu = modal.querySelector('#db-batch-export-menu');
+            const exportMenuIcon = modal.querySelector('#db-batch-export-menu-icon');
+
+            const close = () => {
+                if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
+            };
+
+            const setLoading = (isLoading) => {
+                loading = Boolean(isLoading);
+                if (loading) {
+                    listEl.innerHTML = '<div class="db-batch-loading"><div class="db-batch-spinner"></div><div>正在加载历史会话...</div></div>';
+                }
+            };
+
+            const hideExportMenu = () => {
+                exportMenu.style.opacity = '0';
+                exportMenu.style.pointerEvents = 'none';
+                exportMenu.style.transform = 'translateY(-8px) scale(0.96)';
+                if (exportMenuIcon) exportMenuIcon.style.transform = 'rotate(0deg)';
+            };
+
+            const showExportMenu = () => {
+                exportMenu.style.opacity = '1';
+                exportMenu.style.pointerEvents = 'auto';
+                exportMenu.style.transform = 'translateY(0) scale(1)';
+                if (exportMenuIcon) exportMenuIcon.style.transform = 'rotate(180deg)';
+            };
+
+            const getRecentLimit = () => {
+                const inputRaw = String(limitInput.value || '').trim();
+                const onlyNum = inputRaw.replace(/[^\d]/g, '');
+                const raw = Number(onlyNum || 20);
+                if (onlyNum !== inputRaw) {
+                    statusEl.textContent = '获取数量需为整数，已自动过滤非数字字符';
+                }
+                const n = Number.isFinite(raw) ? Math.floor(raw) : 20;
+                const safe = Math.max(1, Math.min(100, n || 20));
+                limitInput.value = String(safe);
+                return safe;
+            };
+
+            const renderRecentList = () => {
+                if (!recentConversations.length) {
+                    listEl.innerHTML = '<div style="padding:14px;font-size:12px;color:#64748b;">未获取到历史会话，请稍后重试或调整获取数量。</div>';
+                    return;
+                }
+
+                listEl.innerHTML = recentConversations.map((c, idx) => `
+                    <label class="db-batch-item">
+                        <input type="checkbox" class="db-batch-ck" data-id="${escapeHtml(c.id)}" checked>
+                        <div style="flex:1;min-width:0;">
+                            <p class="db-batch-title">${escapeHtml(c.title || `会话 ${c.id}`)}</p>
+                            <div class="db-batch-meta">
+                                <span class="db-batch-tag">会话编号: ${escapeHtml(c.id || '-')}</span>
+                                <span class="db-batch-tag">消息数: ${escapeHtml(Number.isFinite(c.badgeCount) ? String(c.badgeCount) : '-')}</span>
+                                <span class="db-batch-tag">更新时间: ${escapeHtml(c.updatedAtText || '-')}</span>
+                                <span class="db-batch-tag">创建时间: ${escapeHtml(c.createdAtText || '-')}</span>
+                            </div>
+                        </div>
+                        <span class="db-batch-index">#${idx + 1}</span>
+                    </label>
+                `).join('');
+                updateSelectToggleButton();
+            };
+
+            const areAllSelected = () => {
+                const items = Array.from(listEl.querySelectorAll('.db-batch-ck'));
+                if (!items.length) return false;
+                return items.every((ck) => ck.checked);
+            };
+
+            const updateSelectToggleButton = () => {
+                const allSelected = areAllSelected();
+                if (allSelected) {
+                    toggleSelectBtn.textContent = '全不选';
+                    toggleSelectBtn.style.borderColor = '#fecaca';
+                    toggleSelectBtn.style.background = '#fef2f2';
+                    toggleSelectBtn.style.color = '#b91c1c';
+                } else {
+                    toggleSelectBtn.textContent = '全选';
+                    toggleSelectBtn.style.borderColor = '#93c5fd';
+                    toggleSelectBtn.style.background = '#eff6ff';
+                    toggleSelectBtn.style.color = '#1d4ed8';
+                }
+            };
+
+            const loadRecentConversations = async () => {
+                if (loading) return;
+                const limit = getRecentLimit();
+                hideExportMenu();
+                setLoading(true);
+                statusEl.textContent = `正在加载历史会话（数量: ${limit}）...`;
+                try {
+                    const result = await fetchDoubaoRecentConversations('', limit);
+                    recentConversations = result.conversations;
+                    const requested = Number(result?.requested || limit);
+                    const obtained = Number(result?.obtained || recentConversations.length);
+                    statusEl.textContent = `已加载 ${obtained}/${requested} 个历史会话`;
+                    renderRecentList();
+                } catch (e) {
+                    recentConversations = [];
+                    statusEl.textContent = '加载历史会话失败';
+                    listEl.innerHTML = `<div style="padding:14px;font-size:12px;color:#b91c1c;">加载失败: ${escapeHtml(e.message || String(e))}</div>`;
+                } finally {
+                    loading = false;
+                }
+            };
+
+            const getSelectedConversations = () => {
+                const map = new Map(recentConversations.map((c) => [c.id, c]));
+                return Array.from(listEl.querySelectorAll('.db-batch-ck:checked'))
+                    .map((el) => map.get(el.getAttribute('data-id')))
+                    .filter(Boolean);
+            };
+
+            const runBatchExport = async (format) => {
+                hideExportMenu();
+                const selected = getSelectedConversations();
+                if (!selected.length) {
+                    alert('请先勾选至少一个历史会话');
+                    return;
+                }
+
+                const out = [];
+                let failCount = 0;
+
+                for (let i = 0; i < selected.length; i += 1) {
+                    const conv = selected[i];
+                    try {
+                        const allRes = await fetchDoubaoAllConversationMessages(conv.id, 30, () => {});
+
+                        out.push({
+                            conversationId: conv.id,
+                            title: conv.title,
+                            updatedAt: conv.updatedAt || 0,
+                            updatedAtText: conv.updatedAtText || '',
+                            pages: allRes.pages,
+                            messageCount: allRes.messages.length,
+                            messages: allRes.messages.map((m) => ({
+                                role: m.role,
+                                text: String(m.text || ''),
+                                isArtifact: Boolean(m.isArtifact)
+                            }))
+                        });
+                    } catch (e) {
+                        failCount += 1;
+                        console.warn('AI-Chat-Nodes: 豆包批量导出会话失败', conv?.id, e);
+                    }
+                }
+
+                if (!out.length) {
+                    alert('无可导出的会话数据');
+                    return;
+                }
+
+                exportDoubaoBatchConversations(out, format);
+                alert(`批量导出完成：成功 ${out.length} 个会话${failCount ? `，失败 ${failCount} 个` : ''}`);
+            };
+
+            modal.querySelector('#db-batch-close').addEventListener('click', close);
+            overlay.addEventListener('click', (e) => {
+                if (e.target === overlay) close();
+            });
+
+            exportMenuTrigger.addEventListener('click', (e) => {
+                e.stopPropagation();
+                if (exportMenu.style.opacity === '1') hideExportMenu();
+                else showExportMenu();
+            });
+
+            modal.addEventListener('click', (e) => {
+                const target = e.target;
+                if (target !== exportMenu && target !== exportMenuTrigger && !exportMenu.contains(target)) {
+                    hideExportMenu();
+                }
+            });
+
+            limitInput.addEventListener('change', () => {
+                loadRecentConversations();
+            });
+            limitInput.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    loadRecentConversations();
+                }
+            });
+
+            toggleSelectBtn.addEventListener('click', () => {
+                const allSelected = areAllSelected();
+                listEl.querySelectorAll('.db-batch-ck').forEach((ck) => {
+                    ck.checked = !allSelected;
+                });
+                updateSelectToggleButton();
+            });
+
+            listEl.addEventListener('change', (e) => {
+                if (e.target && e.target.classList.contains('db-batch-ck')) {
+                    updateSelectToggleButton();
+                }
+            });
+
+            modal.querySelectorAll('.db-batch-export-item').forEach((btn) => {
+                btn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    runBatchExport(btn.getAttribute('data-format'));
+                });
+            });
+
+            loadRecentConversations();
+        }
+
+        function openQwenBatchExportModal() {
+            const overlay = document.createElement('div');
+            overlay.style.cssText = 'position:fixed;inset:0;z-index:1000001;background:rgba(2,6,23,0.55);display:flex;align-items:center;justify-content:center;padding:24px;backdrop-filter:blur(3px);';
+
+            const modal = document.createElement('div');
+            modal.style.cssText = 'width:min(980px,94vw);height:min(82vh,860px);background:#fff;border-radius:16px;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 20px 60px rgba(0,0,0,0.25);';
+
+            modal.innerHTML = `
+                <div style="padding:16px 20px;border-bottom:1px solid #e5e7eb;display:flex;justify-content:space-between;align-items:center;background:linear-gradient(180deg,#f8fafc 0%, #ffffff 100%);">
+                    <div>
+                        <div style="font-size:16px;font-weight:700;color:#0f172a;">千问批量导出</div>
+                    </div>
+                    <button id="qw-batch-close" style="border:1px solid #d1d5db;background:#fff;border-radius:8px;padding:6px 10px;cursor:pointer;font-size:12px;color:#334155;">关闭</button>
+                </div>
+                <div class="db-batch-scroll" style="padding:16px 20px;overflow:auto;background:#f8fafc;">
+                    <div style="border:1px solid #e2e8f0;border-radius:12px;padding:14px;background:#fff;">
+                        <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">
+                            <div style="font-size:13px;font-weight:700;color:#0f172a;">历史会话</div>
+                            <label style="display:flex;align-items:center;gap:8px;font-size:12px;color:#475569;">
+                                <span>获取数量</span>
+                                <input id="qw-batch-limit" type="text" inputmode="numeric" value="50" style="width:72px;box-sizing:border-box;border:1px solid #d1d5db;border-radius:8px;padding:6px 8px;font-size:12px;background:#fff;color:#0f172a;" />
+                            </label>
+                        </div>
+                        <div id="qw-batch-status" style="font-size:11px;color:#64748b;margin-top:8px;">正在加载历史会话...</div>
+                        <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-top:12px;">
+                            <div style="display:flex;align-items:center;gap:8px;">
+                                <button id="qw-batch-toggle-select" style="border:1px solid #93c5fd;background:#eff6ff;border-radius:8px;font-size:12px;padding:8px 12px;cursor:pointer;color:#1d4ed8;font-weight:600;">全选</button>
+                            </div>
+                            <div style="position:relative;display:flex;justify-content:flex-end;align-items:center;">
+                                <button id="qw-batch-export-menu-trigger" style="border:1px solid #2563eb;background:#2563eb;color:#fff;border-radius:8px;font-size:12px;padding:8px 14px;cursor:pointer;font-weight:600;display:flex;align-items:center;gap:6px;">
+                                    <span>导出</span><span id="qw-batch-export-menu-icon" style="font-size:10px;opacity:.9;display:inline-block;transition:transform .2s ease;transform:rotate(0deg);">▼</span>
+                                </button>
+                                <div id="qw-batch-export-menu" style="position:absolute;right:0;top:40px;width:140px;background:#fff;border:1px solid #dbe3ee;border-radius:10px;box-shadow:0 10px 30px rgba(15,23,42,.15);padding:8px;z-index:5;opacity:0;pointer-events:none;transform:translateY(-8px) scale(0.96);transition:opacity .22s cubic-bezier(0.22, 0.61, 0.36, 1), transform .22s cubic-bezier(0.22, 0.61, 0.36, 1);">
+                                    <button class="qw-batch-export-item" data-format="json" style="display:block;width:100%;text-align:left;background:#f39c12;color:#ffffff;border-radius:8px;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;">JSON</button>
+                                    <button class="qw-batch-export-item" data-format="md" style="display:block;width:100%;text-align:left;background:#333333;color:#ffffff;border-radius:8px;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;margin-top:6px;">Markdown</button>
+                                    <button class="qw-batch-export-item" data-format="txt" style="display:block;width:100%;text-align:left;background:#28a745;color:#ffffff;border-radius:8px;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;margin-top:6px;">TXT</button>
+                                    <button class="qw-batch-export-item" data-format="pdf" style="display:block;width:100%;text-align:left;background:#dc3545;color:#ffffff;border-radius:8px;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;margin-top:6px;">PDF</button>
+                                </div>
+                            </div>
+                        </div>
+                        <div id="qw-batch-list" style="max-height:520px;overflow:auto;border:1px solid #e5e7eb;border-radius:10px;margin-top:12px;background:#fff;"></div>
+                    </div>
+                </div>
+                <style>
+                    .db-batch-scroll::-webkit-scrollbar,
+                    #qw-batch-list::-webkit-scrollbar { width: 8px; height: 8px; }
+                    .db-batch-scroll::-webkit-scrollbar-track,
+                    #qw-batch-list::-webkit-scrollbar-track { background: transparent; }
+                    .db-batch-scroll::-webkit-scrollbar-thumb,
+                    #qw-batch-list::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 999px; }
+                    .db-batch-scroll::-webkit-scrollbar-thumb:hover,
+                    #qw-batch-list::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+                    .db-batch-loading { display:flex; align-items:center; justify-content:center; flex-direction:column; gap:10px; padding:28px 12px; color:#64748b; font-size:12px; }
+                    .db-batch-spinner { width:22px; height:22px; border-radius:999px; border:2px solid #cbd5e1; border-top-color:#2563eb; animation: db-batch-spin 0.9s linear infinite; }
+                    @keyframes db-batch-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+                    .db-batch-item { display:flex; gap:10px; align-items:flex-start; padding:10px 12px; border-bottom:1px solid #f1f5f9; cursor:pointer; transition:background .2s; }
+                    .db-batch-item:hover { background:#f8fafc; }
+                    .db-batch-ck { appearance:none; -webkit-appearance:none; width:16px; height:16px; border:1.5px solid #94a3b8; border-radius:4px; margin-top:2px; background:#fff; cursor:pointer; position:relative; flex-shrink:0; display:grid; place-items:center; }
+                    .db-batch-ck:checked { border-color:#2563eb; background:#2563eb; }
+                    .db-batch-ck:checked::after { content:''; position:absolute; left:50%; top:50%; width:5px; height:9px; border:solid #fff; border-width:0 2px 2px 0; transform:translate(-50%, -58%) rotate(45deg); }
+                    .db-batch-title { font-size:12px; color:#0f172a; line-height:1.5; font-weight:600; margin:0; }
+                    .db-batch-meta { display:grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap:6px; margin-top:5px; }
+                    .db-batch-tag { font-size:11px; color:#475569; background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; padding:4px 8px; line-height:1.4; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+                    .db-batch-index { margin-left:auto; flex-shrink:0; align-self:center; min-width:34px; text-align:center; font-size:11px; font-weight:700; color:#1d4ed8; background:#eff6ff; border:1px solid #bfdbfe; border-radius:999px; padding:4px 8px; line-height:1.2; }
+                    @media (max-width: 860px) { .db-batch-meta { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+                </style>
+            `;
+
+            overlay.appendChild(modal);
+            document.body.appendChild(overlay);
+
+            let recentConversations = [];
+            let loading = false;
+            const listEl = modal.querySelector('#qw-batch-list');
+            const statusEl = modal.querySelector('#qw-batch-status');
+            const limitInput = modal.querySelector('#qw-batch-limit');
+            const toggleSelectBtn = modal.querySelector('#qw-batch-toggle-select');
+            const exportMenuTrigger = modal.querySelector('#qw-batch-export-menu-trigger');
+            const exportMenu = modal.querySelector('#qw-batch-export-menu');
+            const exportMenuIcon = modal.querySelector('#qw-batch-export-menu-icon');
+
+            const close = () => {
+                if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
+            };
+            const hideExportMenu = () => {
+                exportMenu.style.opacity = '0';
+                exportMenu.style.pointerEvents = 'none';
+                exportMenu.style.transform = 'translateY(-8px) scale(0.96)';
+                if (exportMenuIcon) exportMenuIcon.style.transform = 'rotate(0deg)';
+            };
+            const showExportMenu = () => {
+                exportMenu.style.opacity = '1';
+                exportMenu.style.pointerEvents = 'auto';
+                exportMenu.style.transform = 'translateY(0) scale(1)';
+                if (exportMenuIcon) exportMenuIcon.style.transform = 'rotate(180deg)';
+            };
+            const getRecentLimit = () => {
+                const inputRaw = String(limitInput.value || '').trim();
+                const onlyNum = inputRaw.replace(/[^\d]/g, '');
+                const raw = Number(onlyNum || 50);
+                const n = Number.isFinite(raw) ? Math.floor(raw) : 50;
+                const safe = Math.max(1, Math.min(100, n || 50));
+                limitInput.value = String(safe);
+                return safe;
+            };
+            const areAllSelected = () => {
+                const items = Array.from(listEl.querySelectorAll('.db-batch-ck'));
+                return items.length ? items.every((ck) => ck.checked) : false;
+            };
+            const updateSelectToggleButton = () => {
+                const allSelected = areAllSelected();
+                toggleSelectBtn.textContent = allSelected ? '全不选' : '全选';
+            };
+            const renderRecentList = () => {
+                if (!recentConversations.length) {
+                    listEl.innerHTML = '<div style="padding:14px;font-size:12px;color:#64748b;">未获取到历史会话，请稍后重试。</div>';
+                    return;
+                }
+                listEl.innerHTML = recentConversations.map((c, idx) => `
+                    <label class="db-batch-item">
+                        <input type="checkbox" class="db-batch-ck" data-id="${escapeHtml(c.id)}" checked>
+                        <div style="flex:1;min-width:0;">
+                            <p class="db-batch-title">${escapeHtml(c.title || `会话 ${c.id}`)}</p>
+                            <div class="db-batch-meta">
+                                <span class="db-batch-tag">会话编号: ${escapeHtml(c.id || '-')}</span>
+                                <span class="db-batch-tag">消息数: ${escapeHtml(Number.isFinite(c.badgeCount) ? String(c.badgeCount) : '-')}</span>
+                                <span class="db-batch-tag">更新时间: ${escapeHtml(c.updatedAtText || '-')}</span>
+                                <span class="db-batch-tag">创建时间: ${escapeHtml(c.createdAtText || '-')}</span>
+                            </div>
+                        </div>
+                        <span class="db-batch-index">#${idx + 1}</span>
+                    </label>
+                `).join('');
+                updateSelectToggleButton();
+            };
+            const loadRecentConversations = async () => {
+                if (loading) return;
+                loading = true;
+                const limit = getRecentLimit();
+                hideExportMenu();
+                listEl.innerHTML = '<div class="db-batch-loading"><div class="db-batch-spinner"></div><div>正在加载历史会话...</div></div>';
+                statusEl.textContent = `正在加载历史会话（数量: ${limit}）...`;
+                try {
+                    const result = await fetchQwenRecentConversations(limit, 5);
+                    recentConversations = result.conversations;
+                    statusEl.textContent = `已加载 ${Number(result?.obtained || recentConversations.length)}/${Number(result?.requested || limit)} 个历史会话`;
+                    renderRecentList();
+                } catch (e) {
+                    recentConversations = [];
+                    statusEl.textContent = '加载历史会话失败';
+                    listEl.innerHTML = `<div style="padding:14px;font-size:12px;color:#b91c1c;">加载失败: ${escapeHtml(e.message || String(e))}</div>`;
+                } finally {
+                    loading = false;
+                }
+            };
+            const getSelectedConversations = () => {
+                const map = new Map(recentConversations.map((c) => [c.id, c]));
+                return Array.from(listEl.querySelectorAll('.db-batch-ck:checked'))
+                    .map((el) => map.get(el.getAttribute('data-id')))
+                    .filter(Boolean);
+            };
+            const runBatchExport = async (format) => {
+                hideExportMenu();
+                const selected = getSelectedConversations();
+                if (!selected.length) {
+                    alert('请先勾选至少一个历史会话');
+                    return;
+                }
+                const out = [];
+                let failCount = 0;
+                for (let i = 0; i < selected.length; i += 1) {
+                    const conv = selected[i];
+                    try {
+                        const allRes = await fetchQwenAllConversationMessages(conv.id, 20, () => {});
+                        out.push({
+                            conversationId: conv.id,
+                            title: conv.title,
+                            updatedAt: conv.updatedAt || 0,
+                            updatedAtText: conv.updatedAtText || '',
+                            pages: allRes.pages,
+                            messageCount: allRes.messages.length,
+                            messages: allRes.messages.map((m) => ({
+                                role: m.role,
+                                text: String(m.text || '')
+                            }))
+                        });
+                    } catch (e) {
+                        failCount += 1;
+                        console.warn('AI-Chat-Nodes: 千问批量导出会话失败', conv?.id, e);
+                    }
+                }
+                if (!out.length) {
+                    alert('无可导出的会话数据');
+                    return;
+                }
+                exportQwenBatchConversations(out, format);
+                alert(`批量导出完成：成功 ${out.length} 个会话${failCount ? `，失败 ${failCount} 个` : ''}`);
+            };
+
+            modal.querySelector('#qw-batch-close').addEventListener('click', close);
+            overlay.addEventListener('click', (e) => {
+                if (e.target === overlay) close();
+            });
+            exportMenuTrigger.addEventListener('click', (e) => {
+                e.stopPropagation();
+                if (exportMenu.style.opacity === '1') hideExportMenu();
+                else showExportMenu();
+            });
+            modal.addEventListener('click', (e) => {
+                const target = e.target;
+                if (target !== exportMenu && target !== exportMenuTrigger && !exportMenu.contains(target)) hideExportMenu();
+            });
+            limitInput.addEventListener('change', () => loadRecentConversations());
+            limitInput.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    loadRecentConversations();
+                }
+            });
+            toggleSelectBtn.addEventListener('click', () => {
+                const allSelected = areAllSelected();
+                listEl.querySelectorAll('.db-batch-ck').forEach((ck) => { ck.checked = !allSelected; });
+                updateSelectToggleButton();
+            });
+            listEl.addEventListener('change', (e) => {
+                if (e.target && e.target.classList.contains('db-batch-ck')) updateSelectToggleButton();
+            });
+            modal.querySelectorAll('.qw-batch-export-item').forEach((btn) => {
+                btn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    runBatchExport(btn.getAttribute('data-format'));
+                });
+            });
+
+            loadRecentConversations();
+        }
+
         // 获取当前对话的所有消息
         async function getAllMessages() {
             const list = [];
@@ -3851,7 +7136,7 @@
                     });
                 }
             } else if (isQwen) {
-                const apiMsgs = await getQwenMessagesByApi();
+                const apiMsgs = await getQwenMessagesForExport();
                 source = 'API(/api/v1/session/msg/list)';
                 if (apiMsgs.length) {
                     list.push(...apiMsgs);
@@ -4177,7 +7462,7 @@
             const renderHeader = (sourceLabel) => `
                 <div style="padding:20px 24px;border-bottom:1px solid #eee;display:flex;justify-content:space-between;align-items:center;">
                     <div style="display:flex;align-items:center;gap:10px;">
-                        <h3 style="margin:0;font-size:18px;">对话导出管理</h3>
+                        <h3 style="margin:0;font-size:18px;">导出当前对话</h3>
                         <span style="font-size:12px;padding:4px 8px;border-radius:999px;background:#f3f4f6;color:#374151;border:1px solid #e5e7eb;">来源：${sourceLabel}</span>
                     </div>
                     <button id="modal-x" style="cursor:pointer;border:none;background:#eee;width:28px;height:28px;border-radius:50%;font-size:16px;display:flex;align-items:center;justify-content:center;">&times;</button>
@@ -4239,25 +7524,27 @@
             modal.innerHTML = `
                 ${renderHeader(sourceLabel)}
                 <div style="padding:10px 24px;background:#f8f9fa;border-bottom:1px solid #eee;display:flex;gap:12px;align-items:center;">
-                    <button class="m-util-btn" id="m-all">全选</button>
-                    <button class="m-util-btn" id="m-none">取消全选</button>
+                    <button class="m-util-btn" id="m-toggle-all">全不选</button>
                     <button class="m-util-btn" id="m-ans" style="background:#e7f3ff;color:#0d6efd;">仅选回答</button>
                     ${isDeepSeek ? '<button class="m-util-btn" id="m-no-thought" style="background:#fff7e6;color:#d46b08;border-color:#ffd591;">排除思考过程</button>' : ''}
                     <div style="flex:1"></div>
                     <span style="font-size:12px;color:#666;">已选 <b id="m-count-view">${allMsgs.length}</b> 条</span>
+                    <div style="position:relative;display:flex;align-items:center;">
+                        <button id="m-export-menu-trigger" style="border:1px solid #2563eb;background:#2563eb;color:#fff;border-radius:8px;font-size:12px;padding:7px 12px;cursor:pointer;font-weight:700;display:flex;align-items:center;gap:6px;">
+                            <span>导出</span><span id="m-export-menu-icon" style="font-size:10px;opacity:.9;display:inline-block;transition:transform .2s ease;transform:rotate(0deg);">▼</span>
+                        </button>
+                        <div id="m-export-menu" style="position:absolute;right:0;top:36px;width:148px;background:#fff;border:1px solid #dbe3ee;border-radius:10px;box-shadow:0 10px 30px rgba(15,23,42,.15);padding:8px;z-index:7;opacity:0;pointer-events:none;transform:translateY(-8px) scale(0.96);transition:opacity .22s cubic-bezier(0.22,0.61,0.36,1), transform .22s cubic-bezier(0.22,0.61,0.36,1);">
+                            <button class="m-export-item" data-f="md" style="display:block;width:100%;text-align:left;background:#333;color:#fff;border:none;border-radius:8px;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;">Markdown</button>
+                            <button class="m-export-item" data-f="pdf" style="display:block;width:100%;text-align:left;background:#dc3545;color:#fff;border:none;border-radius:8px;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;margin-top:6px;">PDF</button>
+                            <button class="m-export-item" data-f="txt" style="display:block;width:100%;text-align:left;background:#28a745;color:#fff;border:none;border-radius:8px;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;margin-top:6px;">TXT</button>
+                            <button class="m-export-item" data-f="json" style="display:block;width:100%;text-align:left;background:#f39c12;color:#fff;border:none;border-radius:8px;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;margin-top:6px;">JSON</button>
+                        </div>
+                    </div>
                 </div>
                 ${renderDeepSeekSessionPanel(deepseekMeta)}
                 <div id="m-list-box" style="flex:1;overflow-y:auto;padding:10px 24px;"></div>
-                <div style="padding:24px;border-top:1px solid #eee;display:flex;gap:12px;">
-                    <button class="m-ex-btn" data-f="md" style="background:#333;">Markdown</button>
-                    <button class="m-ex-btn" data-f="pdf" style="background:#dc3545;">PDF 打印</button>
-                    <button class="m-ex-btn" data-f="txt" style="background:#28a745;">文本 (TXT)</button>
-                    <button class="m-ex-btn" data-f="json" style="background:#f39c12;">JSON</button>
-                </div>
                 <style>
                     .m-util-btn { cursor:pointer;padding:6px 12px;border:1px solid #ddd;border-radius:8px;background:#fff;font-size:12px; }
-                    .m-ex-btn { cursor:pointer;flex:1;padding:12px;border:none;border-radius:10px;color:#fff;font-weight:700;font-size:13px;transition:0.2s; }
-                    .m-ex-btn:hover { opacity:0.9; }
                     .m-item-row { display:flex;gap:15px;padding:16px;border-bottom:1px solid #f2f2f2;position:relative;transition:background 0.2s; }
                     .m-item-row:hover { background:#fcfdfe; }
                     .m-msg-wrap { width:100%; display:flex; align-items:center; gap:12px; }
@@ -4356,11 +7643,76 @@
                 document.body.appendChild(subOverlay);
             }
 
-            const upCount = () => modal.querySelector('#m-count-view').innerText = modal.querySelectorAll('.m-row-ck:checked').length;
+            const updateToggleAllButton = () => {
+                const allChecked = allMsgs.length > 0 && allMsgs.every((_, i) => {
+                    const ck = modal.querySelector(`.m-row-ck[data-i="${i}"]`);
+                    return Boolean(ck && ck.checked);
+                });
+                const btn = modal.querySelector('#m-toggle-all');
+                if (!btn) return;
+                btn.innerText = allChecked ? '全不选' : '全选';
+                if (allChecked) {
+                    btn.style.background = '#fff1f2';
+                    btn.style.color = '#be123c';
+                    btn.style.borderColor = '#fecdd3';
+                } else {
+                    btn.style.background = '#eff6ff';
+                    btn.style.color = '#1d4ed8';
+                    btn.style.borderColor = '#93c5fd';
+                }
+            };
+
+            const upCount = () => {
+                modal.querySelector('#m-count-view').innerText = modal.querySelectorAll('.m-row-ck:checked').length;
+                updateToggleAllButton();
+            };
             modal.querySelectorAll('.m-row-ck').forEach(c => c.onchange = upCount);
-            
-            modal.querySelector('#m-all').onclick = () => { modal.querySelectorAll('.m-row-ck').forEach(c => c.checked = true); upCount(); };
-            modal.querySelector('#m-none').onclick = () => { modal.querySelectorAll('.m-row-ck').forEach(c => c.checked = false); upCount(); };
+
+            const exportMenuTrigger = modal.querySelector('#m-export-menu-trigger');
+            const exportMenu = modal.querySelector('#m-export-menu');
+            const exportMenuIcon = modal.querySelector('#m-export-menu-icon');
+
+            const hideExportMenu = () => {
+                if (!exportMenu) return;
+                exportMenu.style.opacity = '0';
+                exportMenu.style.pointerEvents = 'none';
+                exportMenu.style.transform = 'translateY(-8px) scale(0.96)';
+                if (exportMenuIcon) exportMenuIcon.style.transform = 'rotate(0deg)';
+            };
+
+            const showExportMenu = () => {
+                if (!exportMenu) return;
+                exportMenu.style.opacity = '1';
+                exportMenu.style.pointerEvents = 'auto';
+                exportMenu.style.transform = 'translateY(0) scale(1)';
+                if (exportMenuIcon) exportMenuIcon.style.transform = 'rotate(180deg)';
+            };
+
+            if (exportMenuTrigger) {
+                exportMenuTrigger.onclick = (e) => {
+                    e.stopPropagation();
+                    if (!exportMenu) return;
+                    const visible = exportMenu.style.opacity === '1';
+                    if (visible) hideExportMenu();
+                    else showExportMenu();
+                };
+            }
+
+            modal.addEventListener('click', (e) => {
+                const target = e.target;
+                if (!exportMenu || !exportMenuTrigger) return;
+                if (exportMenu.contains(target) || exportMenuTrigger.contains(target)) return;
+                hideExportMenu();
+            });
+
+            modal.querySelector('#m-toggle-all').onclick = () => {
+                const allChecked = allMsgs.length > 0 && allMsgs.every((_, i) => {
+                    const ck = modal.querySelector(`.m-row-ck[data-i="${i}"]`);
+                    return Boolean(ck && ck.checked);
+                });
+                modal.querySelectorAll('.m-row-ck').forEach(c => c.checked = !allChecked);
+                upCount();
+            };
             modal.querySelector('#m-ans').onclick = () => { 
                 allMsgs.forEach((m, i) => modal.querySelector(`.m-row-ck[data-i="${i}"]`).checked = (m.role === 'assistant'));
                 upCount();
@@ -4375,9 +7727,13 @@
                 };
             }
 
+            updateToggleAllButton();
+            hideExportMenu();
+
             modal.querySelector('#modal-x').onclick = closeModal;
 
-            modal.querySelectorAll('.m-ex-btn').forEach(b => b.onclick = () => {
+            modal.querySelectorAll('.m-export-item').forEach(b => b.onclick = () => {
+                hideExportMenu();
                 const picked = Array.from(modal.querySelectorAll('.m-row-ck:checked')).map(c => allMsgs[parseInt(c.getAttribute('data-i'))]);
                 if (!picked.length) return alert('请至少选择一项');
                 handleExport(picked, b.getAttribute('data-f'));
@@ -4389,23 +7745,28 @@
             const isVisible = popup.style.opacity === '1';
             
             if (isVisible) {
-                popup.style.opacity = '0';
-                popup.style.pointerEvents = 'none';
-                popup.style.transform = 'translateY(10px) scale(0.95)';
+                hidePopup();
+                hideExportMenu();
             } else {
                 const rect = btn.getBoundingClientRect();
-                popup.style.left = (rect.left - 180) + 'px';
-                popup.style.top = (rect.bottom + 10) + 'px';
+                const popupWidth = 220;
+                const popupHeight = Math.max(180, popup.offsetHeight || 280);
+                const desiredLeft = rect.left - 180;
+                const desiredTop = rect.bottom + 10;
+                const clampedLeft = Math.max(8, Math.min(window.innerWidth - popupWidth - 8, desiredLeft));
+                const clampedTop = Math.max(8, Math.min(window.innerHeight - popupHeight - 8, desiredTop));
+                popup.style.left = clampedLeft + 'px';
+                popup.style.top = clampedTop + 'px';
                 popup.style.opacity = '1';
                 popup.style.pointerEvents = 'auto';
                 popup.style.transform = 'translateY(0) scale(1)';
+                hideExportMenu();
             }
         });
 
         document.addEventListener('click', () => {
-            popup.style.opacity = '0';
-            popup.style.pointerEvents = 'none';
-            popup.style.transform = 'translateY(10px) scale(0.95)';
+            hidePopup();
+            hideExportMenu();
         });
 
         // 收起逻辑实现
@@ -4519,11 +7880,21 @@
             let container = null;
             if (isChatGPT) {
                 container = document.querySelector("#page-header > div.flex.items-center.justify-center.gap-3.overflow-x-hidden > div.flex.items-center.justify-end.overflow-x-hidden");
+                if (!container) {
+                    container = document.querySelector('#page-header .items-center.justify-end') ||
+                                document.querySelector('header .items-center.justify-end') ||
+                                document.querySelector('header [class*="justify-end"]');
+                }
                 // 核心修复：强制隐藏 GPT 容器的垂直滚动条
                 if (container) container.style.setProperty('overflow-y', 'hidden', 'important');
             } else if (isQwen) {
                 // 更新千问注入位置为顶栏右侧功能区
                 container = document.querySelector(".flex.items-center.gap-2.mr-4.desktop-no-drag > div.flex.items-center.gap-2");
+                if (!container) {
+                    container = document.querySelector('.desktop-no-drag .flex.items-center.gap-2') ||
+                                document.querySelector('header .desktop-no-drag') ||
+                                document.querySelector('header [class*="desktop-no-drag"]');
+                }
             } else if (isDoubao) {
                 // 豆包注入位置：优先插到分享按钮前，避免附加到不稳定容器末尾
                 const shareEl = document.querySelector('[data-testid="thread_share_btn_right_side"]');
@@ -4555,8 +7926,16 @@
 
             if (container && !container.querySelector('.ai-nodes-settings-btn')) {
                 container.appendChild(btn);
+                if (fallbackHost.isConnected) fallbackHost.remove();
                 // 首次注入成功时尝试自动收起
                 setTimeout(applyAutoCollapse, 500);
+                return true;
+            }
+
+            // 兜底：顶栏容器结构变化时，始终保证设置按钮可点击
+            if (!btn.isConnected) {
+                if (!fallbackHost.isConnected) document.body.appendChild(fallbackHost);
+                fallbackHost.appendChild(btn);
                 return true;
             }
             return false;
@@ -4607,6 +7986,45 @@
         });
     }
 
-    init();
-    injectSettings();
+    let appBootstrapped = false;
+    function bootstrapApp() {
+        if (appBootstrapped || !document.body) return;
+        appBootstrapped = true;
+
+        observer.observe(document.body, {
+            childList: true,
+            subtree: true
+        });
+
+        window.addEventListener('resize', () => {
+            render();
+            updateFixedScrollIndicator();
+        });
+
+        window.addEventListener('scroll', () => {
+            if (scrollTicking) return;
+            scrollTicking = true;
+            requestAnimationFrame(() => {
+                updateActiveNodeOnScroll();
+                scrollTicking = false;
+            });
+        }, true);
+
+        init();
+        setTimeout(() => {
+            injectSettings();
+            updateFixedScrollIndicator();
+        }, 0);
+    }
+
+    if (document.body) {
+        bootstrapApp();
+    } else {
+        document.addEventListener('DOMContentLoaded', bootstrapApp, { once: true });
+        const waitForBody = setInterval(() => {
+            if (!document.body) return;
+            clearInterval(waitForBody);
+            bootstrapApp();
+        }, 50);
+    }
 })();

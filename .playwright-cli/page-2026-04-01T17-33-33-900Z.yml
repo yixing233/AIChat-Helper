@@ -1,0 +1,78 @@
+- generic [ref=e4]:
+  - complementary [ref=e5]:
+    - generic [ref=e6]:
+      - generic [ref=e7]:
+        - generic [ref=e8]:
+          - img "tyIcon" [ref=e11] [cursor=pointer]
+          - generic [ref=e12]:
+            - button [ref=e13] [cursor=pointer]:
+              - img [ref=e15]
+            - button [ref=e17] [cursor=pointer]:
+              - img [ref=e19]
+        - button "新对话" [ref=e23] [cursor=pointer]:
+          - img [ref=e25]
+          - generic [ref=e27]: 新对话
+      - generic [ref=e29]:
+        - paragraph [ref=e30]: 登录可同步历史对话
+        - paragraph [ref=e31]: 体验Qwen最新模型
+        - button "立即登录" [ref=e32] [cursor=pointer]
+      - button "我的空间" [ref=e35] [cursor=pointer]:
+        - text: 我的空间
+        - img [ref=e37]
+  - generic [ref=e39]:
+    - generic [ref=e40]:
+      - generic [ref=e41]:
+        - img "tyIcon" [ref=e44] [cursor=pointer]
+        - generic [ref=e45]:
+          - button [ref=e46] [cursor=pointer]:
+            - img [ref=e48]
+          - button [ref=e50] [cursor=pointer]:
+            - img [ref=e52]
+      - button "新对话" [ref=e56] [cursor=pointer]:
+        - img [ref=e58]
+        - generic [ref=e60]: 新对话
+    - generic [ref=e62]:
+      - paragraph [ref=e63]: 登录可同步历史对话
+      - paragraph [ref=e64]: 体验Qwen最新模型
+      - button "立即登录" [ref=e65] [cursor=pointer]
+    - button "我的空间" [ref=e68] [cursor=pointer]:
+      - text: 我的空间
+      - img [ref=e70]
+  - generic [ref=e76]:
+    - generic [ref=e78]:
+      - generic [ref=e81] [cursor=pointer]:
+        - generic [ref=e82]: Qwen3.5-千问
+        - img [ref=e85]
+      - generic [ref=e88]:
+        - button [ref=e89] [cursor=pointer]:
+          - img [ref=e91]
+        - button "登录" [ref=e93] [cursor=pointer]
+    - generic [ref=e97]:
+      - generic [ref=e110]:
+        - textbox [active] [ref=e115]:
+          - paragraph [ref=e116]:
+            - generic:
+              - generic:
+                - generic: 向千问提问
+        - generic [ref=e117]:
+          - generic [ref=e118]:
+            - button "任务助理" [ref=e119] [cursor=pointer]:
+              - img [ref=e121]
+              - text: 任务助理
+            - button "深度思考" [ref=e123] [cursor=pointer]:
+              - img [ref=e125]
+              - generic [ref=e127]: 深度思考
+            - button "深度研究" [ref=e128] [cursor=pointer]:
+              - img [ref=e130]
+              - generic [ref=e132]: 深度研究
+            - button "代码" [ref=e133] [cursor=pointer]:
+              - img [ref=e135]
+              - generic [ref=e137]: 代码
+            - button "更多" [ref=e139] [cursor=pointer]:
+              - img [ref=e141]
+              - text: 更多
+          - generic [ref=e143]:
+            - img [ref=e146] [cursor=pointer]
+            - img [ref=e150] [cursor=pointer]
+            - img [ref=e154]
+      - paragraph [ref=e157]: 内容由AI生成，可能不准确，请注意核实
