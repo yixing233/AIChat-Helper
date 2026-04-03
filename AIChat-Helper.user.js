@@ -12,6 +12,8 @@
 // @match        *://www.doubao.com/chat/*
 // @match        *://chat.deepseek.com/a/chat/s/*
 // @grant        GM_addStyle
+// @grant        GM_getValue
+// @grant        GM_setValue
 // @run-at       document-start
 // ==/UserScript==
 
@@ -62,18 +64,44 @@
     const COLLAPSE_KEY = 'ai-nodes-auto-collapse-qwen';
     const ADS_KEY = 'ai-nodes-remove-qwen-ads';
     const DEEPSEEK_NATIVE_NAV_KEY = 'ai-nodes-hide-deepseek-native-nav';
+    const DOT_GAP_KEY = 'ai-nodes-dot-gap';
+    const VISIBLE_LIMIT_KEY = 'ai-nodes-visible-limit';
+    const READING_LINE_KEY = 'ai-nodes-reading-line';
+
+    const getGlobalValue = (key, defaultValue) => {
+        let val;
+        try {
+            if (typeof GM_getValue === 'function') {
+                val = GM_getValue(key);
+            } else {
+                val = localStorage.getItem(key);
+            }
+        } catch (e) {
+            val = localStorage.getItem(key);
+        }
+        if (val === null || val === undefined) return defaultValue;
+        if (typeof defaultValue === 'boolean') return String(val) === 'true';
+        if (typeof defaultValue === 'number') return Number(val);
+        return val;
+    };
+
+    const setGlobalValue = (key, value) => {
+        try {
+            if (typeof GM_setValue === 'function') {
+                GM_setValue(key, value);
+            }
+        } catch (e) {}
+        localStorage.setItem(key, String(value));
+    };
     
     let isHistoryFullyLoaded = false; // 用户要求的缓存机制：标记当前对话历史是否已全量加载过
     let activeNodeId = null; // 存储 ID 而非 DOM 引用，防止重绘后状态失效
     let searchIntervalId = null; // 独立计时器驱动的自动搜寻 ID
     let isNodeSearching = false;
-    const WHEEL_VISIBLE_LIMIT = 10;
-    const WHEEL_FADE_MARGIN = 1;
-    const WHEEL_HIDE_THRESHOLD = 0.55;
-    let wheelScrollOffset = 0;
-    let wheelTargetScrollOffset = 0;
-    let wheelAnimationFrame = 0;
-    let wheelLastInteractionAt = 0;
+    let orbitalScrollOffset = 0;
+    let orbitalTargetScrollOffset = 0;
+    let orbitalAnimationFrame = 0;
+    let orbitalLastInteractionAt = 0;
     let qwenInitUnlockInProgress = false;
     let qwenVirtualNodesCache = [];
     let qwenVirtualNodesSessionId = '';
@@ -409,9 +437,6 @@
             storageKey = `ai-nodes-history-${currentConvId}`;
             isHistoryFullyLoaded = false; // 切换对话时重置加载状态
             activeNodeId = null;
-            stopWheelAnimation();
-            wheelScrollOffset = 0;
-            wheelTargetScrollOffset = 0;
             if (isQwen) {
                 qwenInitUnlockInProgress = false;
                 try {
@@ -452,11 +477,9 @@
     updateStorageKey();
     
     let ticking = false;
-    let autoCollapse = localStorage.getItem(COLLAPSE_KEY) === 'true';
-    let removeAds = localStorage.getItem(ADS_KEY) === 'true';
-    let hideDeepSeekNativeNav = localStorage.getItem(DEEPSEEK_NATIVE_NAV_KEY) === 'true';
-    const TRACK_STYLE_KEY = 'ai-nodes-track-style';
-    let trackStyle = localStorage.getItem(TRACK_STYLE_KEY) === 'wheel' ? 'wheel' : 'line';
+    let autoCollapse = getGlobalValue(COLLAPSE_KEY, false);
+    let removeAds = getGlobalValue(ADS_KEY, false);
+    let hideDeepSeekNativeNav = getGlobalValue(DEEPSEEK_NATIVE_NAV_KEY, false);
 
     const CONFIG = {
         topGap: 80,
@@ -464,14 +487,12 @@
         right: 10,
         panelWidth: 80,
         scrollWidth: 64,
-        wheelPanelWidth: 150,
-        wheelScrollWidth: 132,
         trackWidth: 4,
         dotSize: 11,
         dotBorder: 2,
-        dotGap: 36,
-        wheelRightInset: 12,
-        maxVisibleDotsBeforeScroll: 12,
+        dotGap: Math.max(20, Math.min(50, getGlobalValue(DOT_GAP_KEY, 36))),
+        maxVisibleDotsBeforeScroll: getGlobalValue(VISIBLE_LIMIT_KEY, 12),
+        readingLineOffset: Math.max(10, Math.min(250, getGlobalValue(READING_LINE_KEY, 150))),
         maxTrackViewportRatio: 0.4
     };
 
@@ -526,12 +547,6 @@
     container.style.paddingTop = '10px';
     if (document.body) document.body.appendChild(container);
 
-    function applyTrackStyleLayout() {
-        const panelWidth = trackStyle === 'wheel' ? CONFIG.wheelPanelWidth : CONFIG.panelWidth;
-        const scrollWidth = trackStyle === 'wheel' ? CONFIG.wheelScrollWidth : CONFIG.scrollWidth;
-        container.style.width = panelWidth + 'px';
-        scrollArea.style.width = scrollWidth + 'px';
-    }
 
     // ===== 滚动条样式优化 =====
     const styleTag = document.createElement('style');
@@ -570,19 +585,10 @@
         }
         /* 节点标识样式优化 */
         .ai-nav-dot {
-            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
-        }
-        .ai-dot-history { 
-            opacity: 0.4; 
-            filter: grayscale(0.5) contrast(0.9); 
-        }
-        .ai-dot-session { 
-            opacity: 1;
-            filter: drop-shadow(0 2px 4px rgba(0,0,0,0.15));
-        }
-        .ai-dot-wheel {
-            opacity: 1;
-            filter: drop-shadow(0 2px 6px rgba(56, 89, 131, 0.18));
+            box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+            opacity: 0.6;
+            filter: grayscale(0.2);
+            transition: all 0.24s cubic-bezier(0.22, 0.61, 0.36, 1);
         }
         .ai-dot-new-badge {
             position: absolute;
@@ -622,7 +628,7 @@
     dragHandle.style.height = '4px';
     dragHandle.style.background = 'rgba(160, 160, 160, 0.3)';
     dragHandle.style.borderRadius = '10px';
-    dragHandle.style.margin = '0 auto 16px';
+    dragHandle.style.margin = '0 auto 6px';
     dragHandle.style.cursor = 'grab';
     dragHandle.style.flexShrink = '0';
     dragHandle.style.transition = 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)';
@@ -661,7 +667,7 @@
         container.style.maxHeight = `calc(100vh - ${newTop + CONFIG.bottomGap}px)`;
         
         localStorage.setItem('ai-chat-nodes-pos', JSON.stringify({ right: newRight, top: newTop }));
-        updateFixedScrollIndicator();
+        render(); // 实时刷新高度计算
     });
 
     document.addEventListener('mouseup', () => {
@@ -680,35 +686,88 @@
         container.style.maxHeight = `calc(100vh - ${savedPos.top + CONFIG.bottomGap}px)`;
     }
 
-    function handleWheelTrackScroll(e) {
-        if (trackStyle !== 'wheel' || nodes.length <= 1) return;
+    function getOrbitalScrollBounds(totalCount) {
+        if (!scrollArea || !scrollArea.clientHeight) return { min: 0, max: 0 };
+        const h = scrollArea.clientHeight;
+        const pad = 24 * 2 + CONFIG.dotSize;
+        const dotGap = CONFIG.dotGap;
+        const actualLimit = Math.max(1, (h - pad) / dotGap + 1);
+        
+        return {
+            min: 0,
+            max: Math.max(0, totalCount - actualLimit)
+        };
+    }
+
+    function stopOrbitalAnimation() {
+        if (orbitalAnimationFrame) {
+            cancelAnimationFrame(orbitalAnimationFrame);
+            orbitalAnimationFrame = 0;
+        }
+    }
+
+    function runOrbitalAnimation() {
+        if (orbitalAnimationFrame) return;
+        const tick = () => {
+            orbitalScrollOffset += (orbitalTargetScrollOffset - orbitalScrollOffset) * 0.15;
+            if (Math.abs(orbitalTargetScrollOffset - orbitalScrollOffset) < 0.001) {
+                orbitalScrollOffset = orbitalTargetScrollOffset;
+                orbitalAnimationFrame = 0;
+                render();
+                return;
+            }
+            render();
+            orbitalAnimationFrame = requestAnimationFrame(tick);
+        };
+        orbitalAnimationFrame = requestAnimationFrame(tick);
+    }
+
+    function handleOrbitalScroll(e) {
+        if (nodes.length <= 1) return;
         e.preventDefault();
         e.stopPropagation();
-        wheelLastInteractionAt = Date.now();
-        const bounds = getWheelScrollBounds(nodes.length);
-        wheelTargetScrollOffset += e.deltaY * 0.0065;
-        wheelTargetScrollOffset = Math.max(bounds.min, Math.min(bounds.max, wheelTargetScrollOffset));
-        runWheelAnimation();
+        orbitalLastInteractionAt = Date.now();
+        const bounds = getOrbitalScrollBounds(nodes.length);
+        orbitalTargetScrollOffset += e.deltaY * 0.04;
+        orbitalTargetScrollOffset = Math.max(bounds.min, Math.min(bounds.max, orbitalTargetScrollOffset));
+        runOrbitalAnimation();
     }
+
+    function centerNodeInOrbital(index, immediate = false) {
+        if (index < 0 || index >= nodes.length || !scrollArea) return;
+        const h = scrollArea.clientHeight || 100;
+        const pad = 24 * 2 + CONFIG.dotSize;
+        const dotGap = CONFIG.dotGap;
+        const actualLimit = Math.max(1, (h - pad) / dotGap + 1);
+        
+        const target = Math.max(0, index - (actualLimit - 1) / 2);
+        const bounds = getOrbitalScrollBounds(nodes.length);
+        const clamped = Math.max(bounds.min, Math.min(bounds.max, target));
+        
+        orbitalTargetScrollOffset = clamped;
+        if (immediate) {
+            stopOrbitalAnimation();
+            orbitalScrollOffset = clamped;
+            render();
+        } else {
+            runOrbitalAnimation();
+        }
+    }
+
 
     // ===== 滚动层：只负责垂直滚动，不裁切圆点横向空间 =====
     const scrollArea = document.createElement('div');
     scrollArea.className = 'ai-navigator-scroll';
     scrollArea.style.position = 'relative';
-    scrollArea.style.width = CONFIG.scrollWidth + 'px';
+    scrollArea.style.width = '100%';
     scrollArea.style.height = '0';
-    scrollArea.style.overflowY = 'auto';
-    scrollArea.style.overflowX = 'visible';
-    scrollArea.style.scrollBehavior = 'smooth';
+    scrollArea.style.overflow = 'hidden';
+    scrollArea.style.pointerEvents = 'auto';
     scrollArea.style.boxSizing = 'border-box';
     scrollArea.style.padding = '0';
-    scrollArea.addEventListener('scroll', () => {
-        updateFixedScrollIndicator();
-    }, { passive: true });
-    container.addEventListener('wheel', handleWheelTrackScroll, { passive: false });
-    scrollArea.addEventListener('wheel', handleWheelTrackScroll, { passive: false });
+    container.addEventListener('wheel', handleOrbitalScroll, { passive: false });
+    scrollArea.addEventListener('wheel', handleOrbitalScroll, { passive: false });
     container.appendChild(scrollArea);
-    applyTrackStyleLayout();
 
     // ===== 内容层：给轨道和圆点留完整空间 =====
     const content = document.createElement('div');
@@ -716,7 +775,7 @@
     content.style.width = '100%';
     content.style.minHeight = '100%';
     content.style.overflow = 'visible';
-    content.addEventListener('wheel', handleWheelTrackScroll, { passive: false });
+    content.addEventListener('wheel', handleOrbitalScroll, { passive: false });
     scrollArea.appendChild(content);
 
     // ===== 轨道 =====
@@ -730,33 +789,8 @@
     track.style.backdropFilter = 'blur(1px)';
     track.style.boxSizing = 'border-box';
     track.style.boxShadow = 'inset 0 0 1px rgba(255, 255, 255, 0.2)';
-    content.appendChild(track);
-
-    const wheelTrackSvg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-    wheelTrackSvg.setAttribute('aria-hidden', 'true');
-    wheelTrackSvg.style.position = 'absolute';
-    wheelTrackSvg.style.left = '0';
-    wheelTrackSvg.style.top = '0';
-    wheelTrackSvg.style.width = '100%';
-    wheelTrackSvg.style.height = '100%';
-    wheelTrackSvg.style.overflow = 'visible';
-    wheelTrackSvg.style.pointerEvents = 'none';
-    wheelTrackSvg.style.display = 'none';
-    wheelTrackSvg.addEventListener('wheel', handleWheelTrackScroll, { passive: false });
-    const wheelTrackPath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-    wheelTrackPath.setAttribute('fill', 'none');
-    wheelTrackPath.setAttribute('stroke', 'rgba(180, 180, 180, 0.32)');
-    wheelTrackPath.setAttribute('stroke-width', String(CONFIG.trackWidth));
-    wheelTrackPath.setAttribute('stroke-linecap', 'round');
-    wheelTrackPath.setAttribute('filter', 'drop-shadow(0 1px 2px rgba(255,255,255,0.18))');
-    wheelTrackSvg.appendChild(wheelTrackPath);
-    const wheelTrackInnerPath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-    wheelTrackInnerPath.setAttribute('fill', 'none');
-    wheelTrackInnerPath.setAttribute('stroke', 'rgba(180, 180, 180, 0.16)');
-    wheelTrackInnerPath.setAttribute('stroke-width', '2');
-    wheelTrackInnerPath.setAttribute('stroke-linecap', 'round');
-    wheelTrackSvg.appendChild(wheelTrackInnerPath);
-    content.appendChild(wheelTrackSvg);
+    track.style.zIndex = '1';
+    container.appendChild(track); // 移动到容器中，固定不滚动
 
     // ===== 节点层：宽于轨道，避免圆点被裁切 =====
     const dotsLayer = document.createElement('div');
@@ -766,41 +800,10 @@
     dotsLayer.style.width = '100%';
     dotsLayer.style.height = '100%';
     dotsLayer.style.overflow = 'visible';
-    dotsLayer.addEventListener('wheel', handleWheelTrackScroll, { passive: false });
     content.appendChild(dotsLayer);
 
-    const fixedScrollRail = document.createElement('div');
-    fixedScrollRail.style.position = 'fixed';
-    fixedScrollRail.style.width = '6px';
-    fixedScrollRail.style.borderRadius = '999px';
-    fixedScrollRail.style.background = 'rgba(180, 180, 180, 0.14)';
-    fixedScrollRail.style.backdropFilter = 'blur(2px)';
-    fixedScrollRail.style.pointerEvents = 'auto';
-    fixedScrollRail.style.zIndex = '10001';
-    fixedScrollRail.style.opacity = '0';
-    fixedScrollRail.style.transition = 'opacity 0.18s ease';
-    fixedScrollRail.style.cursor = 'pointer';
+    let fixedScrollDragging = false; // 虽然移除了 UI，但保留部分内部状态标记以防代码依赖
 
-    const fixedScrollThumb = document.createElement('div');
-    fixedScrollThumb.style.position = 'fixed';
-    fixedScrollThumb.style.width = '6px';
-    fixedScrollThumb.style.borderRadius = '999px';
-    fixedScrollThumb.style.background = 'rgba(120, 120, 120, 0.58)';
-    fixedScrollThumb.style.boxShadow = '0 1px 4px rgba(0, 0, 0, 0.18)';
-    fixedScrollThumb.style.pointerEvents = 'auto';
-    fixedScrollThumb.style.zIndex = '10002';
-    fixedScrollThumb.style.opacity = '0';
-    fixedScrollThumb.style.transition = 'opacity 0.18s ease';
-    fixedScrollThumb.style.cursor = 'grab';
-
-    let fixedScrollDragging = false;
-    let fixedScrollDragOffsetY = 0;
-    let fixedScrollMetrics = {
-        railTop: 0,
-        railHeight: 0,
-        thumbHeight: 0,
-        maxScrollTop: 0
-    };
 
     function ensureNavigatorMounted() {
         if (!document.body || !document.head) return false;
@@ -814,109 +817,12 @@
         }
         if (!scrollArea.isConnected) container.appendChild(scrollArea);
         if (!content.isConnected) scrollArea.appendChild(content);
-        if (!track.isConnected) content.appendChild(track);
-        if (!wheelTrackSvg.isConnected) content.appendChild(wheelTrackSvg);
+        if (track.parentElement !== content) content.appendChild(track); // 强制移动到内容层，与圆点共享坐标系
         if (!dotsLayer.isConnected) content.appendChild(dotsLayer);
-        if (!fixedScrollRail.isConnected) document.body.appendChild(fixedScrollRail);
-        if (!fixedScrollThumb.isConnected) document.body.appendChild(fixedScrollThumb);
         return true;
     }
 
-    function updateFixedScrollIndicator() {
-        if (!container.isConnected || !scrollArea.isConnected) {
-            fixedScrollRail.style.opacity = '0';
-            fixedScrollThumb.style.opacity = '0';
-            return;
-        }
-        if (trackStyle === 'wheel') {
-            fixedScrollRail.style.opacity = '0';
-            fixedScrollThumb.style.opacity = '0';
-            return;
-        }
-
-        const viewportHeight = scrollArea.clientHeight || 0;
-        const scrollHeight = scrollArea.scrollHeight || 0;
-        if (viewportHeight <= 0 || scrollHeight <= viewportHeight + 2) {
-            fixedScrollRail.style.opacity = '0';
-            fixedScrollThumb.style.opacity = '0';
-            return;
-        }
-
-        const rect = container.getBoundingClientRect();
-        const railLeft = Math.round(rect.right - 9);
-        const railTop = Math.round(rect.top + 12);
-        const railHeight = Math.max(24, Math.round(rect.height - 24));
-        const maxScrollTop = Math.max(1, scrollHeight - viewportHeight);
-        const thumbHeight = Math.max(28, Math.round((viewportHeight / scrollHeight) * railHeight));
-        const travel = Math.max(0, railHeight - thumbHeight);
-        const thumbOffset = Math.round((scrollArea.scrollTop / maxScrollTop) * travel);
-
-        fixedScrollMetrics = {
-            railTop,
-            railHeight,
-            thumbHeight,
-            maxScrollTop
-        };
-
-        fixedScrollRail.style.left = railLeft + 'px';
-        fixedScrollRail.style.top = railTop + 'px';
-        fixedScrollRail.style.height = railHeight + 'px';
-        fixedScrollRail.style.opacity = '1';
-
-        fixedScrollThumb.style.left = railLeft + 'px';
-        fixedScrollThumb.style.top = (railTop + thumbOffset) + 'px';
-        fixedScrollThumb.style.height = thumbHeight + 'px';
-        fixedScrollThumb.style.opacity = '1';
-    }
-
-    function setFixedScrollTopFromClientY(clientY, anchorMode = 'center') {
-        if (!scrollArea || !scrollArea.isConnected) return;
-        const { railTop, railHeight, thumbHeight, maxScrollTop } = fixedScrollMetrics;
-        if (railHeight <= 0 || maxScrollTop <= 0) return;
-
-        const travel = Math.max(1, railHeight - thumbHeight);
-        let thumbTop;
-        if (anchorMode === 'drag') {
-            thumbTop = clientY - railTop - fixedScrollDragOffsetY;
-        } else {
-            thumbTop = clientY - railTop - thumbHeight / 2;
-        }
-        thumbTop = Math.max(0, Math.min(travel, thumbTop));
-        const ratio = thumbTop / travel;
-        scrollArea.scrollTop = ratio * maxScrollTop;
-        updateFixedScrollIndicator();
-    }
-
-    fixedScrollThumb.addEventListener('mousedown', (e) => {
-        if (!scrollArea || !scrollArea.isConnected) return;
-        e.preventDefault();
-        e.stopPropagation();
-        const thumbRect = fixedScrollThumb.getBoundingClientRect();
-        fixedScrollDragging = true;
-        fixedScrollDragOffsetY = e.clientY - thumbRect.top;
-        fixedScrollThumb.style.cursor = 'grabbing';
-        document.body.style.userSelect = 'none';
-    });
-
-    fixedScrollRail.addEventListener('mousedown', (e) => {
-        if (!scrollArea || !scrollArea.isConnected) return;
-        e.preventDefault();
-        e.stopPropagation();
-        setFixedScrollTopFromClientY(e.clientY, 'center');
-    });
-
-    document.addEventListener('mousemove', (e) => {
-        if (!fixedScrollDragging) return;
-        e.preventDefault();
-        setFixedScrollTopFromClientY(e.clientY, 'drag');
-    });
-
-    document.addEventListener('mouseup', () => {
-        if (!fixedScrollDragging) return;
-        fixedScrollDragging = false;
-        fixedScrollThumb.style.cursor = 'grab';
-        document.body.style.userSelect = '';
-    });
+    function updateFixedScrollIndicator() {}
 
     function getMessages() {
         const list = [];
@@ -1652,7 +1558,8 @@
 
             deepseekLastSessionMeta = extractDeepSeekSessionMeta(json);
 
-            return parseDeepSeekMessagesFromResponse(json);
+            const fragments = parseDeepSeekMessagesFromResponse(json);
+            return aggregateDeepSeekMessagesForExport(fragments);
         } catch (e) {
             console.warn('AI-Chat-Nodes: DeepSeek history_messages 解析失败', e);
             return [];
@@ -1730,6 +1637,94 @@
         return bestScore >= 5 ? bestEl : null;
     }
 
+    function getDeepSeekConversationRows() {
+        const list = document.querySelector('.ds-virtual-list-visible-items');
+        if (!list) return [];
+        // 抓取 virtual item key 容器，这些通常是对话的最小物理块 (用户提问 or AI 整段回复)
+        return Array.from(list.querySelectorAll('[data-virtual-list-item-key]'));
+    }
+
+    function getDeepSeekRowType(row) {
+        if (!row) return 'unknown';
+        // 检查内部是否包含 AI 特有的组件标识
+        const hasAiMarkers = row.querySelector('.ds-markdown') || row.querySelector('.ds-think-content') || row.querySelector('.ds-thought-content');
+        return hasAiMarkers ? 'assistant' : 'user';
+    }
+
+    function getDeepSeekRowId(row) {
+        return row?.getAttribute('data-virtual-list-item-key') || '';
+    }
+
+    function getDeepSeekRowText(row) {
+        const bubble = row.querySelector('._72b6158') || row.querySelector('.ds-message-item--content') || row;
+        return normalizeDeepSeekTextForMatch(bubble.innerText || '');
+    }
+
+    function findDeepSeekNodeBySignature(id, text) {
+        if (!text) return null;
+        const targetText = normalizeDeepSeekTextForMatch(text);
+        // 优先文本匹配，因为虚拟 ID 可能与 DOM Key 体系不同
+        return nodes.find(n => normalizeDeepSeekTextForMatch(n.text) === targetText) || null;
+    }
+
+    function resolveDeepSeekNodeFromRow(row, rows) {
+        if (!row) return null;
+        const type = getDeepSeekRowType(row);
+        const idx = rows.indexOf(row);
+
+        // 如果视口落在了 AI 回复区 (含思考过程、搜索块)，向上寻找对应的提问节点
+        if (type !== 'user' && idx > 0) {
+            for (let i = idx - 1; i >= 0; i--) {
+                if (getDeepSeekRowType(rows[i]) === 'user') {
+                    return resolveDeepSeekNodeFromRow(rows[i], rows);
+                }
+            }
+        }
+
+        return findDeepSeekNodeBySignature(getDeepSeekRowId(row), getDeepSeekRowText(row));
+    }
+
+    function getDeepSeekActiveNodeByConversationState(scrollEl) {
+        const rows = getDeepSeekConversationRows();
+        if (!rows.length) return null;
+
+        const viewportHeight = window.innerHeight;
+        // 只要底部靠近视口，激活最后一个
+        const isNearBottom = (scrollEl.scrollHeight - scrollEl.scrollTop - scrollEl.clientHeight) < 120;
+        if (isNearBottom) return nodes[nodes.length - 1];
+
+        // 视口中部的“阅读基准线”
+        const readingAnchor = CONFIG.readingLineOffset;
+        
+        const visibleRows = rows.filter(r => {
+            const rect = r.getBoundingClientRect();
+            return rect.bottom > 0 && rect.top < viewportHeight;
+        });
+        if (!visibleRows.length) return null;
+
+        // 寻找跨越阅读基准线的行
+        let crossingRow = visibleRows.find(r => {
+            const rect = r.getBoundingClientRect();
+            return rect.top <= readingAnchor && rect.bottom >= readingAnchor;
+        });
+
+        if (crossingRow) return resolveDeepSeekNodeFromRow(crossingRow, rows);
+        
+        // 如果没有正跨线的，取离阅读点最近的一行
+        let bestRow = null;
+        let minDist = Infinity;
+        visibleRows.forEach(r => {
+            const rect = r.getBoundingClientRect();
+            const dist = Math.abs(rect.top - readingAnchor);
+            if (dist < minDist) {
+                minDist = dist;
+                bestRow = r;
+            }
+        });
+
+        return bestRow ? resolveDeepSeekNodeFromRow(bestRow, rows) : null;
+    }
+
     function scheduleDeepSeekVirtualNodesRefresh(force = false) {
         if (!isDeepSeek || deepseekVirtualNodesLoading) return;
 
@@ -1753,7 +1748,10 @@
 
             const built = userMsgs.map((m, idx) => {
                 const text = String(m.text || '').trim();
-                const id = `deepseek-user-${String(m.id || idx + 1)}`;
+                // 采用聚合后的 ID 来源，确保一轮对话仅有一个节点
+                const rawId = m.sourceMessageId || (typeof m.id === 'string' && m.id.includes('export-') ? m.id.split('export-')[1] : m.id) || String(idx + 1);
+                const id = `deepseek-user-${rawId}`;
+                
                 const element = findDeepSeekDomElementByNode({ text });
                 return {
                     id,
@@ -1912,23 +1910,22 @@
 
     function getQwenUserDomCandidates() {
         const selector = [
-            '[class*="questionItem"][data-msgid]',
-            '[class*="question-item"][data-msgid]',
-            '[data-msgid][class*="question"]',
-            '[data-msg-id][class*="question"]',
-            '[class*="question"] [class*="bubble"]',
-            '[class*="question"] [class*="contentBox"]'
+            '[class*="question"]',
+            '[class*="user"]',
+            '[class*="human"]',
+            '[class*="Prompt"]',
+            '[class*="messageItem"][class*="user"]',
+            '[class*="message-item"][class*="user"]'
         ].join(',');
 
-        const raw = Array.from(document.querySelectorAll(selector));
+        const rawElements = Array.from(document.querySelectorAll(selector));
         const seen = new Set();
         const out = [];
         let questionIndex = 0;
 
-        raw.forEach((el) => {
-            const row = el.matches('[class*="bubble"], [class*="contentBox"]')
-                ? (el.closest('[data-msgid]') || el.closest('[class*="questionItem"], [class*="question-item"], [class*="question"]') || el)
-                : el;
+        rawElements.forEach((el) => {
+            // 通过逐级向上查找，确定其代表的完整消息行容器
+            const row = el.closest('[data-msgid], [data-msg-id], [class*="message"], [class*="Item"]') || el;
 
             const bubble = row.querySelector('[class*="bubble"]') || row.querySelector('[class*="contentBox"]') || row;
             const text = normalizeQwenTextForMatch(bubble.innerText || '');
@@ -1955,8 +1952,11 @@
         const selector = [
             '[class*="questionItem"]',
             '[class*="answerItem"]',
-            '[class*="question-item"]',
-            '[class*="answer-item"]'
+            '[class*="message-item"]',
+            '[class*="messageItem"]',
+            '[class*="chat-item"]',
+            '[data-msgid]',
+            '[data-msg-id]'
         ].join(',');
 
         const rows = Array.from(document.querySelectorAll(selector));
@@ -1971,9 +1971,16 @@
     }
 
     function getQwenRowType(row) {
-        const cls = String(row?.className || '').toLowerCase();
-        if (cls.includes('questionitem') || cls.includes('question-item') || cls.includes('question')) return 'question';
-        if (cls.includes('answeritem') || cls.includes('answer-item') || cls.includes('answer')) return 'answer';
+        if (!row) return 'unknown';
+        const cls = String(row.className || '').toLowerCase();
+        // 启发式角色判断：兼容多种常见的类名命名模式
+        if (cls.includes('question') || cls.includes('user') || cls.includes('human') || cls.includes('sender')) return 'question';
+        if (cls.includes('answer') || cls.includes('assistant') || cls.includes('bot') || cls.includes('reply')) return 'answer';
+        
+        // 结构特征辅助判断
+        if (row.querySelector('[class*="user"], [class*="human"], [class*="User"]')) return 'question';
+        if (row.querySelector('[class*="assistant"], [class*="bot"], [class*="Ai"]')) return 'answer';
+        
         return 'unknown';
     }
 
@@ -1981,6 +1988,8 @@
         const raw = String(
             row?.getAttribute?.('data-msgid')
             || row?.getAttribute?.('data-msg-id')
+            || row?.getAttribute?.('data-id')
+            || row?.id
             || ''
         ).trim();
         if (!raw) return '';
@@ -2139,33 +2148,21 @@
         const rowType = getQwenRowType(row);
         const questionRows = Array.isArray(rows) ? rows.filter((item) => getQwenRowType(item) === 'question') : [];
         const canUseGlobalSessionIndex = questionRows.length > 0 && questionRows.length === nodes.length;
+        const idx = rows.indexOf(row);
+
+        // 如果不是明确的问题行，则向上游溯源至最近的问题起点
+        // 这一逻辑可以自动关联“该提问产生的全套内容”，包括思考中、代码执行、已完成的回复等
+        if (rowType !== 'question' && idx !== -1) {
+            for (let i = idx - 1; i >= 0; i--) {
+                if (getQwenRowType(rows[i]) === 'question') {
+                    return resolveQwenNodeFromRow(rows[i], rows);
+                }
+            }
+        }
+
         const directQuestionIndex = canUseGlobalSessionIndex
             ? getQwenQuestionSessionIndexFromRows(rows, row)
             : -1;
-
-        if (rowType === 'question') {
-            return findQwenNodeBySignature(
-                getQwenRowId(row),
-                getQwenRowText(row),
-                directQuestionIndex
-            );
-        }
-
-        if (rowType === 'answer') {
-            const idx = rows.indexOf(row);
-            for (let i = idx - 1; i >= 0; i--) {
-                if (getQwenRowType(rows[i]) !== 'question') continue;
-                const prevQuestionIndex = canUseGlobalSessionIndex
-                    ? getQwenQuestionSessionIndexFromRows(rows, rows[i])
-                    : -1;
-                const n = findQwenNodeBySignature(
-                    getQwenRowId(rows[i]),
-                    getQwenRowText(rows[i]),
-                    prevQuestionIndex
-                );
-                if (n) return n;
-            }
-        }
 
         return findQwenNodeBySignature(
             getQwenRowId(row),
@@ -2206,7 +2203,7 @@
         }
 
         const candidateRows = visibleRows.length ? visibleRows : rows;
-        const readingAnchor = Math.max(110, Math.round(viewportHeight * 0.18));
+        const readingAnchor = CONFIG.readingLineOffset;
 
         let crossingRow = null;
         for (const row of candidateRows) {
@@ -2407,88 +2404,17 @@
             return applyQwenApiMessagesToCache(parsed, 'pending-live', currentSessionId);
         }
 
-    function scrollDotIntoView(dot) {
-        if (!dot) return;
-        if (trackStyle === 'wheel') {
-            const nodeIndex = nodes.findIndex((n) => n.dot === dot);
-            if (nodeIndex !== -1) {
-                centerWheelNodeByIndex(nodeIndex);
-            }
-            return;
+    function scrollDotIntoView(indexOrDot) {
+        let index = -1;
+        if (typeof indexOrDot === 'number') {
+            index = indexOrDot;
+        } else {
+            index = nodes.findIndex(n => n.dot === indexOrDot);
         }
-
-        const areaRect = scrollArea.getBoundingClientRect();
-        const dotRect = dot.getBoundingClientRect();
-
-        const areaCenter = areaRect.top + areaRect.height / 2;
-        const dotCenter = dotRect.top + dotRect.height / 2;
-        const delta = dotCenter - areaCenter;
-
-        scrollArea.scrollTop += delta;
+        if (index < 0) return;
+        centerNodeInOrbital(index);
     }
 
-    function getWheelScrollBounds(totalCount) {
-        const visibleCount = Math.max(1, Math.min(totalCount, WHEEL_VISIBLE_LIMIT));
-        const centerOffset = (visibleCount - 1) / 2;
-        return {
-            visibleCount,
-            centerOffset,
-            min: -centerOffset,
-            max: Math.max(-centerOffset, (Math.max(0, totalCount - 1)) - centerOffset)
-        };
-    }
-
-    function getWheelRenderMetrics(totalCount) {
-        const visibleCount = Math.max(1, Math.min(totalCount, WHEEL_VISIBLE_LIMIT));
-        const fadeMargin = Math.min(WHEEL_FADE_MARGIN, Math.max(0, visibleCount - 1));
-        const segments = Math.max(1, (visibleCount - 1) + fadeMargin * 2);
-        return { visibleCount, fadeMargin, segments };
-    }
-
-    function stopWheelAnimation() {
-        if (typeof wheelAnimationFrame === 'undefined') return;
-        if (!wheelAnimationFrame) return;
-        cancelAnimationFrame(wheelAnimationFrame);
-        wheelAnimationFrame = 0;
-    }
-
-    function runWheelAnimation() {
-        if (wheelAnimationFrame) return;
-        const tick = () => {
-            wheelScrollOffset += (wheelTargetScrollOffset - wheelScrollOffset) * 0.14;
-            if (Math.abs(wheelTargetScrollOffset - wheelScrollOffset) < 0.001) {
-                wheelScrollOffset = wheelTargetScrollOffset;
-                wheelAnimationFrame = 0;
-                render();
-                return;
-            }
-            render();
-            wheelAnimationFrame = requestAnimationFrame(tick);
-        };
-        wheelAnimationFrame = requestAnimationFrame(tick);
-    }
-
-    function centerWheelNodeByIndex(nodeIndex, immediate = false) {
-        if (trackStyle !== 'wheel' || nodeIndex < 0 || !Number.isFinite(nodeIndex)) return;
-        const bounds = getWheelScrollBounds(nodes.length);
-        const next = Math.max(bounds.min, Math.min(bounds.max, nodeIndex - bounds.centerOffset));
-        if (Math.abs(next - wheelTargetScrollOffset) < 0.001 && Math.abs(next - wheelScrollOffset) < 0.001) return;
-        wheelTargetScrollOffset = next;
-        if (immediate) {
-            stopWheelAnimation();
-            wheelScrollOffset = next;
-            return;
-        }
-        runWheelAnimation();
-    }
-
-    function centerWheelNodeById(nodeId, immediate = false) {
-        if (trackStyle !== 'wheel' || !nodeId) return;
-        const nodeIndex = nodes.findIndex((n) => n.id === nodeId);
-        if (nodeIndex !== -1) {
-            centerWheelNodeByIndex(nodeIndex, immediate);
-        }
-    }
 
     function findNearestScrollableAncestor(el) {
         let p = el;
@@ -2531,35 +2457,40 @@
                window;
     }
 
+    function triggerInitialScrollJump() {
+        const scrollEl = getScrollContainer();
+        if (!scrollEl || nodes.length === 0) return;
+        
+        // 延迟执行，等待内容渲染更稳定
+        setTimeout(() => {
+            try {
+                const current = scrollEl.scrollTop;
+                const max = scrollEl.scrollHeight - scrollEl.clientHeight;
+                if (max <= 5) return; 
+                
+                // 往上微调 30px
+                scrollEl.scrollBy({ top: -30, behavior: 'instant' });
+                
+                setTimeout(() => {
+                    // 回弹到底部
+                    scrollEl.scrollTo({ top: scrollEl.scrollHeight, behavior: 'instant' });
+                }, 150);
+            } catch (e) {}
+        }, 800);
+    }
     function setActiveDot(dot, nodeId) {
-        // 先重置当前所有圆点的样式（简单保险，防止多高亮残留）
-        document.querySelectorAll('.ai-nav-dot').forEach(d => {
-            d.style.boxShadow = '';
-            d.style.transform = 'translate(-50%, -50%) scale(1)';
-            d.style.zIndex = '2';
-            d.style.borderColor = 'rgba(0, 0, 0, 0.2)';
-            d.style.opacity = '0.5';
-            d.classList.remove('ai-dot-active-ripple');
-        });
-
+        if (!nodeId || activeNodeId === nodeId) return;
         activeNodeId = nodeId;
-
-        if (dot) {
-            const glowColor = dot.style.background.includes('rgb') ? dot.style.background : '#46a758';
-            dot.style.boxShadow = `0 0 0 4px #fff, 0 6px 16px rgba(0,0,0,0.2), 0 0 20px ${glowColor}`;
-            dot.style.transform = 'translate(-50%, -50%) scale(1.8)';
-            dot.style.zIndex = '10';
-            dot.style.borderColor = '#fff';
-            dot.style.opacity = '1';
-            dot.classList.add('ai-dot-active-ripple');
+        // 如果当前没有轨道动画，则手动更新一次渲染以同步激活态
+        if (!orbitalAnimationFrame) {
+            render();
         }
     }
 
-    function buildDot(node, topPx, leftPx = null) {
+    function buildDot(node, topPx) {
         const dot = document.createElement('div');
-        const isWheelMode = trackStyle === 'wheel';
         dot.style.position = 'absolute';
-        dot.style.left = leftPx == null ? '50%' : (Math.round(leftPx) + 'px');
+        dot.style.left = '50%';
         dot.style.top = topPx + 'px';
         dot.style.transform = 'translate(-50%, -50%)';
         dot.style.width = CONFIG.dotSize + 'px';
@@ -2570,17 +2501,15 @@
         dot.style.transition = 'all 0.2s cubic-bezier(0.175, 0.885, 0.32, 1.275)';
         dot.style.zIndex = '2';
         
-        const userColor = 'linear-gradient(135deg, #1E88E5 0%, #1565C0 100%)';
-        const aiColor = 'linear-gradient(135deg, #4FC3F7 0%, #03A9F4 100%)';
-        const wheelColor = 'linear-gradient(135deg, #89a3bf 0%, #6e8cab 100%)';
-        
-        dot.style.background = isWheelMode ? wheelColor : (node.role === 'user' ? userColor : aiColor);
+        // 默认非激活态采用统一的静默色彩（中性灰蓝）
+        dot.style.background = 'linear-gradient(135deg, #94a3b8 0%, #64748b 100%)';
         dot.style.border = `${CONFIG.dotBorder}px solid #fff`;
         dot.style.boxShadow = '0 2px 6px rgba(0, 0, 0, 0.15), inset 0 1px 2px rgba(255, 255, 255, 0.3)';
-        dot.style.opacity = '0.5';
+        dot.style.opacity = '0.6';
+        dot.style.filter = 'grayscale(0.2)';
         
-        // 应用历史/当前状态样式
-        dot.className = `ai-nav-dot ${isWheelMode ? 'ai-dot-wheel' : (node.isHistory ? 'ai-dot-history' : 'ai-dot-session')}`;
+        // 应用统一状态样式
+        dot.className = 'ai-nav-dot';
         
         // 首次发现提示
         if (!node.isHistory && !node.notified) {
@@ -2671,19 +2600,6 @@
         return dot;
     }
 
-    function getWheelTrackPoint(t, contentHeight, dotEdgePad, trackWidth = CONFIG.wheelScrollWidth) {
-        const clampedT = Math.max(0, Math.min(1, t));
-        const startY = dotEdgePad + CONFIG.dotSize / 2;
-        const endY = Math.max(startY, contentHeight - dotEdgePad - CONFIG.dotSize / 2);
-        const centerY = (startY + endY) / 2;
-        const radiusY = Math.max(1, (endY - startY) / 2);
-        const centerX = trackWidth - CONFIG.wheelRightInset;
-        const radiusX = Math.max(16, trackWidth - CONFIG.wheelRightInset - CONFIG.dotSize - 34);
-        const theta = -Math.PI / 2 + clampedT * Math.PI;
-        const x = centerX - radiusX * Math.cos(theta);
-        const y = centerY + radiusY * Math.sin(theta);
-        return { x, y, centerX, centerY, radiusX, radiusY, startY, endY };
-    }
 
     /**
      * 启动独立计时器循环搜寻目标节点
@@ -3029,7 +2945,6 @@
 
 
     function render() {
-        applyTrackStyleLayout();
         if (!ensureNavigatorMounted()) return;
         if (isQwen && Array.isArray(nodes) && nodes.length) {
             const normalizedNodes = normalizeQwenNodeOrder(nodes);
@@ -3048,143 +2963,97 @@
                 height: container.offsetHeight
             });
         }
+        if (globalTooltip) globalTooltip.style.opacity = '0';
         dotsLayer.innerHTML = '';
 
         if (!nodes.length) {
             track.style.top = '0';
             track.style.height = '0';
-            track.style.display = 'block';
-            wheelTrackSvg.style.display = 'none';
-            wheelTrackInnerPath.setAttribute('d', '');
             content.style.height = '0';
             dotsLayer.style.height = '0';
             scrollArea.style.height = '0';
-            updateFixedScrollIndicator();
             return;
         }
 
-        const dotEdgePad = 24;
-        const wheelMetrics = getWheelRenderMetrics(nodes.length);
-        const wheelVisibleCount = wheelMetrics.visibleCount;
-        const linearCount = nodes.length;
-        const requiredHeight = ((trackStyle === 'wheel' ? wheelVisibleCount : linearCount) - 1) * CONFIG.dotGap + CONFIG.dotSize + dotEdgePad * 2;
-        const maxTrackHeight = Math.floor(window.innerHeight * CONFIG.maxTrackViewportRatio);
-        const availableHeight = Math.max(0, window.innerHeight - container.getBoundingClientRect().top - CONFIG.bottomGap - 12);
-        const visibleHeight = Math.max(0, Math.min(requiredHeight, maxTrackHeight, availableHeight));
-        const currentTrackWidth = trackStyle === 'wheel' ? CONFIG.wheelScrollWidth : CONFIG.scrollWidth;
-        if (trackStyle === 'wheel') {
-            const bounds = getWheelScrollBounds(nodes.length);
-            wheelTargetScrollOffset = Math.max(bounds.min, Math.min(bounds.max, wheelTargetScrollOffset));
-            wheelScrollOffset = Math.max(bounds.min, Math.min(bounds.max, wheelScrollOffset));
+        const dotEdgePad = 14;
+        const visibleLimit = CONFIG.maxVisibleDotsBeforeScroll;
+        const displayCount = Math.min(nodes.length, visibleLimit);
+        const visibleHeight = (displayCount - 1) * CONFIG.dotGap + CONFIG.dotSize + dotEdgePad * 2;
+        
+        const minH = 100;
+        const maxVisibleHeight = Math.floor(window.innerHeight * CONFIG.maxTrackViewportRatio);
+        const availableHeight = Math.max(minH, window.innerHeight - container.getBoundingClientRect().top - CONFIG.bottomGap - 12);
+        const finalVisibleHeight = Math.max(minH, Math.min(visibleHeight, maxVisibleHeight, availableHeight));
+
+        scrollArea.style.height = finalVisibleHeight + 'px';
+        content.style.height = finalVisibleHeight + 'px';
+        dotsLayer.style.height = finalVisibleHeight + 'px';
+
+        // 核心改动：如果是少节点模式（节点总长度小于可见区域），则垂直居中分布；否则采用滚动模式
+        const totalDotsHeight = (nodes.length - 1) * CONFIG.dotGap;
+        const isCenteringMode = totalDotsHeight < (finalVisibleHeight - dotEdgePad * 2 - CONFIG.dotSize);
+        
+        let startY;
+        let runningOffset = orbitalScrollOffset;
+
+        if (isCenteringMode) {
+            // 居中模式：让点位集合在 finalVisibleHeight 内垂直居中
+            startY = (finalVisibleHeight - totalDotsHeight) / 2;
+            runningOffset = 0; // 该模式下不考虑滚动偏移
         } else {
-            stopWheelAnimation();
+            // 滚动模式：从顶部 Padding 开始，节点随滚动偏移移动
+            startY = dotEdgePad + CONFIG.dotSize / 2;
+            
+            const bounds = getOrbitalScrollBounds(nodes.length);
+            orbitalTargetScrollOffset = Math.max(bounds.min, Math.min(bounds.max, orbitalTargetScrollOffset));
+            orbitalScrollOffset = Math.max(bounds.min, Math.min(bounds.max, orbitalScrollOffset));
+            runningOffset = orbitalScrollOffset;
         }
 
-        let contentHeight = requiredHeight;
-        let dotPositions = [];
-        const isWheelScrollable = trackStyle === 'wheel' && nodes.length > WHEEL_VISIBLE_LIMIT;
-
-        if (nodes.length <= 1) {
-            if (nodes.length === 1) {
-                if (trackStyle === 'wheel') {
-                    const p = getWheelTrackPoint(0.5, contentHeight, dotEdgePad, currentTrackWidth);
-                    dotPositions = [{ top: p.y, left: p.x }];
-                } else {
-                    dotPositions = [{ top: dotEdgePad + CONFIG.dotSize / 2, left: null }];
-                }
-            }
-        } else {
-            for (let i = 0; i < nodes.length; i++) {
-                if (trackStyle === 'wheel') {
-                    const p = getWheelTrackPoint(i / (nodes.length - 1), contentHeight, dotEdgePad, currentTrackWidth);
-                    dotPositions.push({ top: p.y, left: p.x });
-                } else {
-                    dotPositions.push({ top: dotEdgePad + CONFIG.dotSize / 2 + i * CONFIG.dotGap, left: null });
-                }
-            }
-        }
-
-        scrollArea.style.height = visibleHeight + 'px';
-        content.style.height = contentHeight + 'px';
-        dotsLayer.style.height = contentHeight + 'px';
-
-        if (trackStyle === 'wheel') {
-            scrollArea.style.overflowY = 'hidden';
-            scrollArea.style.overflowX = 'visible';
-            track.style.display = 'none';
-            wheelTrackSvg.style.display = 'block';
-            wheelTrackSvg.setAttribute('viewBox', `0 0 ${currentTrackWidth} ${contentHeight}`);
-            const start = getWheelTrackPoint(0, contentHeight, dotEdgePad, currentTrackWidth);
-            const end = getWheelTrackPoint(1, contentHeight, dotEdgePad, currentTrackWidth);
-            const pathD = `M ${start.centerX} ${start.startY} A ${start.radiusX} ${start.radiusY} 0 0 0 ${end.centerX} ${end.endY}`;
-            const innerRadiusX = Math.max(4, start.radiusX - 7);
-            const innerRadiusY = Math.max(8, start.radiusY - 10);
-            const innerStartX = start.centerX;
-            const innerStartY = start.centerY - innerRadiusY;
-            const innerEndX = start.centerX;
-            const innerEndY = start.centerY + innerRadiusY;
-            const innerPathD = `M ${innerStartX} ${innerStartY} A ${innerRadiusX} ${innerRadiusY} 0 0 0 ${innerEndX} ${innerEndY}`;
-            wheelTrackPath.setAttribute('d', pathD);
-            wheelTrackInnerPath.setAttribute('d', innerPathD);
-        } else {
-            scrollArea.style.overflowY = 'auto';
-            scrollArea.style.overflowX = 'visible';
-            wheelTrackSvg.style.display = 'none';
-            wheelTrackInnerPath.setAttribute('d', '');
-            track.style.display = 'block';
-            track.style.top = dotEdgePad + 'px';
-            track.style.height = Math.max(0, contentHeight - dotEdgePad * 2) + 'px';
-        }
+        // 统一轨道样式：填满可视区域，作为节点运动的稳固底座
+        track.style.display = nodes.length > 1 ? 'block' : 'none';
+        track.style.top = dotEdgePad + 'px';
+        track.style.height = (finalVisibleHeight - dotEdgePad * 2) + 'px';
 
         nodes.forEach((node, index) => {
-            let pos = dotPositions[index] || { top: dotEdgePad + CONFIG.dotSize / 2, left: null };
-            let opacity = 1;
-            let isHidden = false;
-
-            if (trackStyle === 'wheel') {
-                const segments = wheelMetrics.segments;
-                const offsetIdx = wheelMetrics.fadeMargin;
-                const relIndex = index - wheelScrollOffset + offsetIdx;
-                const t = segments <= 0 ? 0.5 : (relIndex / segments);
-
-                if (isWheelScrollable && (relIndex < 0 || relIndex > segments)) {
-                    isHidden = true;
-                } else {
-                    const p = getWheelTrackPoint(t, contentHeight, dotEdgePad, currentTrackWidth);
-                    pos = { top: p.y, left: p.x };
-                }
-
-                if (isWheelScrollable && wheelMetrics.fadeMargin > 0) {
-                    if (relIndex < wheelMetrics.fadeMargin) {
-                        opacity = relIndex / wheelMetrics.fadeMargin;
-                    } else if (relIndex > (segments - wheelMetrics.fadeMargin)) {
-                        opacity = (segments - relIndex) / wheelMetrics.fadeMargin;
-                    }
-                }
-                opacity = Math.max(0, Math.min(1, opacity));
-                if (isWheelScrollable && opacity < WHEEL_HIDE_THRESHOLD) {
-                    isHidden = true;
-                }
-            }
-
-            const dot = buildDot(node, pos.top, pos.left);
-            if (trackStyle === 'wheel') {
-                dot.style.opacity = String(opacity);
-                dot.style.pointerEvents = (isHidden || opacity <= 0.1) ? 'none' : 'auto';
-                dot.style.display = isHidden ? 'none' : 'block';
-            }
-            node.dot = dot;
-            dotsLayer.appendChild(dot);
+            const relOffset = index - runningOffset;
+            const topPx = isCenteringMode ? (startY + index * CONFIG.dotGap) : (dotEdgePad + CONFIG.dotSize / 2 + relOffset * CONFIG.dotGap);
             
-            // 重要：如果是当前激活节点，重新渲染时立即恢复样式
-            if (node.id === activeNodeId) {
-                setActiveDot(dot, node.id);
+            // 简单的边界剔除：稍微收紧范围，并在物理边界外强制不可见
+            if (topPx < -15 || topPx > finalVisibleHeight + 15) return;
+
+            const dot = buildDot(node, topPx);
+            node.dot = dot;
+
+            const isActive = node.id === activeNodeId;
+            if (isActive) {
+                // 激活态样式集成
+                const userColor = 'linear-gradient(135deg, #1E88E5 0%, #1565C0 100%)';
+                const aiColor = 'linear-gradient(135deg, #4FC3F7 0%, #03A9F4 100%)';
+                const isAI = node && (node.role === 'assistant' || node.role === 'ai');
+                dot.style.background = isAI ? aiColor : userColor;
+                dot.style.filter = 'none';
+                dot.style.boxShadow = '0 6px 16px rgba(0, 0, 0, 0.2), 0 0 0 2px #fff';
+                dot.style.transform = 'translate(-50%, -50%) scale(1.6)';
+                dot.style.zIndex = '10';
+                dot.classList.add('ai-dot-active-ripple');
             }
+
+            // 边缘淡出效果：确保在 0 到 finalVisibleHeight 之外是完全消失的
+            const edgeThreshold = 40;
+            let targetOpacity = isActive ? 1 : 0.6;
+            
+            if (topPx < 0 || topPx > finalVisibleHeight) {
+                targetOpacity = 0;
+            } else if (topPx < edgeThreshold) {
+                targetOpacity *= (topPx / edgeThreshold);
+            } else if (topPx > finalVisibleHeight - edgeThreshold) {
+                targetOpacity *= ((finalVisibleHeight - topPx) / edgeThreshold);
+            }
+
+            dot.style.opacity = String(Math.max(0, Math.min(1, targetOpacity)));
+            dotsLayer.appendChild(dot);
         });
-        
-        // 渲染结束后尝试立即同步一次激活状态
-        updateActiveNodeOnScroll();
-        updateFixedScrollIndicator();
     }
 
     function update() {
@@ -3202,19 +3071,25 @@
 
         const currentBatch = getMessages();
 
-        if (isQwen) {
-            const sig = `${currentBatch.length}|${nodes.length}|${nodesMap.size}|${qwenVirtualNodesCache.length}`;
+        if (isQwen || isDeepSeek) {
+            const isPlatformQwen = isQwen;
+            const virtualCacheLength = isPlatformQwen ? qwenVirtualNodesCache.length : deepseekVirtualNodesCache.length;
+            const sig = `${currentBatch.length}|${nodes.length}|${nodesMap.size}|${virtualCacheLength}`;
+            
             if (sig !== qwenLastUpdateDebugSig) {
                 qwenLastUpdateDebugSig = sig;
-                qwenNodeLog('update:snapshot', {
-                    currentBatch: currentBatch.length,
-                    nodes: nodes.length,
-                    nodesMap: nodesMap.size,
-                    virtualCache: qwenVirtualNodesCache.length
-                });
+                if (isPlatformQwen) {
+                    qwenNodeLog('update:snapshot', {
+                        currentBatch: currentBatch.length,
+                        nodes: nodes.length,
+                        nodesMap: nodesMap.size,
+                        virtualCache: qwenVirtualNodesCache.length
+                    });
+                }
             }
 
-            const changed = syncQwenNodesFromApi(currentBatch);
+            // 统一使用全量同步逻辑，防止旧缓存或切换对话导致的重复节点
+            const changed = isPlatformQwen ? syncQwenNodesFromApi(currentBatch) : syncDeepSeekNodesFromApi(currentBatch);
             if (changed) {
                 const cacheData = nodes.map(n => ({ id: n.id, text: n.text, role: n.role, sessionIndex: n.sessionIndex }));
                 localStorage.setItem(storageKey, JSON.stringify(cacheData));
@@ -3312,6 +3187,37 @@
             updateActiveNodeOnScroll();
         }
 
+    }
+
+    function syncDeepSeekNodesFromApi(currentBatch) {
+        if (!Array.isArray(currentBatch) || !deepseekVirtualNodesLoaded) return false;
+        
+        let hasAnyChange = false;
+        if (nodes.length !== currentBatch.length) {
+            hasAnyChange = true;
+        } else {
+            for (let i = 0; i < nodes.length; i++) {
+                if (nodes[i]?.id !== currentBatch[i]?.id || nodes[i]?.text !== currentBatch[i]?.text) {
+                    hasAnyChange = true;
+                    break;
+                }
+            }
+        }
+
+        if (hasAnyChange) {
+            nodes = [...currentBatch];
+            nodesMap = new Map(nodes.map(n => [String(n.id), n]));
+        } else {
+            // 更新元素引用以保持激活状态同步
+            currentBatch.forEach(msg => {
+                const node = nodesMap.get(String(msg.id));
+                if (node && msg.element) {
+                    node.element = msg.element;
+                }
+            });
+        }
+        
+        return hasAnyChange;
     }
 
     function syncQwenNodesFromApi(currentBatch) {
@@ -3449,6 +3355,9 @@
         if (isDeepSeek) {
             setTimeout(() => scheduleDeepSeekVirtualNodesRefresh(true), 1200);
         }
+        
+        // 切换完成后触发滚动跳动，用以激活节点
+        setTimeout(() => triggerInitialScrollJump(), 1800);
     }
 
     const observer = new MutationObserver(() => {
@@ -3468,15 +3377,12 @@
         const scrollEl = getScrollContainer();
         if (!scrollEl) return;
 
-        if (isQwen) {
-            const node = getQwenActiveNodeByConversationState(scrollEl);
+        if (isQwen || isDeepSeek) {
+            const node = isQwen ? getQwenActiveNodeByConversationState(scrollEl) : getDeepSeekActiveNodeByConversationState(scrollEl);
             if (node && node.id !== activeNodeId) {
                 setActiveDot(node.dot, node.id);
-                if (trackStyle === 'wheel') {
-                    if (Date.now() - wheelLastInteractionAt > 420) centerWheelNodeById(node.id);
-                } else {
-                    scrollDotIntoView(node.dot);
-                }
+                const idx = nodes.indexOf(node);
+                if (Date.now() - orbitalLastInteractionAt > 420) centerNodeInOrbital(idx);
             }
             return;
         }
@@ -3487,11 +3393,7 @@
             const lastNode = nodes[nodes.length - 1];
             if (lastNode && lastNode.id !== activeNodeId) {
                 setActiveDot(lastNode.dot, lastNode.id);
-                if (trackStyle === 'wheel') {
-                    if (Date.now() - wheelLastInteractionAt > 420) centerWheelNodeById(lastNode.id);
-                } else {
-                    scrollDotIntoView(lastNode.dot);
-                }
+                if (Date.now() - orbitalLastInteractionAt > 420) centerNodeInOrbital(nodes.length - 1);
             }
             return;
         }
@@ -3499,7 +3401,7 @@
         // 2. 常规位置判定
         let bestNode = null;
         let minDist = Infinity;
-        const VIEWPORT_ANCHOR = 150; // 视口黄金分割锚点
+        const VIEWPORT_ANCHOR = CONFIG.readingLineOffset; // 视口自定义阅读锚点
         
         nodes.forEach(node => {
             if (!node.element || !node.element.isConnected) return;
@@ -3517,11 +3419,8 @@
         
         if (bestNode && bestNode.id !== activeNodeId) {
             setActiveDot(bestNode.dot, bestNode.id);
-            if (trackStyle === 'wheel') {
-                if (Date.now() - wheelLastInteractionAt > 420) centerWheelNodeById(bestNode.id);
-            } else {
-                scrollDotIntoView(bestNode.dot);
-            }
+            const idx = nodes.indexOf(bestNode);
+            if (Date.now() - orbitalLastInteractionAt > 420) centerNodeInOrbital(idx);
         }
     }
 
@@ -3678,18 +3577,26 @@
                 <img src="${escapeHtml(platformIconUrl)}" alt="${escapeHtml(aiName)}" style="width:16px;height:16px;border-radius:4px;display:block;flex-shrink:0;" referrerpolicy="no-referrer">
                 <span>当前 AI 平台: <b>${aiName}</b></span>
             </div>
+            
             <div style="margin-top: 12px; padding-top: 8px; border-top: 1px dashed #eee; display: flex; flex-direction: column; gap: 8px;">
-                <div style="font-size: 12px; color: #64748b; font-weight: 600;">轨道样式</div>
-                <div style="display:flex; gap:8px;">
-                    <label style="flex:1; display:flex; align-items:center; justify-content:center; gap:6px; padding:7px 8px; border:1px solid ${trackStyle === 'line' ? '#93c5fd' : '#e5e7eb'}; border-radius:10px; background:${trackStyle === 'line' ? '#eff6ff' : '#fff'}; cursor:pointer; font-size:12px; color:${trackStyle === 'line' ? '#1d4ed8' : '#475569'};">
-                        <input type="radio" name="ai-nodes-track-style" value="line" ${trackStyle === 'line' ? 'checked' : ''} style="margin:0;">
-                        <span>直线</span>
-                    </label>
-                    <label style="flex:1; display:flex; align-items:center; justify-content:center; gap:6px; padding:7px 8px; border:1px solid ${trackStyle === 'wheel' ? '#fdba74' : '#e5e7eb'}; border-radius:10px; background:${trackStyle === 'wheel' ? '#fff7ed' : '#fff'}; cursor:pointer; font-size:12px; color:${trackStyle === 'wheel' ? '#c2410c' : '#475569'};">
-                        <input type="radio" name="ai-nodes-track-style" value="wheel" ${trackStyle === 'wheel' ? 'checked' : ''} style="margin:0;">
-                        <span>轮盘</span>
-                    </label>
+                <div style="display:flex; align-items:center; justify-content:space-between; gap:10px;">
+                    <span style="font-size:12px; color:#64748b; font-weight:600;">节点间距</span>
+                    <div style="display:flex; align-items:center; gap:4px;">
+                        <input type="number" id="ai-nodes-dot-gap-val" value="${CONFIG.dotGap}" min="20" max="50" style="width:42px; text-align:center; border:1px solid #e2e8f0; border-radius:6px; font-size:11px; padding:3px 2px; color:#0f172a; outline:none;">
+                        <span style="font-size:11px; color:#94a3b8;">px</span>
+                    </div>
                 </div>
+                <div style="display:flex; align-items:center; justify-content:space-between; gap:10px;">
+                    <span style="font-size:12px; color:#64748b; font-weight:600;">单页数量</span>
+                    <div style="display:flex; align-items:center; gap:4px;">
+                        <input type="number" id="ai-nodes-visible-limit-val" value="${CONFIG.maxVisibleDotsBeforeScroll}" min="2" max="30" style="width:42px; text-align:center; border:1px solid #e2e8f0; border-radius:6px; font-size:11px; padding:3px 2px; color:#0f172a; outline:none;">
+                        <span style="font-size:11px; color:#94a3b8;">个</span>
+                    </div>
+                </div>
+                <button id="ai-nodes-reading-line-trigger" style="margin-top:2px; width:100%; padding:6px; background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; cursor:pointer; font-size:11px; font-weight:600; color:#64748b; display:flex; align-items:center; justify-content:center; gap:6px; transition:all 0.2s;">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M7 7h10M7 12h10M7 17h10"/></svg>
+                    <span>调整阅读线 (目前: ${CONFIG.readingLineOffset}px)</span>
+                </button>
             </div>
             ${isQwen ? `
                 <div style="margin-top: 12px; padding-top: 8px; border-top: 1px dashed #eee; display: flex; flex-direction: column; gap: 8px;">
@@ -3727,6 +3634,7 @@
 
         // 导出二级卡片
         const exportMenu = document.createElement('div');
+        // ... (保持 exportMenu 原样，直到其声明结束)
         exportMenu.className = 'ai-nodes-export-menu';
         exportMenu.style.cssText = `
             position: fixed;
@@ -3759,24 +3667,70 @@
         `;
         document.body.appendChild(exportMenu);
 
-        // 核心修复：阻止弹出层内部点击事件冒泡到 document，防止点击开关时关闭卡片
-        popup.addEventListener('click', (e) => {
-            e.stopPropagation();
-        });
-        exportMenu.addEventListener('click', (e) => {
-            e.stopPropagation();
-        });
+        // 阅读线调整二级卡片
+        const readingLineMenu = document.createElement('div');
+        readingLineMenu.className = 'ai-nodes-reading-line-menu';
+        readingLineMenu.style.cssText = exportMenu.style.cssText;
+        readingLineMenu.innerHTML = `
+            <div style="width:180px; padding:6px; display:flex; flex-direction:column; gap:12px;">
+                <div style="display:flex; align-items:center; justify-content:space-between;">
+                    <span style="font-size:12px; font-weight:700; color:#0f172a;">阅读线高度</span>
+                    <span id="ai-nodes-reading-line-display" style="font-size:13px; font-weight:700; color:#1E88E5;">${CONFIG.readingLineOffset}px</span>
+                </div>
+                <input type="range" id="ai-nodes-reading-line-slider" min="10" max="250" value="${CONFIG.readingLineOffset}" style="width:100%; cursor:pointer; accent-color:#1E88E5;">
+                <div style="font-size:10px; color:#94a3b8; line-height:1.4;">设置滚动到屏幕上方何处时激活左侧导航点。</div>
+            </div>
+        `;
+        document.body.appendChild(readingLineMenu);
 
-        const hidePopup = () => {
-            popup.style.opacity = '0';
-            popup.style.pointerEvents = 'none';
-            popup.style.transform = 'translateY(-10px) scale(0.95)';
-        };
+        // 增加阅读线预览指示器
+        const readingLinePreview = document.createElement('div');
+        readingLinePreview.id = 'ai-nodes-reading-line-preview';
+        readingLinePreview.style.cssText = `
+            position: fixed; left: 0; right: 0; height: 0;
+            border-top: 2px dashed #1E88E5;
+            z-index: 10005; pointer-events: none; opacity: 0;
+            transition: opacity 0.2s;
+        `;
+        const rlLabel = document.createElement('div');
+        rlLabel.style.cssText = `
+            position: absolute; right: 20px; top: -20px;
+            background: #1E88E5; color: #fff; font-size: 11px;
+            padding: 2px 8px; border-radius: 6px; font-weight: 700;
+            box-shadow: 0 4px 10px rgba(30,136,229,0.3);
+        `;
+        rlLabel.innerText = '激活判定基准线';
+        readingLinePreview.appendChild(rlLabel);
+        document.body.appendChild(readingLinePreview);
 
         const hideExportMenu = () => {
             exportMenu.style.opacity = '0';
             exportMenu.style.pointerEvents = 'none';
             exportMenu.style.transform = 'translateY(-8px) scale(0.96)';
+        };
+
+        const hideReadingLineMenu = () => {
+            readingLineMenu.style.opacity = '0';
+            readingLineMenu.style.pointerEvents = 'none';
+            readingLineMenu.style.transform = 'translateY(-8px) scale(0.96)';
+            readingLinePreview.style.opacity = '0';
+        };
+
+        // 绑定事件，防止点击菜单内部导致关闭
+        popup.addEventListener('click', (e) => e.stopPropagation());
+        exportMenu.addEventListener('click', (e) => e.stopPropagation());
+        readingLineMenu.addEventListener('click', (e) => e.stopPropagation());
+
+        const hideAllSubMenus = () => {
+            hideExportMenu();
+            hideReadingLineMenu();
+        };
+
+        const hidePopup = () => {
+            popup.style.opacity = '0';
+            popup.style.pointerEvents = 'none';
+            popup.style.transform = 'translateY(-10px) scale(0.95)';
+            hideAllSubMenus();
         };
         let lastToggleSettingsAt = 0;
 
@@ -3790,38 +3744,79 @@
             await openExportModal();
         };
 
+        // 监听自定义参数变化
+        const dotGapInput = popup.querySelector('#ai-nodes-dot-gap-val');
+        const visibleLimitInput = popup.querySelector('#ai-nodes-visible-limit-val');
+
+        const updateCustomParams = () => {
+            let gap = parseInt(dotGapInput.value);
+            let limit = parseInt(visibleLimitInput.value);
+            
+            if (isNaN(gap) || gap < 20) gap = 20;
+            if (gap > 50) gap = 50;
+            if (isNaN(limit) || limit < 2) limit = 2;
+            if (limit > 30) limit = 30;
+
+            CONFIG.dotGap = gap;
+            CONFIG.maxVisibleDotsBeforeScroll = limit;
+            setGlobalValue(DOT_GAP_KEY, gap);
+            setGlobalValue(VISIBLE_LIMIT_KEY, limit);
+            
+            render();
+            const activeNode = nodes.find(n => n.id === activeNodeId);
+            if (activeNode) centerNodeInOrbital(nodes.indexOf(activeNode), true);
+        };
+
+        dotGapInput.addEventListener('change', updateCustomParams);
+        visibleLimitInput.addEventListener('change', updateCustomParams);
+
+        // 阅读线滑动逻辑
+        const rlSlider = readingLineMenu.querySelector('#ai-nodes-reading-line-slider');
+        const rlDisplay = readingLineMenu.querySelector('#ai-nodes-reading-line-display');
+        const rlTrigger = popup.querySelector('#ai-nodes-reading-line-trigger');
+
+        rlSlider.addEventListener('input', (e) => {
+            const val = parseInt(e.target.value);
+            CONFIG.readingLineOffset = val;
+            rlDisplay.innerText = val + 'px';
+            readingLinePreview.style.top = val + 'px';
+            setGlobalValue(READING_LINE_KEY, val);
+            rlTrigger.querySelector('span').innerText = `调整阅读线 (目前: ${val}px)`;
+            updateActiveNodeOnScroll();
+        });
+
+        rlTrigger.onclick = (e) => {
+            e.stopPropagation();
+            hideExportMenu();
+            const visible = readingLineMenu.style.opacity === '1';
+            if (visible) {
+                hideReadingLineMenu();
+            } else {
+                const rect = rlTrigger.getBoundingClientRect();
+                readingLineMenu.style.top = `${rect.top - 10}px`;
+                readingLineMenu.style.left = `${rect.left - 190}px`;
+                readingLineMenu.style.opacity = '1';
+                readingLineMenu.style.pointerEvents = 'auto';
+                readingLineMenu.style.transform = 'translateY(0) scale(1)';
+                
+                readingLinePreview.style.top = `${CONFIG.readingLineOffset}px`;
+                readingLinePreview.style.opacity = '1';
+            }
+        };
+
         // 监听设置项变化
 
-        popup.querySelectorAll('input[name="ai-nodes-track-style"]').forEach((el) => {
-            el.addEventListener('change', (e) => {
-                const nextStyle = e.target.value === 'wheel' ? 'wheel' : 'line';
-                if (trackStyle === nextStyle) return;
-                trackStyle = nextStyle;
-                localStorage.setItem(TRACK_STYLE_KEY, trackStyle);
-                applyTrackStyleLayout();
-                if (trackStyle === 'wheel') {
-                    centerWheelNodeById(activeNodeId, true);
-                } else {
-                    wheelScrollOffset = 0;
-                    wheelTargetScrollOffset = 0;
-                }
-                hidePopup();
-                hideExportMenu();
-                render();
-                updateActiveNodeOnScroll();
-            });
-        });
 
         if (isQwen) {
             popup.querySelector('#ai-nodes-opt-collapse').addEventListener('change', (e) => {
                 autoCollapse = e.target.checked;
-                localStorage.setItem(COLLAPSE_KEY, autoCollapse);
+                setGlobalValue(COLLAPSE_KEY, autoCollapse);
                 if (autoCollapse) applyAutoCollapse();
             });
 
             popup.querySelector('#ai-nodes-opt-ads').addEventListener('change', (e) => {
                 removeAds = e.target.checked;
-                localStorage.setItem(ADS_KEY, removeAds);
+                setGlobalValue(ADS_KEY, removeAds);
                 if (removeAds) document.body.classList.add('ai-nodes-hide-ads');
                 else document.body.classList.remove('ai-nodes-hide-ads');
             });
@@ -3841,11 +3836,14 @@
         }
 
         if (isDeepSeek) {
-            popup.querySelector('#ai-nodes-opt-hide-deepseek-native-nav').addEventListener('change', (e) => {
-                hideDeepSeekNativeNav = e.target.checked;
-                localStorage.setItem(DEEPSEEK_NATIVE_NAV_KEY, hideDeepSeekNativeNav);
-                document.body.classList.toggle('ai-nodes-hide-deepseek-native-nav', hideDeepSeekNativeNav);
-            });
+            const hideNavOpt = popup.querySelector('#ai-nodes-opt-hide-deepseek-native-nav');
+            if (hideNavOpt) {
+                hideNavOpt.addEventListener('change', (e) => {
+                    hideDeepSeekNativeNav = e.target.checked;
+                    setGlobalValue(DEEPSEEK_NATIVE_NAV_KEY, hideDeepSeekNativeNav);
+                    document.body.classList.toggle('ai-nodes-hide-deepseek-native-nav', hideDeepSeekNativeNav);
+                });
+            }
         }
 
         // 强制清除缓存重新获取按钮
@@ -3858,9 +3856,9 @@
                 nodes = [];
                 lastCount = 0;
                 activeNodeId = null;
-                stopWheelAnimation();
-                wheelScrollOffset = 0;
-                wheelTargetScrollOffset = 0;
+                orbitalScrollOffset = 0;
+                orbitalTargetScrollOffset = 0;
+                stopOrbitalAnimation();
                 localStorage.removeItem(storageKey);
                 if (isQwen) {
                     qwenVirtualNodesCache = [];
@@ -9881,7 +9879,6 @@
 
         window.addEventListener('resize', () => {
             render();
-            updateFixedScrollIndicator();
         });
 
         window.addEventListener('scroll', () => {
@@ -9896,7 +9893,6 @@
         init();
         setTimeout(() => {
             injectSettings();
-            updateFixedScrollIndicator();
         }, 0);
     }
 
