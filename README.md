@@ -13,12 +13,9 @@
 ### 1. 安装 Tampermonkey 扩展
 
 1. 通过对应浏览器商店安装 Tampermonkey：
-   
-   [![Microsoft Edge](https://img.shields.io/badge/Microsoft%20Edge-安装%20Tampermonkey-0078D4?style=for-the-badge&logo=windows11&logoColor=white)](https://microsoftedge.microsoft.com/addons/detail/%E7%AF%A1%E6%94%B9%E7%8C%B4/iikmkjmpaadaobahmlepeloendndfphd?hl=zh-CN)
-   
-   [![Google Chrome](https://img.shields.io/badge/Google%20Chrome-安装%20Tampermonkey-4285F4?style=for-the-badge&logo=googlechrome&logoColor=white)](https://chromewebstore.google.com/detail/tampermonkey/dhdgffkkebhmkfjojejmpbldmpobfkfo?hl=zh-CN&utm_source=ext_sidebar)
-   
-   [![Mozilla Firefox](https://img.shields.io/badge/Mozilla%20Firefox-安装%20Tampermonkey-FF7139?style=for-the-badge&logo=firefoxbrowser&logoColor=white)](https://addons.mozilla.org/zh-CN/firefox/addon/tampermonkey/?utm_source=addons.mozilla.org&utm_medium=referral&utm_content=search)
+   - <img src="./assets/microsoft-edge.svg" alt="Microsoft Edge" width="30" /> Microsoft Edge [![安装 Tampermonkey](https://img.shields.io/badge/安装%20Tampermonkey-0078D4?style=for-the-badge)](https://microsoftedge.microsoft.com/addons/detail/%E7%AF%A1%E6%94%B9%E7%8C%B4/iikmkjmpaadaobahmlepeloendndfphd?hl=zh-CN)
+   - <img src="./assets/google-chrome.svg" alt="Google Chrome" width="30" /> Google Chrome [![安装 Tampermonkey](https://img.shields.io/badge/安装%20Tampermonkey-4285F4?style=for-the-badge)](https://chromewebstore.google.com/detail/tampermonkey/dhdgffkkebhmkfjojejmpbldmpobfkfo?hl=zh-CN&utm_source=ext_sidebar)
+   - <img src="./assets/mozilla-firefox.svg" alt="Mozilla Firefox" width="30" /> Mozilla Firefox [![安装 Tampermonkey](https://img.shields.io/badge/安装%20Tampermonkey-FF7139?style=for-the-badge)](https://addons.mozilla.org/zh-CN/firefox/addon/tampermonkey/?utm_source=addons.mozilla.org&utm_medium=referral&utm_content=search)
 
 2. 安装完成后，在扩展管理页面确认 Tampermonkey 已启用。
 
