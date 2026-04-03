@@ -13,17 +13,21 @@
 ### 1. 安装 Tampermonkey 扩展
 
 1. 通过对应浏览器商店安装 Tampermonkey：
-   - Microsoft Edge: [https://microsoftedge.microsoft.com/addons/detail/%E7%AF%A1%E6%94%B9%E7%8C%B4/iikmkjmpaadaobahmlepeloendndfphd?hl=zh-CN](https://microsoftedge.microsoft.com/addons/detail/%E7%AF%A1%E6%94%B9%E7%8C%B4/iikmkjmpaadaobahmlepeloendndfphd?hl=zh-CN)
-   - Chrome: [https://chromewebstore.google.com/detail/tampermonkey/dhdgffkkebhmkfjojejmpbldmpobfkfo?hl=zh-CN&utm_source=ext_sidebar](https://chromewebstore.google.com/detail/tampermonkey/dhdgffkkebhmkfjojejmpbldmpobfkfo?hl=zh-CN&utm_source=ext_sidebar)
-   - Firefox: [https://addons.mozilla.org/zh-CN/firefox/addon/tampermonkey/?utm_source=addons.mozilla.org&utm_medium=referral&utm_content=search](https://addons.mozilla.org/zh-CN/firefox/addon/tampermonkey/?utm_source=addons.mozilla.org&utm_medium=referral&utm_content=search)
+   
+   [![Microsoft Edge](https://img.shields.io/badge/Microsoft%20Edge-安装%20Tampermonkey-0078D4?style=for-the-badge&logo=windows11&logoColor=white)](https://microsoftedge.microsoft.com/addons/detail/%E7%AF%A1%E6%94%B9%E7%8C%B4/iikmkjmpaadaobahmlepeloendndfphd?hl=zh-CN)
+   
+   [![Google Chrome](https://img.shields.io/badge/Google%20Chrome-安装%20Tampermonkey-4285F4?style=for-the-badge&logo=googlechrome&logoColor=white)](https://chromewebstore.google.com/detail/tampermonkey/dhdgffkkebhmkfjojejmpbldmpobfkfo?hl=zh-CN&utm_source=ext_sidebar)
+   
+   [![Mozilla Firefox](https://img.shields.io/badge/Mozilla%20Firefox-安装%20Tampermonkey-FF7139?style=for-the-badge&logo=firefoxbrowser&logoColor=white)](https://addons.mozilla.org/zh-CN/firefox/addon/tampermonkey/?utm_source=addons.mozilla.org&utm_medium=referral&utm_content=search)
+
 2. 安装完成后，在扩展管理页面确认 Tampermonkey 已启用。
 
-### 2. 在 Edge 中开启开发者模式（重要）
+### 2. 在 Edge / Chrome 中开启开发者模式（重要）
 
-Tampermonkey 在 Microsoft Edge 中要正常生效，通常需要在浏览器扩展页启用 **开发者模式**：
+Tampermonkey 在 Microsoft Edge 和 Chrome 中要正常生效，通常需要在浏览器扩展页启用 **开发者模式**：
 
-1. 打开 `edge://extensions/`
-2. 打开右下角（或页面内）的 **开发人员模式 / 开发者模式** 开关。
+1. Microsoft Edge：打开 `edge://extensions/`，开启页面中的 **开发人员模式** 开关。
+2. Google Chrome：打开 `chrome://extensions/`，开启页面中的 **开发者模式** 开关。
 
 ### 3. 启用“允许用户脚本”（重要）
 
@@ -36,7 +40,9 @@ Tampermonkey 在 Microsoft Edge 中要正常生效，通常需要在浏览器扩
 ### 4. 安装本脚本
 
 1. 安装并启用 Tampermonkey 后，直接访问：
-   - [https://gitee.com/xcb157342/AI-Chat-Helper/raw/master/AIChat-Helper.user.js](https://gitee.com/xcb157342/AI-Chat-Helper/raw/master/AIChat-Helper.user.js)
+   
+   [![安装 AI-Chat-Helper 脚本](https://img.shields.io/badge/Gitee-一键安装%20AI--Chat--Helper-1E80FF?style=for-the-badge&logo=gitee&logoColor=white)](https://gitee.com/xcb157342/AI-Chat-Helper/raw/master/AIChat-Helper.user.js)
+
 2. 浏览器会自动唤起 Tampermonkey 安装页面，点击“安装”即可。
 3. 刷新目标 AI 聊天页面，确认脚本已生效。
 
