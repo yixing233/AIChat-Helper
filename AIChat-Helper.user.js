@@ -5665,6 +5665,17 @@
             return `${header}\n${body}`.trim();
         }
 
+        function buildBatchConversationCsv(conversation, assistantLabel) {
+            const rows = ['Index,Role,Content'];
+            const list = Array.isArray(conversation.messages) ? conversation.messages : [];
+            list.forEach((m, idx) => {
+                const role = m.role === 'user' ? '用户' : assistantLabel;
+                const text = String(getDisplayTextForExport(m.text || '')).replace(/"/g, '""');
+                rows.push(`${idx + 1},"${role}","${text}"`);
+            });
+            return '\uFEFF' + rows.join('\n');
+        }
+
         function buildBatchConversationPrintableHtml(platform, conversation, assistantLabel) {
             const renderText = (txt) => escapeHtml(getDisplayTextForExport(txt || '')).replace(/\n/g, '<br>');
             const rows = (Array.isArray(conversation.messages) ? conversation.messages : []).map((m, idx) => `
@@ -5733,6 +5744,13 @@
                     entries.push({
                         name: getUniqueBatchFileName(titleBase, 'html', usedNames),
                         data: buildBatchConversationPrintableHtml(platform, conversation, assistantLabel)
+                    });
+                    return;
+                }
+                if (format === 'csv') {
+                    entries.push({
+                        name: getUniqueBatchFileName(titleBase, 'csv', usedNames),
+                        data: buildBatchConversationCsv(conversation, assistantLabel)
                     });
                     return;
                 }
@@ -9066,6 +9084,7 @@
                             <button class="m-export-item" data-f="md" style="display:block;width:100%;text-align:left;background:#333;color:#fff;border:none;border-radius:8px;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;">Markdown</button>
                             <button class="m-export-item" data-f="pdf" style="display:block;width:100%;text-align:left;background:#dc3545;color:#fff;border:none;border-radius:8px;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;margin-top:6px;">PDF</button>
                             <button class="m-export-item" data-f="txt" style="display:block;width:100%;text-align:left;background:#28a745;color:#fff;border:none;border-radius:8px;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;margin-top:6px;">TXT</button>
+                            <button class="m-export-item" data-f="csv" style="display:block;width:100%;text-align:left;background:#0ea5a8;color:#fff;border:none;border-radius:8px;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;margin-top:6px;">CSV</button>
                             <button class="m-export-item" data-f="json" style="display:block;width:100%;text-align:left;background:#f39c12;color:#fff;border:none;border-radius:8px;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;margin-top:6px;">JSON</button>
                         </div>
                     </div>
@@ -9399,6 +9418,7 @@
                                     <button class="gpt-batch-export-item" data-format="json" style="display:block;width:100%;text-align:left;background:#f39c12;color:#ffffff;border:none;border-radius:8px;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;">JSON</button>
                                     <button class="gpt-batch-export-item" data-format="md" style="display:block;width:100%;text-align:left;background:#333333;color:#ffffff;border:none;border-radius:8px;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;margin-top:6px;">Markdown</button>
                                     <button class="gpt-batch-export-item" data-format="txt" style="display:block;width:100%;text-align:left;background:#28a745;color:#ffffff;border:none;border-radius:8px;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;margin-top:6px;">TXT</button>
+                                    <button class="gpt-batch-export-item" data-format="csv" style="display:block;width:100%;text-align:left;background:#0ea5a8;color:#ffffff;border:none;border-radius:8px;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;margin-top:6px;">CSV</button>
                                     <button class="gpt-batch-export-item" data-format="pdf" style="display:block;width:100%;text-align:left;background:#dc3545;color:#ffffff;border:none;border-radius:8px;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;margin-top:6px;">PDF</button>
                                 </div>
                             </div>
@@ -9876,6 +9896,7 @@
                                     <button class="ds-batch-export-item" data-format="json" style="display:block;width:100%;text-align:left;background:#f39c12;color:#ffffff;border:none;border-radius:8px;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;">JSON</button>
                                     <button class="ds-batch-export-item" data-format="md" style="display:block;width:100%;text-align:left;background:#333333;color:#ffffff;border:none;border-radius:8px;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;margin-top:6px;">Markdown</button>
                                     <button class="ds-batch-export-item" data-format="txt" style="display:block;width:100%;text-align:left;background:#28a745;color:#ffffff;border:none;border-radius:8px;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;margin-top:6px;">TXT</button>
+                                    <button class="ds-batch-export-item" data-format="csv" style="display:block;width:100%;text-align:left;background:#0ea5a8;color:#ffffff;border:none;border-radius:8px;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;margin-top:6px;">CSV</button>
                                     <button class="ds-batch-export-item" data-format="pdf" style="display:block;width:100%;text-align:left;background:#dc3545;color:#ffffff;border:none;border-radius:8px;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;margin-top:6px;">PDF</button>
                                 </div>
                             </div>
@@ -10148,6 +10169,7 @@
                                     <button class="db-batch-export-item" data-format="json" style="display:block;width:100%;text-align:left;background:#f39c12;color:#ffffff;border-radius:8px;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;">JSON</button>
                                     <button class="db-batch-export-item" data-format="md" style="display:block;width:100%;text-align:left;background:#333333;color:#ffffff;border-radius:8px;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;margin-top:6px;">Markdown</button>
                                     <button class="db-batch-export-item" data-format="txt" style="display:block;width:100%;text-align:left;background:#28a745;color:#ffffff;border-radius:8px;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;margin-top:6px;">TXT</button>
+                                    <button class="db-batch-export-item" data-format="csv" style="display:block;width:100%;text-align:left;background:#0ea5a8;color:#ffffff;border-radius:8px;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;margin-top:6px;">CSV</button>
                                     <button class="db-batch-export-item" data-format="pdf" style="display:block;width:100%;text-align:left;background:#dc3545;color:#ffffff;border-radius:8px;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;margin-top:6px;">PDF</button>
                                 </div>
                             </div>
@@ -10438,6 +10460,7 @@
                                     <button class="qw-batch-export-item" data-format="json" style="display:block;width:100%;text-align:left;background:#f39c12;color:#ffffff;border-radius:8px;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;">JSON</button>
                                     <button class="qw-batch-export-item" data-format="md" style="display:block;width:100%;text-align:left;background:#333333;color:#ffffff;border-radius:8px;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;margin-top:6px;">Markdown</button>
                                     <button class="qw-batch-export-item" data-format="txt" style="display:block;width:100%;text-align:left;background:#28a745;color:#ffffff;border-radius:8px;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;margin-top:6px;">TXT</button>
+                                    <button class="qw-batch-export-item" data-format="csv" style="display:block;width:100%;text-align:left;background:#0ea5a8;color:#ffffff;border-radius:8px;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;margin-top:6px;">CSV</button>
                                     <button class="qw-batch-export-item" data-format="pdf" style="display:block;width:100%;text-align:left;background:#dc3545;color:#ffffff;border-radius:8px;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;margin-top:6px;">PDF</button>
                                 </div>
                             </div>
