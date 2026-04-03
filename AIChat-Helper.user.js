@@ -4,8 +4,8 @@
 // @version      1.7.0
 // @description  支持 ChatGPT、通义千问、豆包、DeepSeek：自动生成对话节点导航、一键导出对话（PDF/Markdown/JSON/CSV/TXT）。
 // @author       xchengb
-// @updateURL    https://gitee.com/xcb157342/ai-chat-nodes/raw/master/AIChat-Helper.user.js
-// @downloadURL  https://gitee.com/xcb157342/ai-chat-nodes/raw/master/AIChat-Helper.user.js
+// @updateURL    https://gitee.com/xcb157342/AI-Chat-Helper/raw/master/AIChat-Helper.user.js
+// @downloadURL  https://gitee.com/xcb157342/AI-Chat-Helper/raw/master/AIChat-Helper.user.js
 // @icon         data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIzMiIgaGVpZ2h0PSIzMiIgdmlld0JveD0iMCAwIDMyIDMyIj48cmVjdCB3aWR0aD0iMzIiIGhlaWdodD0iMzIiIGZpbGw9Im5vbmUiLz48cGF0aCBmaWxsPSIjMDQwMGU2IiBkPSJNMTYgMTlhNi45OSAxNi45OSAwIDAgMS01LjgzMy0zLjEyOWwxLjY2Ni0xLjEwN2E1IDUgMCAwIDAgOC4zMzQgMGwxLjY2NiAxLjEwN0E2Ljk5IDYuOTkgMCAwIDEgMTYgMTl6Ii8+PGNpcmNsZSBjeD0iMjAyMCIgY3k9IjEwIiByPSIyIiBmaWxsPSIjMDQwMGU2Ii8+PGNpcmNsZSBjeD0iMTIiIGN5PSIxMCIgcj0iMiIgZmlsbD0iIzA0MDBlNiIvPjxjaXJjbGUgY3g9IjEyIiBjeT0iMTAiIHI9IjIiIGZpbGw9IiMwNDAwZTYiLz48Y2lyY2xlIGN4PSIxMiIgY3k9IjEwIiByPSIyIiBmaWxsPSIjMDQwMGU2Ii8+PHBhdGggZmlsbD0iIzA0MDBlNiIgZD0iTTE3LjczNiAzMEwxNiAyOWw0LTdoNmEyIDIgMCAwIDAgMi0yVjZhMiAyIDAgMCAwLTItMkg2YTIgMiAwIDAgMC0yIDJ2MTRhMiAyIDAgMCAwIDIgMmg5djJINmE0IDQgMCAwIDEtNC00VjZhNCA0IDAgMCAxIDQtNGgyMGE0IDQgMCAwIDEgNCA0djE0YTQgNCAwIDAgMS00IDRoLTQuODM1eiIvPjwvc3ZnPg==
 // @match        *://chatgpt.com/c/*
 // @match        *://www.qianwen.com/chat/*
@@ -101,6 +101,11 @@
     let orbitalScrollOffset = 0;
     let orbitalTargetScrollOffset = 0;
     let orbitalAnimationFrame = 0;
+    let orbitalAnimFrom = 0;
+    let orbitalAnimTo = 0;
+    let orbitalAnimStartAt = 0;
+    let orbitalAnimDuration = 220;
+    let orbitalLastRenderedOffset = NaN;
     let orbitalLastInteractionAt = 0;
     let qwenInitUnlockInProgress = false;
     let qwenVirtualNodesCache = [];
@@ -335,8 +340,8 @@
     function qwenNodeLog(stage, payload) {
         if (!isQwen || !QWEN_NODE_DEBUG) return;
         try {
-            if (payload === undefined) console.log(`[AI-Chat-Nodes][Qwen] ${stage}`);
-            else console.log(`[AI-Chat-Nodes][Qwen] ${stage}`, payload);
+            if (payload === undefined) console.log(`[AI-Chat-Helper][Qwen] ${stage}`);
+            else console.log(`[AI-Chat-Helper][Qwen] ${stage}`, payload);
         } catch (e) {
             // ignore debug log errors
         }
@@ -661,6 +666,15 @@
 
     let isDragging = false;
     let startX, startY, startRight, startTop;
+    const SETTINGS_BUTTON_SAFE_HEIGHT = 42;
+    const SETTINGS_BUTTON_GAP = 10;
+    const SETTINGS_VIEWPORT_PADDING = 8;
+
+    function getMaxRailTopWithSettingsSpace() {
+        const railRect = container.getBoundingClientRect();
+        const reserveBottom = SETTINGS_BUTTON_SAFE_HEIGHT + SETTINGS_BUTTON_GAP + SETTINGS_VIEWPORT_PADDING;
+        return Math.max(0, Math.floor(window.innerHeight - reserveBottom - railRect.height));
+    }
 
     dragHandle.addEventListener('mousedown', (e) => {
         isDragging = true;
@@ -680,7 +694,7 @@
         
         // 约束拖拽范围，不超出页面
         const maxRight = window.innerWidth - CONFIG.panelWidth;
-        const maxTop = window.innerHeight - 30; // 预留手柄高度
+        const maxTop = Math.max(0, Math.min(window.innerHeight - 30, getMaxRailTopWithSettingsSpace()));
         
         const newRight = Math.max(0, Math.min(maxRight, startRight + deltaX));
         const newTop = Math.max(0, Math.min(maxTop, startTop + deltaY));
@@ -689,7 +703,7 @@
         container.style.top = newTop + 'px';
         container.style.maxHeight = `calc(100vh - ${newTop + CONFIG.bottomGap}px)`;
         
-        localStorage.setItem('ai-chat-nodes-pos', JSON.stringify({ right: newRight, top: newTop }));
+        localStorage.setItem('AI-Chat-Helper-pos', JSON.stringify({ right: newRight, top: newTop }));
         render(); // 实时刷新高度计算
     });
 
@@ -702,11 +716,15 @@
     });
 
     // 读取保存的位置
-    const savedPos = JSON.parse(localStorage.getItem('ai-chat-nodes-pos'));
+    const savedPos = JSON.parse(localStorage.getItem('AI-Chat-Helper-pos'));
     if (savedPos) {
-        container.style.right = savedPos.right + 'px';
-        container.style.top = savedPos.top + 'px';
-        container.style.maxHeight = `calc(100vh - ${savedPos.top + CONFIG.bottomGap}px)`;
+        const maxRight = window.innerWidth - CONFIG.panelWidth;
+        const maxTop = Math.max(0, Math.min(window.innerHeight - 30, getMaxRailTopWithSettingsSpace()));
+        const clampedRight = Math.max(0, Math.min(maxRight, Number(savedPos.right) || 0));
+        const clampedTop = Math.max(0, Math.min(maxTop, Number(savedPos.top) || 0));
+        container.style.right = clampedRight + 'px';
+        container.style.top = clampedTop + 'px';
+        container.style.maxHeight = `calc(100vh - ${clampedTop + CONFIG.bottomGap}px)`;
     }
 
     function getOrbitalScrollBounds(totalCount) {
@@ -727,19 +745,52 @@
             cancelAnimationFrame(orbitalAnimationFrame);
             orbitalAnimationFrame = 0;
         }
+        orbitalAnimFrom = orbitalScrollOffset;
+        orbitalAnimTo = orbitalScrollOffset;
+        orbitalAnimStartAt = 0;
     }
 
     function runOrbitalAnimation() {
+        const now = (window.performance && typeof window.performance.now === 'function')
+            ? window.performance.now()
+            : Date.now();
+        const dist = Math.abs(orbitalTargetScrollOffset - orbitalScrollOffset);
+        if (dist < 0.0008) {
+            orbitalScrollOffset = orbitalTargetScrollOffset;
+            orbitalLastRenderedOffset = NaN;
+            render();
+            return;
+        }
+
+        orbitalAnimFrom = orbitalScrollOffset;
+        orbitalAnimTo = orbitalTargetScrollOffset;
+        orbitalAnimStartAt = now;
+        orbitalAnimDuration = Math.max(120, Math.min(320, 140 + dist * 18));
+
         if (orbitalAnimationFrame) return;
-        const tick = () => {
-            orbitalScrollOffset += (orbitalTargetScrollOffset - orbitalScrollOffset) * 0.15;
-            if (Math.abs(orbitalTargetScrollOffset - orbitalScrollOffset) < 0.001) {
-                orbitalScrollOffset = orbitalTargetScrollOffset;
-                orbitalAnimationFrame = 0;
+
+        const tick = (ts) => {
+            const elapsed = Math.max(0, (ts || now) - orbitalAnimStartAt);
+            const t = Math.min(1, elapsed / Math.max(1, orbitalAnimDuration));
+            const eased = 1 - Math.pow(1 - t, 3); // easeOutCubic
+            orbitalScrollOffset = orbitalAnimFrom + (orbitalAnimTo - orbitalAnimFrom) * eased;
+
+            if (!Number.isFinite(orbitalLastRenderedOffset) || Math.abs(orbitalScrollOffset - orbitalLastRenderedOffset) > 0.001 || t >= 1) {
+                orbitalLastRenderedOffset = orbitalScrollOffset;
                 render();
+            }
+
+            if (t >= 1) {
+                orbitalAnimationFrame = 0;
+                if (Math.abs(orbitalTargetScrollOffset - orbitalScrollOffset) > 0.001) {
+                    runOrbitalAnimation();
+                } else {
+                    orbitalScrollOffset = orbitalTargetScrollOffset;
+                    orbitalLastRenderedOffset = NaN;
+                    render();
+                }
                 return;
             }
-            render();
             orbitalAnimationFrame = requestAnimationFrame(tick);
         };
         orbitalAnimationFrame = requestAnimationFrame(tick);
@@ -771,6 +822,7 @@
         if (immediate) {
             stopOrbitalAnimation();
             orbitalScrollOffset = clamped;
+            orbitalLastRenderedOffset = NaN;
             render();
         } else {
             runOrbitalAnimation();
@@ -1690,7 +1742,7 @@
 
         const sessionId = getDeepSeekSessionId();
         if (!sessionId) {
-            console.warn('AI-Chat-Nodes: DeepSeek 未找到会话 ID，无法请求 history_messages');
+            console.warn('AI-Chat-Helper: DeepSeek 未找到会话 ID，无法请求 history_messages');
             return [];
         }
 
@@ -1705,14 +1757,14 @@
             });
 
             if (!resp.ok) {
-                console.warn(`AI-Chat-Nodes: DeepSeek history_messages 请求失败 (${resp.status})`);
+                console.warn(`AI-Chat-Helper: DeepSeek history_messages 请求失败 (${resp.status})`);
                 return [];
             }
 
             const text = await resp.text();
             const json = safeParseDeepSeekJson(text);
             if (!json) {
-                console.warn('AI-Chat-Nodes: DeepSeek history_messages 返回非 JSON');
+                console.warn('AI-Chat-Helper: DeepSeek history_messages 返回非 JSON');
                 return [];
             }
 
@@ -1721,7 +1773,7 @@
             const fragments = parseDeepSeekMessagesFromResponse(json);
             return aggregateDeepSeekMessagesForExport(fragments);
         } catch (e) {
-            console.warn('AI-Chat-Nodes: DeepSeek history_messages 解析失败', e);
+            console.warn('AI-Chat-Helper: DeepSeek history_messages 解析失败', e);
             return [];
         }
     }
@@ -1933,7 +1985,7 @@
                 update();
             });
         }).catch((e) => {
-            console.warn('AI-Chat-Nodes: DeepSeek 虚拟节点刷新失败', e);
+            console.warn('AI-Chat-Helper: DeepSeek 虚拟节点刷新失败', e);
         }).finally(() => {
             deepseekVirtualNodesLoading = false;
         });
@@ -1999,7 +2051,7 @@
                 kickstartActiveNodeAutoSync();
             });
         }).catch((e) => {
-            console.warn('AI-Chat-Nodes: 豆包虚拟节点刷新失败', e);
+            console.warn('AI-Chat-Helper: 豆包虚拟节点刷新失败', e);
         }).finally(() => {
             if (refreshStorageKey !== storageKey) return;
             doubaoVirtualNodesLoading = false;
@@ -2080,7 +2132,7 @@
 
         // 如果仍然没有找到有效节点（说明目标已彻底不在当前视口内），启动深度搜寻
         if (!targetEl) {
-            console.warn(`AI-Chat-Nodes: 目标节点 ${nodeId} 已被回收或不在视野内，启动深度搜寻...`);
+            console.warn(`AI-Chat-Helper: 目标节点 ${nodeId} 已被回收或不在视野内，启动深度搜寻...`);
             startNodeSearch(nodeId);
             return false;
         }
@@ -2122,6 +2174,76 @@
             .trim();
     }
 
+    function normalizeQwenMessageId(rawId) {
+        const id = String(rawId || '').trim();
+        if (!id) return '';
+        return id
+            .replace(/-(question|answer)$/i, '')
+            .replace(/-(u|a)-\d+$/i, '')
+            .trim();
+    }
+
+    function sanitizeQwenCachedNodes(rawList) {
+        if (!Array.isArray(rawList) || !rawList.length) {
+            return { nodes: [], changed: false, legacyFound: false };
+        }
+
+        const byId = new Map();
+        let changed = false;
+        let legacyFound = false;
+
+        rawList.forEach((item, idx) => {
+            const rawId = String(item?.id || '').trim();
+            const normalizedId = normalizeQwenMessageId(rawId);
+            const rawText = String(item?.text || '');
+            const text = normalizeQwenTextForMatch(rawText);
+            const role = String(item?.role || 'user').toLowerCase();
+
+            if (!normalizedId || !text || role !== 'user') {
+                changed = true;
+                return;
+            }
+
+            if (rawId !== normalizedId || /-(u|a)-\d+$/i.test(rawId) || /-(question|answer)$/i.test(rawId)) {
+                legacyFound = true;
+                changed = true;
+            }
+
+            const sessionIndex = getQwenSessionIndexValue(item?.sessionIndex) !== -1
+                ? getQwenSessionIndexValue(item.sessionIndex)
+                : idx;
+
+            const prev = byId.get(normalizedId);
+            if (!prev) {
+                byId.set(normalizedId, {
+                    id: normalizedId,
+                    role: 'user',
+                    text,
+                    sessionIndex,
+                    element: null,
+                    isHistory: true,
+                    isLinked: true
+                });
+                return;
+            }
+
+            changed = true;
+            if (text.length > String(prev.text || '').length) {
+                prev.text = text;
+            }
+            if (sessionIndex < prev.sessionIndex) {
+                prev.sessionIndex = sessionIndex;
+            }
+        });
+
+        const nodes = Array.from(byId.values())
+            .sort((a, b) => getQwenSessionIndexValue(a.sessionIndex) - getQwenSessionIndexValue(b.sessionIndex))
+            .map((item, idx) => ({ ...item, sessionIndex: idx }));
+
+        if (nodes.length !== rawList.length) changed = true;
+        return { nodes, changed, legacyFound };
+    }
+
     function isQwenElementMatchNode(element, node) {
         if (!element || !node) return false;
         if (!element.isConnected) return false;
@@ -2148,41 +2270,152 @@
         return Number.isInteger(n) && n >= 0 ? n : -1;
     }
 
-    function getQwenUserDomCandidates() {
-        const selector = [
-            '[class*="question"]',
-            '[class*="user"]',
-            '[class*="human"]',
-            '[class*="Prompt"]',
-            '[class*="messageItem"][class*="user"]',
-            '[class*="message-item"][class*="user"]'
-        ].join(',');
+    function getQwenAttachmentNamesFromRow(row) {
+        if (!row) return [];
+        const out = [];
+        const seen = new Set();
+        const pushName = (text) => {
+            const clean = normalizeQwenTextForMatch(text);
+            if (!clean) return;
+            if (/^\d+(\.\d+)?\s*(kb|mb|gb|tb)$/i.test(clean)) return;
+            if (/^(查看|预览|删除|上传|下载)$/i.test(clean)) return;
+            if (seen.has(clean)) return;
+            seen.add(clean);
+            out.push(clean);
+        };
 
-        const rawElements = Array.from(document.querySelectorAll(selector));
+        const nameNodes = row.querySelectorAll(
+            '[class*="filesContainer"] [class*="fileContent"] [class*="title"], ' +
+            '[class*="filesContainer"] [class*="fileBox"] [class*="title"], ' +
+            '[class*="filesContainer"] span[class*="title-"], ' +
+            '[data-file-name]'
+        );
+        nameNodes.forEach((el) => {
+            pushName(el?.getAttribute?.('data-file-name') || '');
+            pushName(el?.innerText || el?.textContent || '');
+        });
+
+        return out;
+    }
+
+    function sanitizeQwenQuestionText(text, fileNames = []) {
+        let cleaned = normalizeQwenTextForMatch(text || '');
+        if (!cleaned) return '';
+        fileNames.forEach((name) => {
+            const normalized = normalizeQwenTextForMatch(name);
+            if (!normalized) return;
+            cleaned = cleaned.split(normalized).join(' ');
+        });
+        cleaned = cleaned
+            .replace(/\b\d+(\.\d+)?\s*(kb|mb|gb|tb)\b/ig, ' ')
+            .replace(/\b(查看|预览|删除|编辑|复制|上传|下载)\b/ig, ' ');
+        return normalizeQwenTextForMatch(cleaned);
+    }
+
+    function extractQwenPromptTextByWalker(root, fileNames = []) {
+        if (!root) return '';
+        const skipSelector = [
+            '[class*="filesContainer"]',
+            '[class*="fileBox"]',
+            '[class*="fileContent"]',
+            '[class*="statusLine"]',
+            'button',
+            'svg',
+            '[data-role="icon"]',
+            '[class*="group-hover"]'
+        ].join(',');
+        const texts = [];
+        const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null);
+        let node = walker.nextNode();
+        while (node) {
+            const parent = node.parentElement;
+            if (parent && !parent.closest(skipSelector)) {
+                const cleaned = sanitizeQwenQuestionText(node.nodeValue || '', fileNames);
+                if (cleaned) texts.push(cleaned);
+            }
+            node = walker.nextNode();
+        }
+        if (!texts.length) return '';
+        return normalizeQwenTextForMatch(texts.join(' '));
+    }
+
+    function getQwenPromptTextFromRow(row, fileNames = []) {
+        if (!row) return '';
+        const selectorCandidates = [
+            '[class*="contentBox"] [class*="bubble"]',
+            '[class*="contentBox"] [class*="text"]',
+            '[class*="contentBox"]',
+            '[class*="bubble"]'
+        ];
+
+        for (const selector of selectorCandidates) {
+            const nodes = Array.from(row.querySelectorAll(selector));
+            for (const node of nodes) {
+                const cleaned = sanitizeQwenQuestionText(node?.innerText || node?.textContent || '', fileNames);
+                if (cleaned) return cleaned;
+            }
+        }
+
+        const walkerRoots = [
+            row.querySelector('[class*="contentBox"]'),
+            row.querySelector('[class*="content-"]'),
+            row
+        ].filter(Boolean);
+        for (const root of walkerRoots) {
+            const text = extractQwenPromptTextByWalker(root, fileNames);
+            if (text) return text;
+        }
+
+        const clone = row.cloneNode(true);
+        [
+            '[class*="filesContainer"]',
+            '[class*="fileBox"]',
+            '[class*="fileContent"]',
+            '[class*="statusLine"]',
+            'button',
+            'svg',
+            '[data-role="icon"]'
+        ].forEach((selector) => {
+            clone.querySelectorAll(selector).forEach((el) => el.remove());
+        });
+        return sanitizeQwenQuestionText(clone.innerText || clone.textContent || '', fileNames);
+    }
+
+    function getQwenQuestionTextFromRow(row) {
+        if (!row) return '';
+        const fileNames = getQwenAttachmentNamesFromRow(row);
+        const attachLines = fileNames.map((name, idx) => `[附件${fileNames.length > 1 ? idx + 1 : ''}] ${name}`);
+        const bubbleText = getQwenPromptTextFromRow(row, fileNames);
+        const lines = [...attachLines];
+        if (bubbleText) lines.push(bubbleText);
+        return normalizeQwenTextForMatch(lines.join('\n'));
+    }
+
+    function getQwenUserDomCandidates() {
+        const rawElements = getQwenConversationRows().filter((row) => getQwenRowType(row) === 'question');
         const seen = new Set();
         const out = [];
-        let questionIndex = 0;
 
-        rawElements.forEach((el) => {
-            // 通过逐级向上查找，确定其代表的完整消息行容器
-            const row = el.closest('[data-msgid], [data-msg-id], [class*="message"], [class*="Item"]') || el;
-
-            const bubble = row.querySelector('[class*="bubble"]') || row.querySelector('[class*="contentBox"]') || row;
-            const text = normalizeQwenTextForMatch(bubble.innerText || '');
+        rawElements.forEach((row, questionIndex) => {
+            const bubble = row.querySelector('[class*="contentBox"] [class*="bubble"]')
+                || row.querySelector('[class*="bubble"]')
+                || row.querySelector('[class*="contentBox"]')
+                || row;
+            const text = getQwenQuestionTextFromRow(row) || normalizeQwenTextForMatch(bubble.innerText || '');
             if (!text) return;
 
-            const rawId = String(
+            const rawId = normalizeQwenMessageId(
                 row.getAttribute('data-msgid')
                 || row.getAttribute('data-msg-id')
+                || row.getAttribute('data-id')
                 || ''
-            ).replace(/-question$/i, '').trim();
+            );
 
             const key = `${rawId}::${text.slice(0, 80)}`;
             if (seen.has(key)) return;
             seen.add(key);
 
             out.push({ id: rawId, element: bubble, text, sessionIndex: questionIndex });
-            questionIndex += 1;
         });
 
         return out;
@@ -2212,8 +2445,12 @@
 
     function getQwenRowType(row) {
         if (!row) return 'unknown';
+        const msgIdRaw = String(row.getAttribute('data-msgid') || row.getAttribute('data-msg-id') || '').toLowerCase();
+        if (msgIdRaw.endsWith('-question')) return 'question';
+        if (msgIdRaw.endsWith('-answer')) return 'answer';
         const cls = String(row.className || '').toLowerCase();
         // 启发式角色判断：兼容多种常见的类名命名模式
+        if (cls.includes('answeritem')) return 'answer';
         if (cls.includes('question') || cls.includes('user') || cls.includes('human') || cls.includes('sender')) return 'question';
         if (cls.includes('answer') || cls.includes('assistant') || cls.includes('bot') || cls.includes('reply')) return 'answer';
         
@@ -2225,19 +2462,20 @@
     }
 
     function getQwenRowId(row) {
-        const raw = String(
+        return normalizeQwenMessageId(String(
             row?.getAttribute?.('data-msgid')
             || row?.getAttribute?.('data-msg-id')
             || row?.getAttribute?.('data-id')
             || row?.id
             || ''
-        ).trim();
-        if (!raw) return '';
-        return raw.replace(/-(question|answer)$/i, '');
+        ).trim());
     }
 
     function getQwenRowText(row) {
         if (!row) return '';
+        if (getQwenRowType(row) === 'question') {
+            return getQwenQuestionTextFromRow(row);
+        }
         const bubble = row.querySelector('[class*="bubble"]') || row.querySelector('[class*="contentBox"]') || row;
         return normalizeQwenTextForMatch(bubble.innerText || '');
     }
@@ -2248,9 +2486,10 @@
     }
 
     function findQwenNodeBySignature(id, text, sessionIndex = -1) {
+        const normalizedId = normalizeQwenMessageId(id);
         const normalizedSessionIndex = getQwenSessionIndexValue(sessionIndex);
-        if (id && nodesMap.has(id)) {
-            const byId = nodesMap.get(id);
+        if (normalizedId && nodesMap.has(normalizedId)) {
+            const byId = nodesMap.get(normalizedId);
             if (normalizedSessionIndex === -1 || getQwenSessionIndexValue(byId?.sessionIndex) === normalizedSessionIndex) {
                 return byId;
             }
@@ -2266,7 +2505,7 @@
             if (!t) return;
 
             let score = 0;
-            if (id && String(n.id || '') === id) score += 18;
+            if (normalizedId && normalizeQwenMessageId(String(n.id || '')) === normalizedId) score += 18;
             if (normalized && t === normalized) score += 14;
             if (prefix && t.includes(prefix)) score += 8;
             if (normalized && t && normalized.includes(t.slice(0, Math.min(24, t.length)))) score += 3;
@@ -2389,6 +2628,17 @@
         const questionRows = Array.isArray(rows) ? rows.filter((item) => getQwenRowType(item) === 'question') : [];
         const canUseGlobalSessionIndex = questionRows.length > 0 && questionRows.length === nodes.length;
         const idx = rows.indexOf(row);
+        const rowId = getQwenRowId(row);
+
+        // 先按统一消息 ID 直接映射：question/answer 共享同一基础 req_id。
+        // 例如：
+        // data-msgid="6687456e...-question"
+        // data-msgid="6687456e...-answer"
+        // 两者都应激活同一个用户节点。
+        if (rowId) {
+            const directById = findQwenNodeBySignature(rowId, '', -1);
+            if (directById) return directById;
+        }
 
         // 如果不是明确的问题行，则向上游溯源至最近的问题起点
         // 这一逻辑可以自动关联“该提问产生的全套内容”，包括思考中、代码执行、已完成的回复等
@@ -2405,7 +2655,7 @@
             : -1;
 
         return findQwenNodeBySignature(
-            getQwenRowId(row),
+            rowId,
             getQwenRowText(row),
             directQuestionIndex
         );
@@ -2420,30 +2670,14 @@
             const rect = row.getBoundingClientRect();
             return rect.bottom > 0 && rect.top < viewportHeight;
         });
-        const visibleQuestionRows = visibleRows.filter((row) => getQwenRowType(row) === 'question');
+        const candidateRows = visibleRows.length ? visibleRows : rows;
+        const readingAnchor = CONFIG.readingLineOffset;
 
         const isNearBottom = Boolean(scrollEl)
             && ((scrollEl.scrollHeight - Math.max(0, Number(scrollEl.scrollTop || 0)) - scrollEl.clientHeight) < 140);
-
-        if (visibleQuestionRows.length) {
-            if (isNearBottom) {
-                return resolveQwenNodeFromRow(visibleQuestionRows[visibleQuestionRows.length - 1], rows);
-            }
-
-            const readingZoneTop = Math.max(96, Math.round(viewportHeight * 0.12));
-            const enteredQuestion = visibleQuestionRows.find((row) => {
-                const rect = row.getBoundingClientRect();
-                return rect.bottom >= readingZoneTop;
-            });
-            if (enteredQuestion) {
-                return resolveQwenNodeFromRow(enteredQuestion, rows);
-            }
-
-            return resolveQwenNodeFromRow(visibleQuestionRows[0], rows);
+        if (isNearBottom && candidateRows.length) {
+            return resolveQwenNodeFromRow(candidateRows[candidateRows.length - 1], rows);
         }
-
-        const candidateRows = visibleRows.length ? visibleRows : rows;
-        const readingAnchor = CONFIG.readingLineOffset;
 
         let crossingRow = null;
         for (const row of candidateRows) {
@@ -2497,13 +2731,130 @@
         return false;
     }
 
+    function parseDoubaoInlinePayloadSafe(contentValue, depth = 0) {
+        if (typeof contentValue !== 'string') return '';
+        const raw = contentValue.trim();
+        if (!raw) return '';
+        if (depth > 3) return raw;
+
+        let parsed = null;
+        try {
+            parsed = JSON.parse(raw);
+        } catch (_) {
+            parsed = null;
+        }
+        if (parsed == null) return raw;
+
+        if (typeof parsed === 'string') {
+            const nested = parsed.trim();
+            if (!nested) return '';
+            if (nested === raw) return nested;
+            return parseDoubaoInlinePayloadSafe(nested, depth + 1);
+        }
+        if (typeof parsed !== 'object') return raw;
+
+        if (Array.isArray(parsed)) {
+            const out = [];
+            const walk = (node) => {
+                if (!node) return;
+                if (typeof node === 'string') {
+                    const t = node.trim();
+                    if (t) out.push(t);
+                    return;
+                }
+                if (Array.isArray(node)) {
+                    node.forEach(walk);
+                    return;
+                }
+                if (typeof node !== 'object') return;
+                const t = typeof node?.content?.text_block?.text === 'string'
+                    ? node.content.text_block.text.trim()
+                    : (typeof node?.text === 'string' ? node.text.trim() : '');
+                if (t) out.push(t);
+                Object.values(node).forEach(walk);
+            };
+            walk(parsed);
+            return out.join('\n').trim();
+        }
+
+        const lines = [];
+        const text = typeof parsed.text === 'string' ? parsed.text.trim() : '';
+        if (text) lines.push(text);
+
+        if (!text && typeof parsed.content === 'string' && parsed.content.trim()) {
+            const contentText = parseDoubaoInlinePayloadSafe(parsed.content, depth + 1);
+            if (contentText) lines.push(contentText);
+        }
+
+        const entities = Array.isArray(parsed.entities) ? parsed.entities : [];
+        const fileNames = [];
+        entities.forEach((entity, idx) => {
+            if (!entity || typeof entity !== 'object') return;
+            const file = entity?.entity_content?.file || entity?.file || null;
+            const fileName = typeof file?.file_name === 'string'
+                ? file.file_name.trim()
+                : (typeof file?.name === 'string' ? file.name.trim() : '');
+            if (fileName) {
+                fileNames.push(fileName);
+                return;
+            }
+            const image = entity?.entity_content?.image || {};
+            const url = image?.image_ori?.url || image?.preview_img?.url || image?.image_thumb?.url || '';
+            const key = typeof image?.key === 'string' ? image.key.trim() : '';
+            const serial = entities.length > 1 ? String(idx + 1) : '';
+            if (url) lines.push(`[图片${serial}] ${url}`);
+            else if (key) lines.push(`[图片${serial}] ${key}`);
+        });
+
+        fileNames.forEach((name, idx) => {
+            const serial = fileNames.length > 1 ? String(idx + 1) : '';
+            lines.push(`[附件${serial}] ${name}`);
+        });
+
+        return lines.length ? lines.join('\n') : '';
+    }
+
     function sanitizeDoubaoUserNodeText(text) {
-        const lines = String(text || '')
+        const out = [];
+        const seen = new Set();
+        const pushLine = (line) => {
+            const normalized = normalizeDoubaoTextForMatch(line);
+            if (!normalized) return;
+            if (isDoubaoTrivialSkillPrompt(normalized)) return;
+            if (seen.has(normalized)) return;
+            seen.add(normalized);
+            out.push(normalized);
+        };
+
+        String(text || '')
             .split(/\r?\n/)
-            .map((line) => normalizeDoubaoTextForMatch(line))
-            .filter(Boolean)
-            .filter((line) => !isDoubaoTrivialSkillPrompt(line));
-        return Array.from(new Set(lines)).join('\n').trim();
+            .forEach((line) => {
+                const rawLine = String(line || '').trim();
+                if (!rawLine) return;
+                const parsed = parseDoubaoInlinePayloadSafe(rawLine);
+                const expanded = (parsed && parsed !== rawLine) ? parsed : rawLine;
+                String(expanded)
+                    .split(/\r?\n/)
+                    .forEach((x) => pushLine(x));
+            });
+
+        // 附件去重：若已存在 "[附件] 文件名"，则移除同名的裸文件名行。
+        const attachmentNames = new Set();
+        out.forEach((line) => {
+            const m = String(line).match(/^\[附件\d*\]\s*(.+)$/);
+            if (m && m[1]) {
+                attachmentNames.add(normalizeDoubaoTextForMatch(m[1]));
+            }
+        });
+
+        const compact = out.filter((line) => {
+            const normalized = normalizeDoubaoTextForMatch(line);
+            if (!normalized) return false;
+            if (/^\[附件\d*\]\s*/.test(line)) return true;
+            return !attachmentNames.has(normalized);
+        });
+
+        return compact.join('\n').trim();
     }
 
     function getDoubaoConversationRows() {
@@ -2789,6 +3140,16 @@
         if (!node || !node.text) return null;
 
         const candidates = getQwenUserDomCandidates();
+        const targetId = normalizeQwenMessageId(node.id);
+        if (targetId) {
+            const byId = candidates.find((c) => normalizeQwenMessageId(c.id) === targetId);
+            if (byId?.element) return byId.element;
+            const byContains = candidates.find((c) => {
+                const cid = normalizeQwenMessageId(c.id);
+                return cid && (cid.includes(targetId) || targetId.includes(cid));
+            });
+            if (byContains?.element) return byContains.element;
+        }
         const targetText = normalizeQwenTextForMatch(node.text);
         const targetPrefix = targetText.slice(0, Math.min(48, targetText.length));
         const targetMiddle = targetText.slice(Math.max(0, Math.floor(targetText.length / 2) - 18), Math.floor(targetText.length / 2) + 18);
@@ -2804,7 +3165,7 @@
             if (!txt) return;
 
             let score = 0;
-            if (msgIdRaw && msgIdRaw === node.id) score += 16;
+            if (msgIdRaw && normalizeQwenMessageId(msgIdRaw) === targetId) score += 16;
             if (txt === targetText) score += 14;
             if (targetPrefix && txt.includes(targetPrefix)) score += 8;
             if (targetMiddle && txt.includes(targetMiddle)) score += 4;
@@ -2862,7 +3223,7 @@
                 });
             }
         }).catch((e) => {
-            console.warn('AI-Chat-Nodes: 千问虚拟节点刷新失败', e);
+            console.warn('AI-Chat-Helper: 千问虚拟节点刷新失败', e);
         }).finally(() => {
             if (refreshStorageKey !== storageKey) return;
             qwenVirtualNodesLoading = false;
@@ -2901,7 +3262,7 @@
         }
 
         const built = userMsgs.map((m, idx) => {
-            const id = String(m.id || `qwen-user-${idx + 1}`);
+            const id = normalizeQwenMessageId(String(m.id || `qwen-user-${idx + 1}`));
             const text = String(m.text || '').trim();
             return {
                 id,
@@ -3035,12 +3396,49 @@
             } catch (e) {}
         }, 800);
     }
+    function applyDotBaseVisual(dot) {
+        if (!dot) return;
+        dot.style.background = 'linear-gradient(135deg, #94a3b8 0%, #64748b 100%)';
+        dot.style.filter = 'grayscale(0.2)';
+        dot.style.boxShadow = '0 2px 6px rgba(0, 0, 0, 0.15), inset 0 1px 2px rgba(255, 255, 255, 0.3)';
+        dot.style.transform = 'translate(-50%, -50%) scale(1)';
+        dot.style.zIndex = '2';
+        dot.classList.remove('ai-dot-active-ripple');
+    }
+
+    function applyDotActiveVisual(dot, node) {
+        if (!dot) return;
+        const userColor = 'linear-gradient(135deg, #1E88E5 0%, #1565C0 100%)';
+        const aiColor = 'linear-gradient(135deg, #4FC3F7 0%, #03A9F4 100%)';
+        const isAI = node && (node.role === 'assistant' || node.role === 'ai');
+        dot.style.background = isAI ? aiColor : userColor;
+        dot.style.filter = 'none';
+        dot.style.boxShadow = '0 6px 16px rgba(0, 0, 0, 0.2), 0 0 0 2px #fff';
+        dot.style.transform = 'translate(-50%, -50%) scale(1.6)';
+        dot.style.zIndex = '10';
+        dot.classList.add('ai-dot-active-ripple');
+    }
+
     function setActiveDot(dot, nodeId) {
         if (!nodeId || activeNodeId === nodeId) return;
+
+        const prevActiveId = activeNodeId;
         activeNodeId = nodeId;
-        // 如果当前没有轨道动画，则手动更新一次渲染以同步激活态
-        if (!orbitalAnimationFrame) {
-            render();
+
+        if (prevActiveId) {
+            const prevNode = nodesMap.get(String(prevActiveId))
+                || nodes.find((n) => String(n?.id || '') === String(prevActiveId));
+            const prevDot = prevNode?.dot || null;
+            if (prevDot && prevDot.isConnected) {
+                applyDotBaseVisual(prevDot);
+            }
+        }
+
+        if (dot && dot.isConnected) {
+            const currentNode = nodesMap.get(String(nodeId))
+                || nodes.find((n) => String(n?.id || '') === String(nodeId))
+                || null;
+            applyDotActiveVisual(dot, currentNode);
         }
     }
 
@@ -3087,11 +3485,12 @@
         isNodeSearching = true;
 
         let attempts = 0;
-        const TICK_MS = isQwen ? 110 : 160;
-        const MAX_ATTEMPTS = 260;
         const targetIdx = nodes.findIndex(n => n.id === targetId);
         const activeIdx = nodes.findIndex(n => n.id === activeNodeId);
         const searchDirection = (targetIdx !== -1 && activeIdx !== -1 && targetIdx > activeIdx) ? 'down' : 'up';
+        const isDoubaoDownSearch = isDoubao && searchDirection === 'down';
+        const TICK_MS = isQwen ? 110 : (isDoubaoDownSearch ? 90 : (isDoubao ? 140 : 160));
+        const MAX_ATTEMPTS = 260;
         const stopSearch = () => {
             if (searchIntervalId) {
                 clearInterval(searchIntervalId);
@@ -3116,7 +3515,7 @@
         };
 
         const onUserInterrupt = () => {
-            console.log('AI-Chat-Nodes: 用户手动交互，中止自动搜寻。');
+            console.log('AI-Chat-Helper: 用户手动交互，中止自动搜寻。');
             stopSearch();
         };
 
@@ -3150,18 +3549,26 @@
                     targetNode.element = rematched;
                 }
             }
+            const shouldAttemptDoubaoRematch = isDoubaoDownSearch ? (attempts <= 2 || attempts % 2 === 0) : true;
+            if (shouldAttemptDoubaoRematch && isDoubao && targetNode && (!targetNode.element || !document.body.contains(targetNode.element) || !isDoubaoElementMatchNode(targetNode.element, targetNode))) {
+                const rematched = findDoubaoDomElementByNode(targetNode);
+                if (rematched && isDirectionMatched(rematched)) {
+                    targetNode.element = rematched;
+                }
+            }
 
             // 检查是否已经找到节点
             const found = targetNode
                 && targetNode.element
                 && document.body.contains(targetNode.element)
-                && ((!isQwen && !isDeepSeek)
+                && ((!isQwen && !isDeepSeek && !isDoubao)
                     || (isQwen && isQwenElementMatchNode(targetNode.element, targetNode) && isDirectionMatched(targetNode.element))
-                    || (isDeepSeek && isDeepSeekElementMatchNode(targetNode.element, targetNode) && isDirectionMatched(targetNode.element)));
+                    || (isDeepSeek && isDeepSeekElementMatchNode(targetNode.element, targetNode) && isDirectionMatched(targetNode.element))
+                    || (isDoubao && isDoubaoElementMatchNode(targetNode.element, targetNode) && isDirectionMatched(targetNode.element)));
 
             if (found) {
                 stopSearch();
-                console.log(` AI-Chat-Nodes: ✓ 找到节点 ${targetId}，正在跳转...`);
+                console.log(` AI-Chat-Helper: ✓ 找到节点 ${targetId}，正在跳转...`);
                 jumpToMessage(targetNode.element, targetId);
                 if (targetNode.dot && !isQwen) {
                     setActiveDot(targetNode.dot, targetId);
@@ -3177,34 +3584,53 @@
             attempts++;
             if (attempts > MAX_ATTEMPTS) {
                 stopSearch();
-                console.warn(` AI-Chat-Nodes: ✗ 搜寻超时 (${MAX_ATTEMPTS} 次)，未找到节点 ${targetId}`);
+                console.warn(` AI-Chat-Helper: ✗ 搜寻超时 (${MAX_ATTEMPTS} 次)，未找到节点 ${targetId}`);
                 return;
             }
 
-            console.log(` AI-Chat-Nodes: 搜寻中 (${attempts}/${MAX_ATTEMPTS}, dir=${searchDirection})...`);
+            if (!isDoubaoDownSearch && (attempts === 1 || attempts % 6 === 0)) {
+                console.log(` AI-Chat-Helper: 搜寻中 (${attempts}/${MAX_ATTEMPTS}, dir=${searchDirection})...`);
+            }
 
             // 重新探测滚动容器（容器可能在 SPA 路由后变化）
             const scrollEl = getScrollContainer();
             if (scrollEl && scrollEl !== window && typeof scrollEl.scrollTo === 'function') {
-                const ratio = isQwen ? 0.42 : 0.55;
+                const ratio = isQwen
+                    ? 0.42
+                    : (isDoubaoDownSearch ? 0.46 : 0.55);
                 const baseStep = Math.floor((scrollEl.clientHeight || 700) * ratio);
-                const step = Math.min(460, Math.max(160, baseStep));
+                const step = isDoubaoDownSearch
+                    ? Math.min(380, Math.max(140, baseStep))
+                    : Math.min(460, Math.max(160, baseStep));
                 const delta = searchDirection === 'down' ? step : -step;
                 // 搜寻阶段强调“连续快速推进”，使用 auto 避免 smooth 缓动叠加导致拖尾。
-                scrollEl.scrollBy({ top: delta, behavior: 'auto' });
+                scrollEl.scrollBy({
+                    top: delta,
+                    behavior: 'auto'
+                });
             } else {
                 const viewportH = window.innerHeight || 800;
-                const ratio = isQwen ? 0.42 : 0.55;
+                const ratio = isQwen
+                    ? 0.42
+                    : (isDoubaoDownSearch ? 0.46 : 0.55);
                 const baseStep = Math.floor(viewportH * ratio);
-                const step = Math.min(460, Math.max(160, baseStep));
+                const step = isDoubaoDownSearch
+                    ? Math.min(380, Math.max(140, baseStep))
+                    : Math.min(460, Math.max(160, baseStep));
                 const delta = searchDirection === 'down' ? step : -step;
-                window.scrollBy({ top: delta, behavior: 'auto' });
+                window.scrollBy({
+                    top: delta,
+                    behavior: 'auto'
+                });
             }
 
             // 自动搜寻期间强制同步一次激活节点，提升过程反馈
-            requestAnimationFrame(() => {
-                scheduleActiveNodeUpdate();
-            });
+            const shouldSyncActiveEveryTick = !isDoubaoDownSearch;
+            if (shouldSyncActiveEveryTick || attempts % 4 === 0) {
+                requestAnimationFrame(() => {
+                    scheduleActiveNodeUpdate();
+                });
+            }
         }
 
         // 立即执行第一次
@@ -3284,7 +3710,7 @@
             }
         } catch (e) {
             qwenInitUnlockInProgress = false;
-            console.warn('AI-Chat-Nodes: 千问初始滚动解锁失败', e);
+            console.warn('AI-Chat-Helper: 千问初始滚动解锁失败', e);
         }
     }
 
@@ -3297,14 +3723,14 @@
         return new Promise((resolve) => {
             // 用户要求的缓存机制：如果已经加载过全量历史，直接跳过并完成
             if (isHistoryFullyLoaded) {
-                console.log('AI-Chat-Nodes: 历史已加载过，直接开启导出。');
+                console.log('AI-Chat-Helper: 历史已加载过，直接开启导出。');
                 resolve();
                 return;
             }
 
             const scrollEl = getScrollContainer();
             if (!scrollEl || scrollEl === window) {
-                console.warn('AI-Chat-Nodes: 未能找到滚动容器，无法自动加载历史。');
+                console.warn('AI-Chat-Helper: 未能找到滚动容器，无法自动加载历史。');
                 resolve();
                 return;
             }
@@ -3395,7 +3821,7 @@
                         // 遵照用户需求：不再复位，直接滚到最新对话
                         scrollEl.scrollTo({ top: scrollEl.scrollHeight, behavior: 'instant' });
                     } catch (e) {
-                        console.error('AI-Chat-Nodes: update error', e);
+                        console.error('AI-Chat-Helper: update error', e);
                     } finally {
                         if (triggerBtn) {
                             triggerBtn.disabled = false;
@@ -3439,6 +3865,7 @@
         if (!nodes.length) {
             if (typeof dotsLayer.replaceChildren === 'function') dotsLayer.replaceChildren();
             else dotsLayer.innerHTML = '';
+            track.style.display = 'none';
             track.style.top = '0';
             track.style.height = '0';
             content.style.height = '0';
@@ -3482,10 +3909,20 @@
             runningOffset = orbitalScrollOffset;
         }
 
-        // 统一轨道样式：填满可视区域，作为节点运动的稳固底座
-        track.style.display = nodes.length > 1 ? 'block' : 'none';
-        track.style.top = dotEdgePad + 'px';
-        track.style.height = (finalVisibleHeight - dotEdgePad * 2) + 'px';
+        // 轨道样式：轨道可随节点跨度缩短，但始终保留最小可见长度。
+        const minTrackHeight = Math.max(28, Math.round(CONFIG.dotSize * 2.4));
+        const singleNodeMinTrackHeight = Math.max(56, Math.round(CONFIG.dotSize * 4.8));
+        const fullTrackHeight = Math.max(minTrackHeight, finalVisibleHeight - dotEdgePad * 2);
+        const visibleNodeSpan = Math.max(0, (Math.min(nodes.length, visibleLimit) - 1) * CONFIG.dotGap);
+        const desiredTrackHeight = visibleNodeSpan + CONFIG.dotSize + 12;
+        const trackHeight = nodes.length === 1
+            ? Math.min(fullTrackHeight, singleNodeMinTrackHeight)
+            : Math.max(minTrackHeight, Math.min(fullTrackHeight, Math.round(desiredTrackHeight)));
+        track.style.display = 'block';
+        track.style.top = Math.round((finalVisibleHeight - trackHeight) / 2) + 'px';
+        track.style.height = trackHeight + 'px';
+        track.style.width = '4px';
+        track.style.background = 'linear-gradient(180deg, rgba(200,200,200,0.15) 0%, rgba(200,200,200,0.3) 50%, rgba(200,200,200,0.15) 100%)';
 
         const fragment = document.createDocumentFragment();
         const edgeThreshold = 40;
@@ -3514,24 +3951,14 @@
             node.dot = dot;
 
             const isActive = node.id === activeNodeId;
-            if (isActive) {
-                const userColor = 'linear-gradient(135deg, #1E88E5 0%, #1565C0 100%)';
-                const aiColor = 'linear-gradient(135deg, #4FC3F7 0%, #03A9F4 100%)';
-                const isAI = node && (node.role === 'assistant' || node.role === 'ai');
-                dot.style.background = isAI ? aiColor : userColor;
-                dot.style.filter = 'none';
-                dot.style.boxShadow = '0 6px 16px rgba(0, 0, 0, 0.2), 0 0 0 2px #fff';
-                dot.style.transform = 'translate(-50%, -50%) scale(1.6)';
-                dot.style.zIndex = '10';
-                dot.classList.add('ai-dot-active-ripple');
-            }
+            if (isActive) applyDotActiveVisual(dot, node);
 
-            let targetOpacity = isActive ? 1 : 0.6;
+            let targetOpacity = isActive ? 1 : (nodes.length === 1 ? 0.9 : 0.6);
             if (topPx < 0 || topPx > finalVisibleHeight) {
                 targetOpacity = 0;
-            } else if (topPx < edgeThreshold) {
+            } else if (nodes.length > 1 && topPx < edgeThreshold) {
                 targetOpacity *= (topPx / edgeThreshold);
-            } else if (topPx > finalVisibleHeight - edgeThreshold) {
+            } else if (nodes.length > 1 && topPx > finalVisibleHeight - edgeThreshold) {
                 targetOpacity *= ((finalVisibleHeight - topPx) / edgeThreshold);
             }
 
@@ -3758,6 +4185,30 @@
     function syncQwenNodesFromApi(currentBatch) {
         if (!Array.isArray(currentBatch) || !currentBatch.length) return false;
         const normalizedBatch = normalizeQwenNodeOrder(currentBatch);
+        const qRows = getQwenConversationRows().filter((row) => getQwenRowType(row) === 'question');
+
+        // 节点显示兜底：若 API 文本缺少附件信息，使用 DOM 问题行文本（含附件名）回填。
+        normalizedBatch.forEach((msg, idx) => {
+            const row = qRows[idx];
+            if (!row) return;
+            const rowText = getQwenRowText(row);
+            const msgText = normalizeQwenTextForMatch(msg?.text || '');
+            const rowNormalized = normalizeQwenTextForMatch(rowText || '');
+            if (!rowNormalized) return;
+
+            const rowHasAttachment = /\[附件\d*\]/.test(rowText);
+            if (!rowHasAttachment) return;
+
+            if (!msgText || !msgText.includes('[附件')) {
+                msg.text = rowText;
+                return;
+            }
+
+            // API 已有附件但内容更短时，以 DOM 版本替换，确保包含问题气泡文本。
+            if (rowNormalized.length > msgText.length && rowNormalized.includes(msgText.slice(0, Math.min(24, msgText.length)))) {
+                msg.text = rowText;
+            }
+        });
 
         const incoming = [];
         const seen = new Set();
@@ -3868,17 +4319,42 @@
         try {
             const cachedArr = JSON.parse(localStorage.getItem(storageKey));
             if (cachedArr && Array.isArray(cachedArr)) {
-                cachedArr.forEach(m => {
+                let nodesToLoad = cachedArr;
+                if (isQwen) {
+                    const sanitized = sanitizeQwenCachedNodes(cachedArr);
+                    if (sanitized.legacyFound) {
+                        localStorage.removeItem(storageKey);
+                        qwenNodeLog('cache:legacy-cleared', {
+                            cachedCount: cachedArr.length
+                        });
+                        nodesToLoad = [];
+                    } else {
+                        nodesToLoad = sanitized.nodes;
+                        if (sanitized.changed) {
+                            const normalizedCache = nodesToLoad.map((n) => ({
+                                id: n.id,
+                                text: n.text,
+                                role: n.role,
+                                sessionIndex: n.sessionIndex
+                            }));
+                            localStorage.setItem(storageKey, JSON.stringify(normalizedCache));
+                        }
+                    }
+                }
+
+                nodesToLoad.forEach(m => {
                     m.isHistory = true; 
                     m.isLinked = true; // 缓存的节点默认已链接
                     nodesMap.set(m.id, m);
                 });
-                nodes = cachedArr;
+                nodes = nodesToLoad;
                 if (isDoubao && !activeNodeId && orbitalLastInteractionAt === 0) {
                     primeOrbitalToLatest();
                 }
-                render();
-                bindConversationScrollListener();
+                if (nodes.length) {
+                    render();
+                    bindConversationScrollListener();
+                }
             }
         } catch (e) {
             console.error('Failed to load nodes cache', e);
@@ -4083,7 +4559,7 @@
             try {
                 installQwenCaptureHooks();
             } catch (e) {
-                console.warn('AI-Chat-Nodes: 千问抓包钩子初始化失败，不影响设置按钮注入', e);
+                console.warn('AI-Chat-Helper: 千问抓包钩子初始化失败，不影响设置按钮注入', e);
             }
         }
 
@@ -4091,7 +4567,7 @@
             try {
                 installDoubaoCaptureHooks();
             } catch (e) {
-                console.warn('AI-Chat-Nodes: 豆包抓包钩子初始化失败，不影响设置按钮注入', e);
+                console.warn('AI-Chat-Helper: 豆包抓包钩子初始化失败，不影响设置按钮注入', e);
             }
         }
 
@@ -4285,7 +4761,7 @@
             width: auto;
             min-width: 0;
             max-width: calc(100vw - 24px);
-            background: rgba(255,255,255,0.98);
+            background: rgba(255, 255, 255, 0.2);
             border: 1px solid rgba(0, 0, 0, 0.08);
             border-radius: 12px;
             box-shadow: 0 10px 40px rgba(0, 0, 0, 0.12);
@@ -4348,9 +4824,13 @@
         document.body.appendChild(readingLinePreview);
 
         const hideExportMenu = () => {
+            const openDirection = exportMenu.dataset.openDirection || 'below';
+            const hiddenTransform = openDirection === 'above'
+                ? 'translateY(8px) scale(0.96)'
+                : 'translateY(-8px) scale(0.96)';
             exportMenu.style.opacity = '0';
             exportMenu.style.pointerEvents = 'none';
-            exportMenu.style.transform = 'translateY(-8px) scale(0.96)';
+            exportMenu.style.transform = hiddenTransform;
         };
 
         const hideReadingLineMenu = () => {
@@ -4556,13 +5036,41 @@
                 hideExportMenu();
                 return;
             }
-            const btnRect = popup.querySelector('#ai-nodes-export-trigger').getBoundingClientRect();
-            const menuWidth = Math.min(240, window.innerWidth - 24);
+
+            const triggerEl = popup.querySelector('#ai-nodes-export-trigger');
+            const btnRect = triggerEl.getBoundingClientRect();
             const margin = 12;
-            const alignedLeft = btnRect.right - menuWidth;
-            const clampedLeft = Math.max(margin, Math.min(alignedLeft, window.innerWidth - menuWidth - margin));
-            exportMenu.style.left = `${Math.round(clampedLeft)}px`;
-            exportMenu.style.top = `${Math.round(btnRect.bottom + 8)}px`;
+            const gap = 8;
+
+            // 先取菜单真实尺寸（隐藏态下仍可通过 offset 获取）
+            const menuWidth = Math.max(160, Math.round(exportMenu.offsetWidth || 180));
+            const menuHeight = Math.max(80, Math.round(exportMenu.offsetHeight || 104));
+
+            // 水平：优先右对齐触发按钮，不够空间则切到左对齐，再做边界钳制
+            const preferRightAlignedLeft = btnRect.right - menuWidth;
+            const preferLeftAlignedLeft = btnRect.left;
+            const canUseRightAlign = preferRightAlignedLeft >= margin;
+            const rawLeft = canUseRightAlign ? preferRightAlignedLeft : preferLeftAlignedLeft;
+            const left = Math.max(margin, Math.min(rawLeft, window.innerWidth - menuWidth - margin));
+
+            // 垂直：优先下方，不够空间则切到上方
+            const belowTop = btnRect.bottom + gap;
+            const aboveTop = btnRect.top - menuHeight - gap;
+            const canShowBelow = belowTop + menuHeight <= window.innerHeight - margin;
+            const top = canShowBelow
+                ? belowTop
+                : Math.max(margin, Math.min(aboveTop, window.innerHeight - menuHeight - margin));
+            const openDirection = canShowBelow ? 'below' : 'above';
+            const hiddenTransform = openDirection === 'above'
+                ? 'translateY(8px) scale(0.96)'
+                : 'translateY(-8px) scale(0.96)';
+
+            exportMenu.style.left = `${Math.round(left)}px`;
+            exportMenu.style.top = `${Math.round(top)}px`;
+            exportMenu.dataset.openDirection = openDirection;
+            exportMenu.style.transform = hiddenTransform;
+            // Force style flush so opening transition follows the chosen direction.
+            void exportMenu.offsetHeight;
             exportMenu.style.opacity = '1';
             exportMenu.style.pointerEvents = 'auto';
             exportMenu.style.transform = 'translateY(0) scale(1)';
@@ -4607,7 +5115,7 @@
                 chatgptAccessToken = session?.accessToken || null;
                 return chatgptAccessToken;
             } catch (e) {
-                console.warn('AI-Chat-Nodes: 获取 ChatGPT access token 失败', e);
+                console.warn('AI-Chat-Helper: 获取 ChatGPT access token 失败', e);
                 return null;
             }
         }
@@ -4714,7 +5222,7 @@
                     }))
                     .filter((item) => item.id);
             } catch (e) {
-                console.warn('AI-Chat-Nodes: 获取 ChatGPT 项目列表失败', workspaceId, e);
+                console.warn('AI-Chat-Helper: 获取 ChatGPT 项目列表失败', workspaceId, e);
                 return [];
             }
         }
@@ -4851,7 +5359,7 @@
                         appendItems(await fetchChatGPTRootConversations(workspaceId, token, true, requested - merged.length, maxPages));
                     }
                 } catch (e) {
-                    console.warn('AI-Chat-Nodes: 获取 ChatGPT 空间会话失败', workspaceId, e);
+                    console.warn('AI-Chat-Helper: 获取 ChatGPT 空间会话失败', workspaceId, e);
                 }
 
                 if (merged.length >= requested) break;
@@ -4863,7 +5371,7 @@
                         appendItems(await fetchChatGPTProjectConversations(workspaceId, token, project, requested - merged.length));
                     }
                 } catch (e) {
-                    console.warn('AI-Chat-Nodes: 获取 ChatGPT 项目会话失败', workspaceId, e);
+                    console.warn('AI-Chat-Helper: 获取 ChatGPT 项目会话失败', workspaceId, e);
                 }
             }
 
@@ -5431,7 +5939,7 @@
                 const convData = await fetchChatGPTConversationById(convId);
                 return extractChatGPTMessagesFromMapping(convData);
             } catch (e) {
-                console.warn('AI-Chat-Nodes: ChatGPT 会话 API 解析失败', e);
+                console.warn('AI-Chat-Helper: ChatGPT 会话 API 解析失败', e);
                 return [];
             }
         }
@@ -5440,7 +5948,7 @@
         const QWEN_PAGE_LIST_PATH = '/api/v2/session/page/list';
         const QWEN_DEFAULT_MSG_LIST_URL = 'https://chat2-api.qianwen.com/api/v1/session/msg/list?return_response_messages=true&biz_id=ai_qwen&event_filter=all&page_size=50&chat_client=h5&device=pc&fr=pc&pr=qwen&la=zh-CN&tz=Asia%2FShanghai';
         const QWEN_DEFAULT_PAGE_LIST_URL = 'https://chat2-api.qianwen.com/api/v2/session/page/list?biz_id=ai_qwen&chat_client=h5&device=pc&fr=pc&pr=qwen&la=zh-CN&tz=Asia%2FShanghai';
-        const QWEN_FALLBACK_UT_KEY = 'ai-chat-nodes-qwen-fallback-ut';
+        const QWEN_FALLBACK_UT_KEY = 'AI-Chat-Helper-qwen-fallback-ut';
 
         function createNonce(len) {
             const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
@@ -5694,6 +6202,23 @@
             }
 
             return headers;
+        }
+
+        function normalizeQwenHttpMethod(method, fallback = 'GET') {
+            const upper = String(method || '').trim().toUpperCase();
+            if (upper === 'GET' || upper === 'POST') return upper;
+            return fallback;
+        }
+
+        function getQwenAlternateHttpMethod(method) {
+            return normalizeQwenHttpMethod(method, 'GET') === 'GET' ? 'POST' : 'GET';
+        }
+
+        function buildQwenRequestBodyFromTemplate() {
+            if (!qwenCapturedTemplate?.body) return {};
+            const parsed = safeParseJson(qwenCapturedTemplate.body);
+            if (parsed && typeof parsed === 'object') return parsed;
+            return {};
         }
 
         function ensureQwenRequestUrl(rawUrl, sessionId, extraParams = null) {
@@ -6055,6 +6580,45 @@
                 || mt === 'ref_source_inline';
         }
 
+        function collectQwenAttachmentNames(value, out, depth = 0) {
+            if (depth > 6 || value == null) return;
+            if (Array.isArray(value)) {
+                value.forEach((item) => collectQwenAttachmentNames(item, out, depth + 1));
+                return;
+            }
+            if (typeof value !== 'object') return;
+
+            const pushName = (name) => {
+                const clean = normalizeQwenMessageText(name);
+                if (clean) out.push(clean);
+            };
+
+            const directName = String(
+                value?.file_name
+                || value?.filename
+                || value?.name
+                || ''
+            ).trim();
+            if (directName) pushName(directName);
+
+            const resourceInfos = Array.isArray(value?.resource_infos) ? value.resource_infos : [];
+            resourceInfos.forEach((r) => {
+                const name = String(r?.file_name || r?.filename || r?.name || '').trim();
+                if (name) pushName(name);
+            });
+
+            Object.values(value).forEach((v) => {
+                if (v && typeof v === 'object') collectQwenAttachmentNames(v, out, depth + 1);
+            });
+        }
+
+        function extractQwenAttachmentTexts(messageLike) {
+            const names = [];
+            collectQwenAttachmentNames(messageLike, names, 0);
+            const uniq = Array.from(new Set(names.filter(Boolean)));
+            return uniq.map((name, idx) => `[附件${uniq.length > 1 ? idx + 1 : ''}] ${name}`);
+        }
+
         function extractQwenUserTexts(item) {
             const req = Array.isArray(item?.request_messages) ? item.request_messages : [];
             const out = [];
@@ -6062,6 +6626,12 @@
             req.forEach((m) => {
                 const mime = String(m?.mime_type || '').toLowerCase();
                 if (mime === 'image/url') return;
+
+                const attachmentTexts = extractQwenAttachmentTexts(m);
+                attachmentTexts.forEach((line) => {
+                    const clean = normalizeQwenMessageText(line);
+                    if (clean) out.push(clean);
+                });
 
                 const bucket = [];
                 collectQwenTextCandidates(m, bucket);
@@ -6125,13 +6695,18 @@
                 const baseOrder = getQwenItemSortValue(item, idx + 1) * 10;
                 const reqId = String(item?.req_id || item?.request_id || `qwen-req-${idx + 1}`);
                 const userTexts = extractQwenUserTexts(item);
-                userTexts.forEach((text, i) => {
-                    out.push({ id: `${reqId}-u-${i + 1}`, role: 'user', text, order: baseOrder + i * 2 + 1 });
-                });
+                const mergedUserText = Array.from(new Set(
+                    userTexts
+                        .map((t) => normalizeQwenMessageText(t))
+                        .filter(Boolean)
+                )).join('\n');
+                if (mergedUserText) {
+                    out.push({ id: normalizeQwenMessageId(reqId), role: 'user', text: mergedUserText, order: baseOrder + 1 });
+                }
 
                 const assistantTexts = extractQwenAssistantTexts(item);
                 assistantTexts.forEach((text, i) => {
-                    out.push({ id: `${reqId}-a-${i + 1}`, role: 'assistant', text, order: baseOrder + i * 2 + 2 });
+                    out.push({ id: `${reqId}-a-${i + 1}`, role: 'assistant', text, order: baseOrder + 2 + i });
                 });
             });
 
@@ -6253,7 +6828,7 @@
                         });
                     }
                 } catch (e) {
-                    console.warn('AI-Chat-Nodes: 安装千问 fetch 抓包钩子时出现异常', e);
+                    console.warn('AI-Chat-Helper: 安装千问 fetch 抓包钩子时出现异常', e);
                 }
                 return resp;
             };
@@ -6307,14 +6882,13 @@
                         }, { once: true });
                     }
                 } catch (e) {
-                    console.warn('AI-Chat-Nodes: 安装千问 XHR 抓包钩子时出现异常', e);
+                    console.warn('AI-Chat-Helper: 安装千问 XHR 抓包钩子时出现异常', e);
                 }
                 return nativeSend.apply(this, arguments);
             };
         };
 
         async function fetchQwenMessagesByTemplate() {
-            const headers = buildQwenRequestHeaders();
             const sessionId = getQwenSessionIdFromUrl();
             if (!sessionId) {
                 qwenNodeLog('api:no-session-id', { href: window.location.href });
@@ -6322,12 +6896,13 @@
             }
             const baseUrl = qwenCapturedTemplate?.url || QWEN_DEFAULT_MSG_LIST_URL;
             const initialUrl = ensureQwenRequestUrl(baseUrl, sessionId);
+            let requestMethod = normalizeQwenHttpMethod(qwenCapturedTemplate?.method, 'GET');
+            const bodyObj = buildQwenRequestBodyFromTemplate();
 
             qwenNodeLog('api:request-start', {
                 hasTemplate: Boolean(qwenCapturedTemplate?.url),
-                hasXsrf: Boolean(headers['x-xsrf-token']),
-                hasDeviceId: Boolean(headers['x-deviceid']),
-                headerKeys: Object.keys(headers).slice(0, 12),
+                reqMethod: requestMethod,
+                hasBody: Boolean(Object.keys(bodyObj).length),
                 reqUrl: initialUrl
             });
 
@@ -6345,28 +6920,47 @@
                     qwenInternalFetchDepth += 1;
                     let resp;
                     try {
-                        resp = await fetch(currentUrl, {
-                            method: 'GET',
-                            credentials: 'include',
-                            headers
-                        });
+                        for (let attempt = 0; attempt < 2; attempt += 1) {
+                            const headers = buildQwenRequestHeaders();
+                            if (requestMethod === 'GET' && headers['content-type']) {
+                                delete headers['content-type'];
+                            }
+                            const fetchInit = {
+                                method: requestMethod,
+                                credentials: 'include',
+                                headers
+                            };
+                            if (requestMethod !== 'GET') {
+                                fetchInit.body = JSON.stringify(bodyObj || {});
+                            }
+                            resp = await fetch(currentUrl, fetchInit);
+                            if (resp.status !== 405) break;
+                            const fallback = getQwenAlternateHttpMethod(requestMethod);
+                            qwenNodeLog('api:method-fallback', {
+                                page,
+                                status: resp.status,
+                                from: requestMethod,
+                                to: fallback
+                            });
+                            requestMethod = fallback;
+                        }
                     } finally {
                         qwenInternalFetchDepth = Math.max(0, qwenInternalFetchDepth - 1);
                     }
 
                     const rawText = await resp.text();
                     if (!resp.ok) {
-                        console.warn(`AI-Chat-Nodes: 千问会话 API 请求失败 (${resp.status})`, rawText.slice(0, 400));
+                        console.warn(`AI-Chat-Helper: 千问会话 API 请求失败 (${resp.status})`, rawText.slice(0, 400));
                         break;
                     }
 
                     const json = safeParseJson(rawText);
                     if (!json) {
-                        console.warn('AI-Chat-Nodes: 千问会话 API 返回非 JSON 响应');
+                        console.warn('AI-Chat-Helper: 千问会话 API 返回非 JSON 响应');
                         break;
                     }
 
-                    captureQwenTemplateFromResponse(json, currentUrl, headers);
+                    captureQwenTemplateFromResponse(json, currentUrl, buildQwenRequestHeaders());
 
                     const parsed = parseQwenMessagesFromResponse(json);
                     parsed.forEach((item) => {
@@ -6398,10 +6992,10 @@
                     return allParsed.sort((a, b) => (a.order || 0) - (b.order || 0));
                 }
 
-                console.warn('AI-Chat-Nodes: 千问导出失败，候选请求均未获取到消息');
+                console.warn('AI-Chat-Helper: 千问导出失败，候选请求均未获取到消息');
                 return [];
             } catch (e) {
-                console.warn('AI-Chat-Nodes: 千问会话 API 解析失败', e);
+                console.warn('AI-Chat-Helper: 千问会话 API 解析失败', e);
                 return [];
             } finally {
                 qwenSuppressCapturedPayloads = Math.max(0, qwenSuppressCapturedPayloads - 1);
@@ -6442,7 +7036,7 @@
                     userCount: apiMsgs.filter((m) => m && m.role === 'user').length
                 });
             }).catch((e) => {
-                console.warn('AI-Chat-Nodes: 千问历史补全失败', e);
+                console.warn('AI-Chat-Helper: 千问历史补全失败', e);
             }).finally(() => {
                 qwenHistoryHydrationInFlight = false;
             });
@@ -6734,7 +7328,7 @@
                         }
                     }
                 } catch (e) {
-                    console.warn('AI-Chat-Nodes: 安装 fetch 抓包模板时出现异常', e);
+                    console.warn('AI-Chat-Helper: 安装 fetch 抓包模板时出现异常', e);
                 }
                 return rawFetch.apply(this, arguments);
             };
@@ -6782,7 +7376,7 @@
                         captureDoubaoTemplate(this.__aiNodesDoubaoUrl, 'POST', this.__aiNodesDoubaoHeaders, bodyText);
                     }
                 } catch (e) {
-                    console.warn('AI-Chat-Nodes: 安装 XHR 抓包模板时出现异常', e);
+                    console.warn('AI-Chat-Helper: 安装 XHR 抓包模板时出现异常', e);
                 }
                 return rawXhrSend.apply(this, arguments);
             };
@@ -6917,7 +7511,7 @@
                     }
                 }
             } catch (e) {
-                console.warn('AI-Chat-Nodes: 读取 performance 记录失败', e);
+                console.warn('AI-Chat-Helper: 读取 performance 记录失败', e);
             }
             return '';
         }
@@ -7079,14 +7673,24 @@
             return lines.join('\n').trim();
         }
 
-        function parseDoubaoContentPayload(contentValue) {
+        function parseDoubaoContentPayload(contentValue, depth = 0) {
             if (typeof contentValue !== 'string') return '';
 
             const raw = contentValue.trim();
             if (!raw) return '';
+            if (depth > 3) return raw;
 
             const parsed = safeParseJson(raw);
-            if (!parsed || typeof parsed !== 'object') return raw;
+            if (parsed == null) return raw;
+
+            // 豆包有时把 JSON 再序列化成字符串，需递归解包（例如 "{\"entities\":[...]}").
+            if (typeof parsed === 'string') {
+                const nested = parsed.trim();
+                if (!nested) return '';
+                if (nested === raw) return nested;
+                return parseDoubaoContentPayload(nested, depth + 1);
+            }
+            if (typeof parsed !== 'object') return raw;
 
             // 豆包有时把 blocks 数组序列化塞进 content，避免原样输出原始 JSON。
             if (Array.isArray(parsed)) {
@@ -7097,6 +7701,11 @@
             const lines = [];
             const text = typeof parsed.text === 'string' ? parsed.text.trim() : '';
             if (text) lines.push(text);
+
+            if (!text && typeof parsed.content === 'string' && parsed.content.trim()) {
+                const contentText = parseDoubaoContentPayload(parsed.content, depth + 1);
+                if (contentText) lines.push(contentText);
+            }
 
             const entities = Array.isArray(parsed.entities) ? parsed.entities : [];
             const fileNames = [];
@@ -8016,7 +8625,7 @@
                     return allRes.messages;
                 }
             } catch (e) {
-                console.warn('AI-Chat-Nodes: 豆包全量分页获取失败，回退单页请求', e);
+                console.warn('AI-Chat-Helper: 豆包全量分页获取失败，回退单页请求', e);
             }
 
             const req = buildDoubaoRequest(convId);
@@ -8031,7 +8640,7 @@
 
                 if (!resp.ok) {
                     const mode = req.fromTemplate ? 'template' : 'fallback';
-                    console.warn(`AI-Chat-Nodes: 豆包会话 API 请求失败 (${resp.status}, mode=${mode})`);
+                    console.warn(`AI-Chat-Helper: 豆包会话 API 请求失败 (${resp.status}, mode=${mode})`);
                     return [];
                 }
 
@@ -8039,21 +8648,21 @@
                 const json = safeParseJson(rawText);
                 if (!json) {
                     const mode = req.fromTemplate ? 'template' : 'fallback';
-                    console.warn(`AI-Chat-Nodes: 豆包会话 API 返回非 JSON 响应 (mode=${mode})`);
+                    console.warn(`AI-Chat-Helper: 豆包会话 API 返回非 JSON 响应 (mode=${mode})`);
                     return [];
                 }
                 const parsed = await parseDoubaoSingleChainMessages(json, req.headers);
                 if (parsed.length) return parsed;
                 if (Number(json?.status_code) !== 0) {
                     const mode = req.fromTemplate ? 'template' : 'fallback';
-                    console.warn(`AI-Chat-Nodes: 豆包会话 API 返回异常 status_code=${json?.status_code || 'unknown'} (mode=${mode})`);
+                    console.warn(`AI-Chat-Helper: 豆包会话 API 返回异常 status_code=${json?.status_code || 'unknown'} (mode=${mode})`);
                 } else {
                     const mode = req.fromTemplate ? 'template' : 'fallback';
-                    console.warn(`AI-Chat-Nodes: 豆包会话 API 成功但未解析到消息 (mode=${mode})`);
+                    console.warn(`AI-Chat-Helper: 豆包会话 API 成功但未解析到消息 (mode=${mode})`);
                 }
                 return [];
             } catch (e) {
-                console.warn('AI-Chat-Nodes: 豆包会话 API 解析失败', e);
+                console.warn('AI-Chat-Helper: 豆包会话 API 解析失败', e);
                 return [];
             }
         };
@@ -8422,7 +9031,7 @@
                 sourceLabel = normalizeExportSourceLabel(rawSource);
                 deepseekMeta = result?.deepseekMeta || null;
             } catch (e) {
-                console.warn('AI-Chat-Nodes: 获取导出消息失败', e);
+                console.warn('AI-Chat-Helper: 获取导出消息失败', e);
             }
 
             if (!overlay.parentNode) return;
@@ -8963,7 +9572,7 @@
                         });
                     } catch (e) {
                         failCount += 1;
-                        console.warn('AI-Chat-Nodes: ChatGPT 批量导出会话失败', conv?.id, e);
+                        console.warn('AI-Chat-Helper: ChatGPT 批量导出会话失败', conv?.id, e);
                     }
                 }
 
@@ -9448,7 +10057,7 @@
                         });
                     } catch (e) {
                         failCount += 1;
-                        console.warn('AI-Chat-Nodes: DeepSeek 批量导出会话失败', conv?.id, e);
+                        console.warn('AI-Chat-Helper: DeepSeek 批量导出会话失败', conv?.id, e);
                     }
                 }
 
@@ -9727,7 +10336,7 @@
                         });
                     } catch (e) {
                         failCount += 1;
-                        console.warn('AI-Chat-Nodes: 豆包批量导出会话失败', conv?.id, e);
+                        console.warn('AI-Chat-Helper: 豆包批量导出会话失败', conv?.id, e);
                     }
                 }
 
@@ -9982,7 +10591,7 @@
                         });
                     } catch (e) {
                         failCount += 1;
-                        console.warn('AI-Chat-Nodes: 千问批量导出会话失败', conv?.id, e);
+                        console.warn('AI-Chat-Helper: 千问批量导出会话失败', conv?.id, e);
                     }
                 }
                 if (!out.length) {
@@ -10071,7 +10680,7 @@
                     list.push(...apiMsgs);
                 } else {
                     source = 'API(/api/v1/session/msg/list)-FAILED';
-                    console.warn('AI-Chat-Nodes: 千问导出已禁用 DOM 回退，当前仅支持 API 获取。');
+                    console.warn('AI-Chat-Helper: 千问导出已禁用 DOM 回退，当前仅支持 API 获取。');
                     return { messages: [], source };
                 }
             } else if (isDoubao) {
@@ -10081,7 +10690,7 @@
                     list.push(...apiMsgs);
                 } else {
                     source = 'API(/im/chain/single)-FAILED';
-                    console.warn('AI-Chat-Nodes: 豆包导出已禁用 DOM 回退，当前仅支持 API 获取。');
+                    console.warn('AI-Chat-Helper: 豆包导出已禁用 DOM 回退，当前仅支持 API 获取。');
                     return { messages: [], source };
                 }
             } else if (isDeepSeek) {
@@ -10091,7 +10700,7 @@
                     list.push(...aggregateDeepSeekMessagesForExport(apiMsgs));
                 } else {
                     source = 'API(/api/v0/chat/history_messages)-FAILED';
-                    console.warn('AI-Chat-Nodes: DeepSeek 导出已禁用 DOM 回退，当前仅支持 API 获取。');
+                    console.warn('AI-Chat-Helper: DeepSeek 导出已禁用 DOM 回退，当前仅支持 API 获取。');
                     return { messages: [], source };
                 }
             }
@@ -10166,6 +10775,349 @@
                 ].join('\n')
                 : '';
 
+            function renderInlineMarkdownForPdf(text) {
+                const src = String(text || '');
+                const tokens = [];
+                const toToken = (type, content) => {
+                    const key = `@@MDTOKEN_${tokens.length}@@`;
+                    tokens.push({ key, type, content: String(content || '') });
+                    return key;
+                };
+
+                // 先提取代码和数学公式，避免后续转义破坏内容
+                let mixed = src
+                    .replace(/`([^`\n]+)`/g, (_, code) => toToken('code', code))
+                    .replace(/\$\$([\s\S]+?)\$\$/g, (_, expr) => toToken('math-display', expr))
+                    .replace(/\$([^$\n]+)\$/g, (_, expr) => toToken('math-inline', expr));
+
+                let out = escapeHtml(mixed);
+                out = out.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+                out = out.replace(/\*([^*\n]+)\*/g, '<em>$1</em>');
+                out = out.replace(/~~([^~\n]+)~~/g, '<del>$1</del>');
+                out = out.replace(
+                    /\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g,
+                    '<a href="$2" target="_blank" rel="noreferrer">$1</a>'
+                );
+
+                tokens.forEach((t) => {
+                    const escapedKey = escapeHtml(t.key);
+                    if (t.type === 'code') {
+                        out = out.replaceAll(escapedKey, `<code>${escapeHtml(t.content)}</code>`);
+                    } else if (t.type === 'math-inline') {
+                        out = out.replaceAll(escapedKey, `<span class="math-inline">\\(${escapeHtml(t.content)}\\)</span>`);
+                    } else if (t.type === 'math-display') {
+                        out = out.replaceAll(escapedKey, `<div class="math-display">\\[${escapeHtml(t.content)}\\]</div>`);
+                    }
+                });
+                return out;
+            }
+
+            function renderMarkdownToHtmlForPdf(text) {
+                const lines = String(text || '').replace(/\r\n/g, '\n').split('\n');
+                const html = [];
+
+                let paragraph = [];
+                let listType = '';
+                let listItems = [];
+                let quoteLines = [];
+                let inCode = false;
+                let codeLines = [];
+
+                const splitTableCells = (line) => {
+                    const raw = String(line || '').trim();
+                    let body = raw;
+                    if (body.startsWith('|')) body = body.slice(1);
+                    if (body.endsWith('|')) body = body.slice(0, -1);
+
+                    const cells = [];
+                    let current = '';
+                    let inCode = false;
+                    let inMathInline = false;
+                    let inMathBlock = false;
+
+                    for (let i = 0; i < body.length; i += 1) {
+                        const ch = body[i];
+                        const prev = i > 0 ? body[i - 1] : '';
+                        const next = i + 1 < body.length ? body[i + 1] : '';
+
+                        if (ch === '`' && prev !== '\\') {
+                            inCode = !inCode;
+                            current += ch;
+                            continue;
+                        }
+
+                        if (!inCode && ch === '$' && prev !== '\\') {
+                            if (next === '$') {
+                                inMathBlock = !inMathBlock;
+                                current += '$$';
+                                i += 1;
+                                continue;
+                            }
+                            if (!inMathBlock) {
+                                inMathInline = !inMathInline;
+                            }
+                            current += ch;
+                            continue;
+                        }
+
+                        if (ch === '|' && prev !== '\\' && !inCode && !inMathInline && !inMathBlock) {
+                            cells.push(current.trim());
+                            current = '';
+                            continue;
+                        }
+
+                        current += ch;
+                    }
+                    cells.push(current.trim());
+                    return cells;
+                };
+
+                const isTableSeparator = (line) => {
+                    const cells = splitTableCells(line);
+                    if (!cells.length) return false;
+                    return cells.every((c) => /^:?-{3,}:?$/.test(String(c || '').trim()));
+                };
+
+                const measureTextWidth = (text) => {
+                    const s = String(text || '');
+                    let score = 0;
+                    for (let i = 0; i < s.length; i += 1) {
+                        const code = s.charCodeAt(i);
+                        if (code <= 127) score += 1;
+                        else score += 1.8; // CJK 近似更宽
+                    }
+                    return Math.max(1, score);
+                };
+
+                const normalizeColPercents = (rawPercents, minPct = 8, maxPct = 38) => {
+                    const n = rawPercents.length;
+                    const out = rawPercents.slice();
+                    const locked = new Array(n).fill(false);
+
+                    // 先按上下限钳制
+                    for (let i = 0; i < n; i += 1) {
+                        if (out[i] < minPct) {
+                            out[i] = minPct;
+                            locked[i] = true;
+                        } else if (out[i] > maxPct) {
+                            out[i] = maxPct;
+                            locked[i] = true;
+                        }
+                    }
+
+                    // 将总和归一到 100，优先在未锁定列中分配
+                    let total = out.reduce((a, b) => a + b, 0);
+                    let guard = 0;
+                    while (Math.abs(total - 100) > 0.001 && guard < 12) {
+                        guard += 1;
+                        const freeIdx = out
+                            .map((v, idx) => ({ v, idx }))
+                            .filter((x) => !locked[x.idx])
+                            .map((x) => x.idx);
+                        if (!freeIdx.length) break;
+                        const delta = (100 - total) / freeIdx.length;
+                        freeIdx.forEach((idx) => {
+                            out[idx] += delta;
+                            if (out[idx] < minPct) {
+                                out[idx] = minPct;
+                                locked[idx] = true;
+                            } else if (out[idx] > maxPct) {
+                                out[idx] = maxPct;
+                                locked[idx] = true;
+                            }
+                        });
+                        total = out.reduce((a, b) => a + b, 0);
+                    }
+
+                    // 最终微调到100
+                    total = out.reduce((a, b) => a + b, 0);
+                    if (n > 0 && Math.abs(total - 100) > 0.001) {
+                        out[n - 1] += (100 - total);
+                    }
+                    return out;
+                };
+
+                const computeTableColPercents = (headerCells, bodyRows) => {
+                    const colCount = Math.max(
+                        headerCells.length,
+                        ...bodyRows.map((r) => r.length),
+                        1
+                    );
+                    const scores = new Array(colCount).fill(1);
+                    const allRows = [headerCells, ...bodyRows];
+                    allRows.forEach((row, rowIdx) => {
+                        for (let c = 0; c < colCount; c += 1) {
+                            const cell = row[c] || '';
+                            // 标题列稍微加权，避免被压太窄
+                            const weight = rowIdx === 0 ? 1.18 : 1;
+                            scores[c] = Math.max(scores[c], measureTextWidth(cell) * weight);
+                        }
+                    });
+                    // 开根号压缩极端差异，避免某一列过大
+                    const soft = scores.map((s) => Math.sqrt(s + 1));
+                    const sum = soft.reduce((a, b) => a + b, 0) || 1;
+                    const rawPct = soft.map((v) => (v / sum) * 100);
+                    return normalizeColPercents(rawPct, 8, 38);
+                };
+
+                const flushParagraph = () => {
+                    if (!paragraph.length) return;
+                    html.push(`<p>${paragraph.map((l) => renderInlineMarkdownForPdf(l)).join('<br>')}</p>`);
+                    paragraph = [];
+                };
+
+                const flushList = () => {
+                    if (!listItems.length || !listType) return;
+                    const items = listItems.map((item) => `<li>${renderInlineMarkdownForPdf(item)}</li>`).join('');
+                    html.push(`<${listType}>${items}</${listType}>`);
+                    listItems = [];
+                    listType = '';
+                };
+
+                const flushQuote = () => {
+                    if (!quoteLines.length) return;
+                    html.push(`<blockquote>${quoteLines.map((l) => renderInlineMarkdownForPdf(l)).join('<br>')}</blockquote>`);
+                    quoteLines = [];
+                };
+
+                const flushCode = () => {
+                    if (!inCode) return;
+                    html.push(`<pre><code>${escapeHtml(codeLines.join('\n'))}</code></pre>`);
+                    codeLines = [];
+                    inCode = false;
+                };
+
+                for (let i = 0; i < lines.length; i += 1) {
+                    const line = String(lines[i] || '');
+                    const trimmed = line.trim();
+
+                    if (trimmed.startsWith('```')) {
+                        flushParagraph();
+                        flushList();
+                        flushQuote();
+                        if (inCode) {
+                            flushCode();
+                        } else {
+                            inCode = true;
+                            codeLines = [];
+                        }
+                        continue;
+                    }
+
+                    if (inCode) {
+                        codeLines.push(line);
+                        continue;
+                    }
+
+                    if (!trimmed) {
+                        flushParagraph();
+                        flushList();
+                        flushQuote();
+                        continue;
+                    }
+
+                    const displayMathMatch = trimmed.match(/^\$\$([\s\S]+)\$\$$/);
+                    if (displayMathMatch) {
+                        flushParagraph();
+                        flushList();
+                        flushQuote();
+                        html.push(`<div class="math-display">\\[${escapeHtml(displayMathMatch[1])}\\]</div>`);
+                        continue;
+                    }
+
+                    const headingMatch = trimmed.match(/^(#{1,6})\s+(.+)$/);
+                    if (headingMatch) {
+                        flushParagraph();
+                        flushList();
+                        flushQuote();
+                        const level = Math.min(6, headingMatch[1].length);
+                        html.push(`<h${level}>${renderInlineMarkdownForPdf(headingMatch[2])}</h${level}>`);
+                        continue;
+                    }
+
+                    const quoteMatch = line.match(/^\s*>\s?(.*)$/);
+                    if (quoteMatch) {
+                        flushParagraph();
+                        flushList();
+                        quoteLines.push(quoteMatch[1] || '');
+                        continue;
+                    }
+
+                    const ulMatch = line.match(/^\s*[-*+]\s+(.+)$/);
+                    if (ulMatch) {
+                        flushParagraph();
+                        flushQuote();
+                        if (listType && listType !== 'ul') flushList();
+                        listType = 'ul';
+                        listItems.push(ulMatch[1]);
+                        continue;
+                    }
+
+                    const olMatch = line.match(/^\s*\d+\.\s+(.+)$/);
+                    if (olMatch) {
+                        flushParagraph();
+                        flushQuote();
+                        if (listType && listType !== 'ol') flushList();
+                        listType = 'ol';
+                        listItems.push(olMatch[1]);
+                        continue;
+                    }
+
+                    if (line.includes('|') && isTableSeparator(lines[i + 1])) {
+                        flushParagraph();
+                        flushList();
+                        flushQuote();
+
+                        const headerCells = splitTableCells(line);
+                        const separatorCells = splitTableCells(lines[i + 1]);
+                        if (!headerCells.length || headerCells.length !== separatorCells.length) {
+                            paragraph.push(line);
+                            continue;
+                        }
+                        const bodyRows = [];
+                        let j = i + 2;
+                        while (j < lines.length) {
+                            const rowLine = String(lines[j] || '');
+                            if (!rowLine.trim() || !rowLine.includes('|')) break;
+                            bodyRows.push(splitTableCells(rowLine));
+                            j += 1;
+                        }
+
+                        const colCount = headerCells.length;
+                        bodyRows.forEach((row) => {
+                            if (row.length > colCount) {
+                                const kept = row.slice(0, colCount - 1);
+                                const mergedTail = row.slice(colCount - 1).join(' | ');
+                                row.length = 0;
+                                row.push(...kept, mergedTail);
+                            } else {
+                                while (row.length < colCount) row.push('');
+                            }
+                        });
+
+                        const thead = `<thead><tr>${headerCells.map((c) => `<th>${renderInlineMarkdownForPdf(c)}</th>`).join('')}</tr></thead>`;
+                        const colPercents = computeTableColPercents(headerCells, bodyRows);
+                        const colgroup = `<colgroup>${colPercents.map((p) => `<col style="width:${p.toFixed(2)}%">`).join('')}</colgroup>`;
+                        const tbody = `<tbody>${bodyRows.map((row) => `<tr>${row.map((c) => `<td>${renderInlineMarkdownForPdf(c)}</td>`).join('')}</tr>`).join('')}</tbody>`;
+                        html.push(`<div class="table-wrap"><table class="pdf-table">${colgroup}${thead}${tbody}</table></div>`);
+
+                        i = j - 1;
+                        continue;
+                    }
+
+                    flushList();
+                    flushQuote();
+                    paragraph.push(line);
+                }
+
+                flushParagraph();
+                flushList();
+                flushQuote();
+                flushCode();
+
+                return html.join('\n');
+            }
+
             if (format === 'json') {
                 if (deepSeekExportMeta) {
                     content = JSON.stringify({
@@ -10217,6 +11169,10 @@
                 }
             } else if (format === 'pdf') {
                 const win = window.open('', '_blank');
+                if (!win) {
+                    alert('PDF 导出窗口被浏览器拦截，请允许弹窗后重试。');
+                    return;
+                }
                 // 聚合逻辑：将 User 发起及随后跟随的所有连续 Assistant 回复视为一个对话组（1 轮）
                 const groups = [];
                 for (let i = 0; i < exportData.length; i++) {
@@ -10236,8 +11192,10 @@
                     body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; padding: 0; margin: 0; color: #1a202c; background: #f8fafc; }
                     .page { padding: 50px 60px; page-break-after: always; min-height: 90vh; display: flex; flex-direction: column; max-width: 900px; margin: 0 auto; background: #fff; box-shadow: 0 0 40px rgba(0,0,0,0.05); }
                     .page:last-child { page-break-after: auto; }
-                    .header { border-bottom: 3px solid #3b82f6; padding-bottom: 16px; margin-bottom: 40px; color: #1e40af; display: flex; justify-content: space-between; align-items: flex-end; }
+                    .header { border-bottom: 3px solid #3b82f6; padding-bottom: 16px; margin-bottom: 40px; color: #1e40af; display: grid; grid-template-columns: 1fr auto 1fr; align-items: end; column-gap: 12px; }
                     .header .title { font-size: 24px; font-weight: 800; letter-spacing: -0.5px; }
+                    .header .platform { justify-self: center; font-size: 12px; font-weight: 700; color: #1d4ed8; letter-spacing: 0.4px; padding: 4px 10px; border-radius: 999px; background: #eff6ff; border: 1px solid #bfdbfe; white-space: nowrap; }
+                    .header .ver { justify-self: end; font-size:12px; color:#94a3b8; font-weight:500; text-align: right; }
                     .msg { margin-bottom: 25px; padding: 24px; border-radius: 16px; line-height: 1.6; position: relative; border: 1px solid #e2e8f0; transition: transform 0.2s; }
                     .user { background: #f0f9ff; border-color: #bae6fd; }
                     .assistant { background: #ffffff; border-color: #f1f5f9; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05); }
@@ -10247,6 +11205,13 @@
                     
                     /* 万能代码块与排版适配 */
                     .text { font-size: 14px; color: #334155; line-height: 1.7; word-break: break-word; }
+                    .text h1, .text h2, .text h3, .text h4, .text h5, .text h6 { margin: 16px 0 10px; color: #0f172a; line-height: 1.35; }
+                    .text h1 { font-size: 22px; }
+                    .text h2 { font-size: 20px; }
+                    .text h3 { font-size: 18px; }
+                    .text h4 { font-size: 16px; }
+                    .text h5 { font-size: 15px; }
+                    .text h6 { font-size: 14px; }
                     pre, .qk-markdown pre, .markdown-body pre, [class*="code-block"] pre {
                         background: #1e1e1e !important;
                         color: #d4d4d4 !important;
@@ -10261,6 +11226,24 @@
                     }
                     code { background: #f1f5f9; padding: 2px 5px; border-radius: 4px; font-family: monospace; color: #e11d48; }
                     pre code { background: none; padding: 0; color: inherit; }
+                    .text a { color: #1d4ed8; text-decoration: underline; }
+                    .math-inline { white-space: normal; max-width: 100%; }
+                    .math-display { margin: 14px 0; padding: 8px 10px; background: #f8fafc; border-left: 3px solid #bfdbfe; overflow-x: auto; }
+                    td .math-display, th .math-display { margin: 6px 0; padding: 4px 6px; }
+                    td .math-inline mjx-container, th .math-inline mjx-container,
+                    td mjx-container[display="false"], th mjx-container[display="false"] {
+                        white-space: normal !important;
+                        max-width: 100%;
+                        overflow-wrap: anywhere;
+                    }
+                    td mjx-container[display="true"], th mjx-container[display="true"] {
+                        max-width: 100%;
+                        overflow-x: auto;
+                        overflow-y: hidden;
+                    }
+                    td mjx-container, th mjx-container {
+                        font-size: 0.94em !important;
+                    }
                     
                     /* 深度思考与引用块 */
                     .thought-process, blockquote { 
@@ -10284,23 +11267,31 @@
                         text-transform: uppercase;
                     }
                     
-                    table { border-collapse: collapse; width: 100%; margin: 15px 0; border: 1px solid #e2e8f0; font-size: 13px; }
-                    th, td { border: 1px solid #e2e8f0; padding: 10px; text-align: left; }
+                    .table-wrap { width: 100%; overflow: hidden; margin: 15px 0; }
+                    table, .pdf-table { border-collapse: collapse; width: 100%; max-width: 100%; border: 1px solid #e2e8f0; font-size: 13px; table-layout: fixed; }
+                    thead { display: table-header-group; }
+                    tbody { display: table-row-group; }
+                    tr { break-inside: avoid; page-break-inside: avoid; }
+                    th, td { border: 1px solid #e2e8f0; padding: 9px 10px; text-align: left; vertical-align: top; white-space: normal; word-break: break-word; overflow-wrap: anywhere; line-height: 1.55; }
                     th { background: #f8fafc; font-weight: 700; }
                     ul, ol { padding-left: 24px; margin: 10px 0; }
                     p { margin: 12px 0; }
                     img { max-width: 100%; height: auto; border-radius: 8px; }
                     .footer { margin-top: auto; padding-top: 20px; border-top: 1px solid #f1f5f9; text-align: right; font-size: 11px; color: #94a3b8; }
+                    @page { margin: 10mm; }
                     @media print { 
-                        body { background: #fff; }
-                        .page { box-shadow: none; padding: 30px; margin: 0; width: 100%; max-width: none; }
+                        html, body { background: #fff; margin: 0; padding: 0; }
+                        .page { box-shadow: none; padding: 24px; margin: 0 auto; width: 100%; max-width: 185mm; }
+                        .table-wrap { overflow: hidden; }
+                        table, .pdf-table { width: 100%; min-width: 0; max-width: 100%; table-layout: fixed; font-size: 12px; }
                     }
                 </style></head><body>
                     ${groups.map((group, idx) => `
                         <div class="page">
                             <div class="header">
                                 <div class="title">第 ${idx + 1} 轮对话</div>
-                                <div style="font-size:12px; color:#94a3b8; font-weight:500;">AI Chat Nodes Exporter v1.6.0</div>
+                                <div class="platform">${AI_NAME}</div>
+                                <div class="ver">AI Chat Helper Exporter v1.6.0</div>
                             </div>
                             ${deepSeekExportMeta && idx === 0 ? `
                                 <div style="margin:-12px 0 20px;padding:12px 14px;border:1px solid #dbeafe;border-radius:10px;background:#eff6ff;font-size:12px;color:#1e3a8a;line-height:1.7;">
@@ -10317,19 +11308,46 @@
                                         <div class="role-badge">
                                             ${m.role === 'user' ? '🧑 USER QUESTION' : '🤖 ' + AI_NAME.toUpperCase() + ' RESPONSE'}
                                         </div>
-                                        <div class="text">${(m.html && m.__displayText === m.__rawText)
-                                            ? m.html
-                                            : m.__displayText.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\n/g, '<br>')}</div>
+                                        <div class="text">${renderMarkdownToHtmlForPdf(m.__displayText)}</div>
                                     </div>
                                 `).join('')}
                             </div>
-                            <div class="footer">Exported via AI-Chat-Nodes • ${new Date().toLocaleString()}</div>
+                            <div class="footer">Exported via AI-Chat-Helper • ${new Date().toLocaleString()}</div>
                         </div>
                     `).join('')}
+                    <script>
+                        window.MathJax = {
+                            tex: { inlineMath: [['\\\\(', '\\\\)'], ['$', '$']], displayMath: [['\\\\[', '\\\\]'], ['$$', '$$']] },
+                            chtml: { linebreaks: { automatic: true, width: 'container' } },
+                            svg: { linebreaks: { automatic: true, width: 'container' } },
+                            options: { skipHtmlTags: ['script', 'noscript', 'style', 'textarea', 'pre', 'code'] }
+                        };
+                    </script>
+                    <script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+                    <script>
+                        (function () {
+                            // 避免浏览器打印页脚显示 about:blank
+                            try {
+                                var openerHref = window.opener && window.opener.location ? window.opener.location.href : '';
+                                if (openerHref) window.history.replaceState(null, document.title, openerHref);
+                            } catch (e) {}
+                            function safePrint() {
+                                setTimeout(function () { window.print(); }, 160);
+                            }
+                            function run() {
+                                if (window.MathJax && typeof window.MathJax.typesetPromise === 'function') {
+                                    window.MathJax.typesetPromise().then(safePrint).catch(safePrint);
+                                } else {
+                                    safePrint();
+                                }
+                            }
+                            if (document.readyState === 'complete') run();
+                            else window.addEventListener('load', run, { once: true });
+                        })();
+                    </script>
                 </body></html>`;
                 win.document.write(html);
                 win.document.close();
-                setTimeout(() => win.print(), 1000);
                 return;
             }
 
@@ -10510,68 +11528,71 @@
             return true;
         }
 
-        // 注入逻辑
+        function getQwenUploadRecordButton() {
+            const candidates = Array.from(document.querySelectorAll('button[aria-label="上传记录"], button[aria-label="实时记录"]'));
+            if (!candidates.length) return null;
+            const filtered = candidates.filter((btn) => {
+                if (!btn || !btn.isConnected) return false;
+                if (btn.closest('#new-nav-tab-wrapper, aside')) return false;
+                const rect = btn.getBoundingClientRect();
+                return rect.top >= 0 && rect.top < Math.max(220, window.innerHeight * 0.35);
+            });
+            if (!filtered.length) return null;
+            filtered.sort((a, b) => {
+                const ra = a.getBoundingClientRect();
+                const rb = b.getBoundingClientRect();
+                return rb.right - ra.right;
+            });
+            return filtered[0];
+        }
+
+        function getQwenUploadRecordAnchor() {
+            const btn = getQwenUploadRecordButton();
+            if (!btn) return null;
+            const shell = btn.closest('[class*="capsuleTransitionShell"], [class*="moreButtonMotionShell"]')
+                || btn.closest('[class*="capsuleTransitionItem"], [class*="moreButtonMotionItem"]')
+                || btn;
+            const container = shell.parentElement || btn.parentElement;
+            if (!container) return null;
+            return { button: btn, shell, container };
+        }
+
+        function placeSettingsUnderRail() {
+            const rail = document.getElementById('ai-nodes-nav-wrapper');
+            if (!rail || !rail.isConnected) return false;
+
+            if (buttonHost.parentElement !== rail) {
+                rail.appendChild(buttonHost);
+            }
+            if (fallbackHost.isConnected) fallbackHost.remove();
+
+            const railRect = rail.getBoundingClientRect();
+            const hostWidth = Math.max(32, Math.round(buttonHost.offsetWidth || 32));
+            const hostHeight = Math.max(32, Math.round(buttonHost.offsetHeight || 32));
+            const edgePadding = 8;
+            const belowGap = 10;
+            const railRectAdjusted = rail.getBoundingClientRect();
+            const desiredLeftViewport = railRectAdjusted.left + (railRectAdjusted.width - hostWidth) / 2;
+            const clampedLeftViewport = Math.max(
+                edgePadding,
+                Math.min(window.innerWidth - hostWidth - edgePadding, desiredLeftViewport)
+            );
+            const localLeft = Math.round(clampedLeftViewport - railRectAdjusted.left);
+            const localTop = Math.round(railRectAdjusted.height + belowGap);
+
+            buttonHost.style.position = 'absolute';
+            buttonHost.style.left = `${localLeft}px`;
+            buttonHost.style.top = `${localTop}px`;
+            buttonHost.style.right = 'auto';
+            buttonHost.style.margin = '0';
+            buttonHost.style.transform = 'none';
+            buttonHost.style.zIndex = '10060';
+            return true;
+        }
+
+        // 注入逻辑：统一基于轨道定位
         function attemptInjection() {
-            let container = null;
-            if (isChatGPT) {
-                applyFallbackHostPlacement();
-                if (!fallbackHost.isConnected) document.body.appendChild(fallbackHost);
-                if (buttonHost.parentElement !== fallbackHost) {
-                    fallbackHost.appendChild(buttonHost);
-                }
-                return true;
-            } else if (isQwen) {
-                // 更新千问注入位置为顶栏右侧功能区
-                container = document.querySelector(".flex.items-center.gap-2.mr-4.desktop-no-drag > div.flex.items-center.gap-2");
-                if (!container) {
-                    container = document.querySelector('.desktop-no-drag .flex.items-center.gap-2') ||
-                                document.querySelector('header .desktop-no-drag') ||
-                                document.querySelector('header [class*="desktop-no-drag"]');
-                }
-            } else if (isDoubao) {
-                // 豆包注入位置：优先插到分享按钮前，避免附加到不稳定容器末尾
-                const shareEl = document.querySelector('[data-testid="thread_share_btn_right_side"]');
-                const shareAnchor = shareEl ? (shareEl.closest('button') || shareEl.closest('div') || shareEl) : null;
-                const shareContainer = shareAnchor && shareAnchor.parentElement;
-                if (shareContainer && !shareContainer.querySelector('.ai-nodes-settings-btn')) {
-                    shareContainer.insertBefore(buttonHost, shareAnchor);
-                    setTimeout(applyAutoCollapse, 500);
-                    return true;
-                }
-
-                // 兜底：匹配头部右侧操作区，再兜底到 chat_header 本体
-                container = document.querySelector('[data-testid="chat_header"] [class*="right"], [data-testid="chat_header"] [class*="action"], [data-testid="chat_header"] [class*="toolbar"]') ||
-                            document.querySelector('[data-testid="chat_header"] [class*="container-"]') ||
-                            document.querySelector('[data-testid="chat_header"]') ||
-                            document.querySelector('header');
-            } else if (isDeepSeek) {
-                // DeepSeek 注入位置：优先锚定头部功能按钮，避免插到正文区域
-                if (ensureDeepSeekPlacement()) {
-                    setTimeout(applyAutoCollapse, 500);
-                    return true;
-                }
-                // 备选方案
-                container = document.querySelector('div[class*="_2be88ba"] div[class*="_0efe408"]') ||
-                            document.querySelector('div[class*="_0efe408"]') ||
-                            document.querySelector('.dc04ec1d.a02af2e6 > div:last-child') ||
-                            document.querySelector('.dc04ec1d.a02af2e6');
-            }
-
-            if (container && !container.querySelector('.ai-nodes-settings-btn')) {
-                container.appendChild(buttonHost);
-                if (fallbackHost.isConnected) fallbackHost.remove();
-                // 首次注入成功时尝试自动收起
-                setTimeout(applyAutoCollapse, 500);
-                return true;
-            }
-
-            // 兜底：顶栏容器结构变化时，始终保证设置按钮可点击
-            if (!buttonHost.isConnected) {
-                if (!fallbackHost.isConnected) document.body.appendChild(fallbackHost);
-                fallbackHost.appendChild(buttonHost);
-                return true;
-            }
-            return false;
+            return placeSettingsUnderRail();
         }
 
         // 尝试注入，由于 SPA 异步渲染，需要轮询几次
@@ -10585,20 +11606,13 @@
 
         // 长驻守护：路由切换或头部重渲染后自动补注入
         const ensureInjected = () => {
-            if (isChatGPT) {
-                applyFallbackHostPlacement();
-            }
-            if (isDeepSeek) {
-                // DeepSeek 头部经常局部重渲染，即使按钮仍连接也可能位置错乱
-                if (!ensureDeepSeekPlacement() && !buttonHost.isConnected) {
-                    attemptInjection();
-                }
+            const hostVisible = isElementVisiblyRenderable(buttonHost);
+            const rail = document.getElementById('ai-nodes-nav-wrapper');
+            if (!buttonHost.isConnected || !hostVisible || !rail || buttonHost.parentElement !== rail) {
+                attemptInjection();
                 return;
             }
-
-            if (!buttonHost.isConnected) {
-                attemptInjection();
-            }
+            placeSettingsUnderRail();
         };
 
         let ensureTimer = null;
@@ -10607,7 +11621,7 @@
             ensureTimer = setTimeout(() => {
                 ensureTimer = null;
                 ensureInjected();
-            }, isDeepSeek ? 180 : 0);
+            }, 0);
         };
 
         const mo = new MutationObserver(() => {
@@ -10620,10 +11634,8 @@
         document.addEventListener('visibilitychange', () => {
             if (!document.hidden) setTimeout(ensureInjected, 100);
         });
-        if (isChatGPT) {
-            window.addEventListener('resize', applyFallbackHostPlacement, { passive: true });
-            window.addEventListener('scroll', applyFallbackHostPlacement, { passive: true });
-        }
+        window.addEventListener('resize', ensureInjected, { passive: true });
+        window.addEventListener('scroll', ensureInjected, { passive: true });
     }
 
     let appBootstrapped = false;
@@ -10659,3 +11671,4 @@
         }, 50);
     }
 })();
+
