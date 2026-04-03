@@ -125,6 +125,22 @@
     let deepseekVirtualNodesLoading = false;
     let deepseekVirtualNodesLoaded = false;
     let deepseekVirtualNodesLastFetchAt = 0;
+    let doubaoVirtualNodesCache = [];
+    let doubaoVirtualNodesLoading = false;
+    let doubaoVirtualNodesLoaded = false;
+    let doubaoVirtualNodesLastFetchAt = 0;
+    let doubaoVirtualNodesDirty = true;
+    let doubaoLastDomUserSignature = '';
+    let doubaoInitialFetchConvId = '';
+    let doubaoBootClickedConvId = '';
+    const DOUBAO_QUERY_DEFAULTS = 'version_code=20800&language=zh&device_platform=web&aid=497858&real_aid=497858&pkg_type=release_version&device_id=7571732726702835209&pc_version=3.12.3&web_id=7572300776296236571&tea_uuid=7572300776296236571&region=CN&sys_region=CN&samantha_web=1&use-olympus-account=1';
+    const DOUBAO_FULL_FETCH_MAX_PAGES = 200;
+    let doubaoCapturedTemplate = null;
+    let doubaoCapturedRecentConvUrl = '';
+    let doubaoCapturedRecentConvBodyText = '';
+    let doubaoCapturedMcsListRequest = null;
+    let doubaoCaptureHooksInstalled = false;
+    let doubaoArtifactContentCache = new Map();
     let deepseekCapturedHeaders = null;
     let deepseekPageListTemplate = null;
     let deepseekCaptureHooksInstalled = false;
@@ -147,6 +163,15 @@
     };
 
     let collectQwenMessagesFromPendingPayloads = function () {
+        return [];
+    };
+
+    // 豆包同样提供占位，避免初始化阶段被提前调用时报 ReferenceError。
+    let installDoubaoCaptureHooks = function () {
+        return;
+    };
+
+    let getDoubaoMessagesByApi = async function () {
         return [];
     };
 
@@ -469,6 +494,16 @@
                 deepseekPageListTemplate = null;
                 deepseekLastSessionMeta = null;
             }
+            if (isDoubao) {
+                doubaoVirtualNodesCache = [];
+                doubaoVirtualNodesLoading = false;
+                doubaoVirtualNodesLoaded = false;
+                doubaoVirtualNodesLastFetchAt = 0;
+                doubaoVirtualNodesDirty = true;
+                doubaoLastDomUserSignature = '';
+                doubaoInitialFetchConvId = '';
+                doubaoBootClickedConvId = '';
+            }
             return true;
         }
         return false;
@@ -589,18 +624,6 @@
             opacity: 0.6;
             filter: grayscale(0.2);
             transition: all 0.24s cubic-bezier(0.22, 0.61, 0.36, 1);
-        }
-        .ai-dot-new-badge {
-            position: absolute;
-            right: -5px;
-            top: -5px;
-            width: 7px;
-            height: 7px;
-            background: #ff4d4f;
-            border: 1.5px solid #fff;
-            border-radius: 50%;
-            z-index: 10;
-            box-shadow: 0 0 4px rgba(0,0,0,0.2);
         }
         @keyframes ai-dot-active-ripple {
             0% {
@@ -801,6 +824,7 @@
     dotsLayer.style.height = '100%';
     dotsLayer.style.overflow = 'visible';
     content.appendChild(dotsLayer);
+    let hoveredDot = null;
 
     let fixedScrollDragging = false; // 虽然移除了 UI，但保留部分内部状态标记以防代码依赖
 
@@ -815,6 +839,7 @@
             document.body.appendChild(container);
             qwenNodeLog('nav:reattach-container', { isConnected: container.isConnected });
         }
+        if (!dragHandle.isConnected) container.prepend(dragHandle);
         if (!scrollArea.isConnected) container.appendChild(scrollArea);
         if (!content.isConnected) scrollArea.appendChild(content);
         if (track.parentElement !== content) content.appendChild(track); // 强制移动到内容层，与圆点共享坐标系
@@ -823,6 +848,110 @@
     }
 
     function updateFixedScrollIndicator() {}
+
+    function getNodeFromDotElement(dotEl) {
+        const id = String(dotEl?.dataset?.nodeId || '').trim();
+        if (!id) return null;
+        return nodesMap.get(id) || nodes.find((n) => String(n?.id || '') === id) || null;
+    }
+
+    function showTooltipForDot(dotEl, node) {
+        if (!dotEl || !node) return;
+        if (node.id !== activeNodeId) {
+            dotEl.style.transform = 'translate(-50%, -50%) scale(1.45)';
+        }
+
+        globalTooltip.innerText = String(node.text || '').slice(0, 150) + (String(node.text || '').length > 150 ? '...' : '');
+        const dotRect = dotEl.getBoundingClientRect();
+        const winWidth = window.innerWidth;
+        const winHeight = window.innerHeight;
+        const isOnRightHalf = dotRect.left > winWidth / 2;
+
+        globalTooltip.style.transition = 'none';
+        if (isOnRightHalf) {
+            globalTooltip.dataset.side = 'right';
+            globalTooltip.style.left = (dotRect.left - 15) + 'px';
+            globalTooltip.style.transform = 'translate(calc(-100% + 10px), -50%) scale(0.95)';
+        } else {
+            globalTooltip.dataset.side = 'left';
+            globalTooltip.style.left = (dotRect.right + 15) + 'px';
+            globalTooltip.style.transform = 'translate(-10px, -50%) scale(0.95)';
+        }
+        globalTooltip.style.top = (dotRect.top + dotRect.height / 2) + 'px';
+        globalTooltip.offsetHeight;
+        globalTooltip.style.transition = 'opacity 0.2s ease, transform 0.2s cubic-bezier(0.18, 0.89, 0.32, 1.28)';
+
+        requestAnimationFrame(() => {
+            globalTooltip.style.opacity = '1';
+            const finalTranslate = isOnRightHalf ? '-100%, -50%' : '0, -50%';
+            globalTooltip.style.transform = `translate(${finalTranslate}) scale(1)`;
+        });
+
+        setTimeout(() => {
+            const tooltipRect = globalTooltip.getBoundingClientRect();
+            if (tooltipRect.bottom > winHeight - 10) {
+                globalTooltip.style.top = (winHeight - tooltipRect.height - 10) + (tooltipRect.height / 2) + 'px';
+            }
+            if (tooltipRect.top < 10) {
+                globalTooltip.style.top = (10 + tooltipRect.height / 2) + 'px';
+            }
+        }, 50);
+    }
+
+    function hideTooltipForDot(dotEl, node) {
+        if (dotEl && node && node.id !== activeNodeId) {
+            dotEl.style.transform = 'translate(-50%, -50%) scale(1)';
+        }
+        globalTooltip.style.opacity = '0';
+        const side = globalTooltip.dataset.side || 'left';
+        if (side === 'right') {
+            globalTooltip.style.transform = 'translate(calc(-100% + 10px), -50%) scale(0.95)';
+        } else {
+            globalTooltip.style.transform = 'translate(-10px, -50%) scale(0.95)';
+        }
+    }
+
+    dotsLayer.addEventListener('mouseover', (e) => {
+        const dot = e.target && e.target.closest ? e.target.closest('.ai-nav-dot') : null;
+        if (!dot || !dotsLayer.contains(dot) || hoveredDot === dot) return;
+        if (hoveredDot) {
+            const prevNode = getNodeFromDotElement(hoveredDot);
+            hideTooltipForDot(hoveredDot, prevNode);
+        }
+        hoveredDot = dot;
+        const node = getNodeFromDotElement(dot);
+        if (node) showTooltipForDot(dot, node);
+    });
+
+    dotsLayer.addEventListener('mouseout', (e) => {
+        if (!hoveredDot) return;
+        const related = e.relatedTarget;
+        if (related && hoveredDot.contains(related)) return;
+        const node = getNodeFromDotElement(hoveredDot);
+        hideTooltipForDot(hoveredDot, node);
+        hoveredDot = null;
+    });
+
+    dotsLayer.addEventListener('click', (e) => {
+        const dot = e.target && e.target.closest ? e.target.closest('.ai-nav-dot') : null;
+        if (!dot || !dotsLayer.contains(dot)) return;
+        e.stopPropagation();
+        const node = getNodeFromDotElement(dot);
+        if (!node) return;
+        const jumpedNow = jumpToMessage(node.element, node.id);
+        if (jumpedNow) {
+            if (isQwen) {
+                setTimeout(() => {
+                    scheduleActiveNodeUpdate();
+                }, 420);
+            } else {
+                setActiveDot(dot, node.id);
+                scrollDotIntoView(dot);
+            }
+        } else {
+            scheduleActiveNodeUpdate();
+        }
+    });
 
     function getMessages() {
         const list = [];
@@ -860,23 +989,18 @@
                 qwenVirtualNodesCache.forEach((item) => list.push(item));
             }
         } else if (host.includes('doubao.com')) {
-            // 豆包适配：精确查找用户消息块
-            const msgs = document.querySelectorAll('[data-testid="send_message"]');
-            msgs.forEach((el, index) => {
-                // 查找文字内容容器，如果不存在则查找其父容器
-                const textEl = el.querySelector('[data-testid="message_text_content"]') || el;
-                let text = (textEl.innerText || '').trim();
-                
-                if (!text) return;
-
-                const id = el.getAttribute('data-id') || index;
-                list.push({
-                    id: id,
-                    element: textEl, // 修改：高亮消息气泡部位
-                    role: 'user',
-                    text: text
-                });
-            });
+            const domUserCount = document.querySelectorAll('[data-testid="send_message"]').length;
+            const domSig = getDoubaoDomUserSignature();
+            if (domSig && domSig !== doubaoLastDomUserSignature) {
+                doubaoLastDomUserSignature = domSig;
+                doubaoVirtualNodesDirty = true;
+            } else if (domUserCount && domUserCount !== doubaoVirtualNodesCache.length) {
+                doubaoVirtualNodesDirty = true;
+            }
+            if (!doubaoVirtualNodesLoaded || doubaoVirtualNodesDirty) {
+                scheduleDoubaoVirtualNodesRefresh();
+            }
+            doubaoVirtualNodesCache.forEach((item) => list.push(item));
         } else if (host.includes('deepseek.com')) {
             scheduleDeepSeekVirtualNodesRefresh();
             deepseekVirtualNodesCache.forEach((item) => list.push(item));
@@ -892,6 +1016,42 @@
             hash |= 0;
         }
         return hash.toString(36);
+    }
+
+    function primeOrbitalToLatest() {
+        // 交给 render 内的 bounds clamp 收敛到最大可滚偏移。
+        orbitalTargetScrollOffset = Number.MAX_SAFE_INTEGER;
+        orbitalScrollOffset = Number.MAX_SAFE_INTEGER;
+    }
+
+    function getDoubaoDomUserSignature() {
+        const rows = Array.from(document.querySelectorAll('[data-testid="send_message"]'));
+        if (!rows.length) return '';
+
+        const pick = [];
+        const step = Math.max(1, Math.floor(rows.length / 6));
+        for (let i = 0; i < rows.length; i += step) {
+            const row = rows[i];
+            const msgId = String(
+                row?.querySelector('[data-testid="message_content"]')?.getAttribute('data-message-id')
+                || row?.getAttribute('data-id')
+                || ''
+            ).trim();
+            const txt = String(
+                row?.querySelector('[data-testid="ref-content"]')?.innerText
+                || row?.querySelector('[data-testid="message_text_content"]')?.innerText
+                || row?.querySelector('[data-testid="message_content"]')?.innerText
+                || ''
+            ).replace(/\s+/g, ' ').trim().slice(0, 32);
+            pick.push(`${msgId}|${txt}`);
+            if (pick.length >= 8) break;
+        }
+
+        const first = rows[0];
+        const last = rows[rows.length - 1];
+        const firstId = String(first?.querySelector('[data-testid="message_content"]')?.getAttribute('data-message-id') || first?.getAttribute('data-id') || '').trim();
+        const lastId = String(last?.querySelector('[data-testid="message_content"]')?.getAttribute('data-message-id') || last?.getAttribute('data-id') || '').trim();
+        return `${rows.length}::${firstId}::${lastId}::${pick.join('||')}`;
     }
 
     function highlightMessage(el) {
@@ -1779,6 +1939,73 @@
         });
     }
 
+    function buildDoubaoVirtualNodesFromApi(apiMsgs) {
+        const convIdFromPath = String((String(window.location.pathname || '').match(/\/chat\/(\d+)/i) || [])[1] || '').trim();
+        const convId = String(convIdFromPath || currentConvId || 'default');
+        const userMsgs = (Array.isArray(apiMsgs) ? apiMsgs : []).filter((m) => m && m.role === 'user' && m.text);
+        if (!userMsgs.length) return [];
+
+        const out = [];
+        const seen = new Set();
+        userMsgs.forEach((m, idx) => {
+            // 这里不能依赖后段定义的导出函数，避免初始化阶段 ReferenceError。
+            const text = sanitizeDoubaoUserNodeText(String(m.text || '').trim());
+            if (!text) return;
+
+            const sourceMessageId = String(m?.sourceMessageId || m?.id || '').trim();
+            const fallbackStable = hashStr(`${idx + 1}|${text}`).slice(0, 8);
+            const id = sourceMessageId || `doubao-user-${convId}-${idx + 1}-${fallbackStable}`;
+            if (!id || seen.has(id)) return;
+            seen.add(id);
+            out.push({
+                id,
+                role: 'user',
+                text,
+                sourceMessageId,
+                // 性能优化：批量刷新时不做逐条 DOM 反查，跳转时再惰性定位。
+                element: null
+            });
+        });
+
+        return out;
+    }
+
+    function scheduleDoubaoVirtualNodesRefresh(force = false) {
+        if (!isDoubao || doubaoVirtualNodesLoading) return;
+        if (doubaoVirtualNodesLoaded && !doubaoVirtualNodesDirty && !force) return;
+
+        const now = Date.now();
+        const retryGap = doubaoVirtualNodesCache.length ? 4000 : 900;
+        if (!force && (now - doubaoVirtualNodesLastFetchAt < retryGap)) return;
+
+        doubaoVirtualNodesLoading = true;
+        doubaoVirtualNodesLastFetchAt = now;
+        const refreshStorageKey = storageKey;
+
+        getDoubaoMessagesByApi().then((apiMsgs) => {
+            if (refreshStorageKey !== storageKey) return;
+            const built = buildDoubaoVirtualNodesFromApi(apiMsgs);
+            if (!built.length) {
+                doubaoVirtualNodesLoaded = true;
+                doubaoVirtualNodesDirty = true;
+                return;
+            }
+
+            doubaoVirtualNodesCache = built;
+            doubaoVirtualNodesLoaded = true;
+            doubaoVirtualNodesDirty = false;
+            requestAnimationFrame(() => {
+                update();
+                kickstartActiveNodeAutoSync();
+            });
+        }).catch((e) => {
+            console.warn('AI-Chat-Nodes: 豆包虚拟节点刷新失败', e);
+        }).finally(() => {
+            if (refreshStorageKey !== storageKey) return;
+            doubaoVirtualNodesLoading = false;
+        });
+    }
+
     function jumpToMessage(el, nodeId) {
         if (searchIntervalId) {
             clearInterval(searchIntervalId);
@@ -1800,6 +2027,12 @@
                 node.element = targetEl;
             }
         }
+        if (isDoubao && (!targetEl || !targetEl.isConnected) && node) {
+            targetEl = findDoubaoDomElementByNode(node);
+            if (targetEl) {
+                node.element = targetEl;
+            }
+        }
         
         // 核心加固：验证 DOM 节点是否被“回收复用” (Virtual List 防抖)
         const isElementValid = (element, expectedNode) => {
@@ -1815,6 +2048,9 @@
             }
             if (isDeepSeek) {
                 return isDeepSeekElementMatchNode(element, expectedNode);
+            }
+            if (isDoubao) {
+                return isDoubaoElementMatchNode(element, expectedNode);
             }
             // 验证内容摘要，防止跳到已被回收复用的错误位置
             const currentText = element.innerText || '';
@@ -1834,6 +2070,9 @@
             if (!targetEl && isDeepSeek) {
                 targetEl = findDeepSeekDomElementByNode(node);
             }
+            if (!targetEl && isDoubao) {
+                targetEl = findDoubaoDomElementByNode(node);
+            }
             if (targetEl && !isElementValid(targetEl, node)) {
                 targetEl = null;
             }
@@ -1847,13 +2086,14 @@
         }
         
         const scrollEl = getScrollContainer();
-        const executeJump = (offsetVal = 165) => { 
+        const executeJump = () => { 
             const rect = targetEl.getBoundingClientRect();
             const containerRect = (scrollEl === window || scrollEl === document.documentElement) 
                 ? { top: 0 } 
                 : scrollEl.getBoundingClientRect();
+            const readingLineOffset = Math.max(10, Math.min(250, CONFIG.readingLineOffset || 150));
             
-            const targetTop = scrollEl.scrollTop + rect.top - containerRect.top - offsetVal;
+            const targetTop = scrollEl.scrollTop + rect.top - containerRect.top - readingLineOffset;
             
             if (typeof scrollEl.scrollTo === 'function') {
                 scrollEl.scrollTo({ top: targetTop, behavior: 'smooth' });
@@ -1863,10 +2103,10 @@
         };
 
         if (scrollEl) {
-            executeJump(165);
+            executeJump();
             // DeepSeek 保留二次校正；Qwen 关闭，避免点击后被页面自动带回旧位置。
             if (isDeepSeek && !isNodeSearching) {
-                setTimeout(() => { if(isElementValid(targetEl, node)) executeJump(165); }, 300);
+                setTimeout(() => { if(isElementValid(targetEl, node)) executeJump(); }, 300);
             }
         } else {
             targetEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -2241,6 +2481,310 @@
         return resolveQwenNodeFromRow(bestRow, rows);
     }
 
+    function normalizeDoubaoTextForMatch(text) {
+        return String(text || '')
+            .replace(/\s+/g, ' ')
+            .replace(/[\u200B-\u200D\uFEFF]/g, '')
+            .trim();
+    }
+
+    function isDoubaoTrivialSkillPrompt(text) {
+        const t = normalizeDoubaoTextForMatch(text);
+        if (!t) return true;
+        if (/^翻译为\s*english$/i.test(t)) return true;
+        if (/^translate\s+to\s+english$/i.test(t)) return true;
+        if (/^翻译$/i.test(t)) return true;
+        return false;
+    }
+
+    function sanitizeDoubaoUserNodeText(text) {
+        const lines = String(text || '')
+            .split(/\r?\n/)
+            .map((line) => normalizeDoubaoTextForMatch(line))
+            .filter(Boolean)
+            .filter((line) => !isDoubaoTrivialSkillPrompt(line));
+        return Array.from(new Set(lines)).join('\n').trim();
+    }
+
+    function getDoubaoConversationRows() {
+        const rows = Array.from(document.querySelectorAll('[data-testid="send_message"], [data-testid="receive_message"]'));
+        rows.sort((a, b) => {
+            if (a === b) return 0;
+            const pos = a.compareDocumentPosition(b);
+            if (pos & Node.DOCUMENT_POSITION_FOLLOWING) return -1;
+            if (pos & Node.DOCUMENT_POSITION_PRECEDING) return 1;
+            return 0;
+        });
+        return rows;
+    }
+
+    function getDoubaoMessageBubble(row) {
+        if (!row) return null;
+        return row.querySelector('[data-testid="message_content"]') || row;
+    }
+
+    function getDoubaoUserTextFromRow(row) {
+        if (!row) return '';
+        const refText = sanitizeDoubaoUserNodeText(row.querySelector('[data-testid="ref-content"]')?.innerText || '');
+        const fullText = sanitizeDoubaoUserNodeText(row.querySelector('[data-testid="message_content"]')?.innerText || '');
+        const plainText = sanitizeDoubaoUserNodeText(row.querySelector('[data-testid="message_text_content"]')?.innerText || '');
+        return refText || fullText || plainText || '';
+    }
+
+    function getDoubaoRowType(row) {
+        const testId = String(row?.getAttribute?.('data-testid') || '').toLowerCase();
+        if (testId === 'send_message') return 'user';
+        if (testId === 'receive_message') return 'assistant';
+        return 'unknown';
+    }
+
+    function getDoubaoRowId(row) {
+        const byMessageContent = String(row?.querySelector?.('[data-testid="message_content"]')?.getAttribute?.('data-message-id') || '').trim();
+        if (byMessageContent) return byMessageContent;
+        return String(row?.getAttribute?.('data-id') || '').trim();
+    }
+
+    function getDoubaoRowText(row) {
+        return getDoubaoRowType(row) === 'user'
+            ? getDoubaoUserTextFromRow(row)
+            : normalizeDoubaoTextForMatch((row?.querySelector?.('[data-testid="message_text_content"]') || row)?.innerText || '');
+    }
+
+    function getDoubaoUserDomCandidates() {
+        const rows = getDoubaoConversationRows();
+        const out = [];
+        const seen = new Set();
+
+        rows.forEach((row, index) => {
+            if (getDoubaoRowType(row) !== 'user') return;
+            const element = getDoubaoMessageBubble(row);
+            const text = getDoubaoRowText(row);
+            if (!text) return;
+            const id = getDoubaoRowId(row) || `doubao-user-${index + 1}`;
+            const key = `${id}::${text.slice(0, 80)}`;
+            if (seen.has(key)) return;
+            seen.add(key);
+            out.push({ id, element, text });
+        });
+
+        return out;
+    }
+
+    function isDoubaoElementMatchNode(element, node) {
+        if (!element || !node) return false;
+        if (!element.isConnected) return false;
+
+        const nodeText = normalizeDoubaoTextForMatch(node.text || '');
+        const elText = normalizeDoubaoTextForMatch(element.innerText || '');
+        if (!nodeText || !elText) return false;
+
+        if (elText === nodeText) return true;
+        const prefix = nodeText.slice(0, Math.min(32, nodeText.length));
+        if (prefix && elText.includes(prefix)) return true;
+        if (nodeText.length <= 24) return elText === nodeText;
+        return false;
+    }
+
+    function findDoubaoDomElementByNode(node) {
+        if (!node || !node.text) return null;
+
+        const candidates = getDoubaoUserDomCandidates();
+        const targetId = String(node.id || '').trim();
+        if (targetId) {
+            const byId = candidates.find((c) => String(c.id || '').trim() === targetId);
+            if (byId?.element) return byId.element;
+        }
+        const targetText = normalizeDoubaoTextForMatch(node.text);
+        const targetPrefix = targetText.slice(0, Math.min(52, targetText.length));
+        const targetMiddle = targetText.slice(Math.max(0, Math.floor(targetText.length / 2) - 18), Math.floor(targetText.length / 2) + 18);
+
+        let bestEl = null;
+        let bestScore = -1;
+
+        candidates.forEach((c) => {
+            const txt = c.text;
+            if (!txt) return;
+
+            let score = 0;
+            if (targetId && String(c.id || '') === targetId) score += 18;
+            if (txt === targetText) score += 14;
+            if (targetPrefix && txt.includes(targetPrefix)) score += 8;
+            if (targetMiddle && txt.includes(targetMiddle)) score += 4;
+            if (targetPrefix && targetText.includes(txt.slice(0, Math.min(24, txt.length)))) score += 3;
+
+            if (score > bestScore) {
+                bestScore = score;
+                bestEl = c.element;
+            }
+        });
+
+        return bestScore >= 8 ? bestEl : null;
+    }
+
+    function getDoubaoViewportMetrics(scrollEl) {
+        const viewportHeight = Math.max(window.innerHeight || 0, document.documentElement?.clientHeight || 0);
+        const containerRect = (scrollEl && scrollEl !== window && scrollEl !== document.documentElement)
+            ? scrollEl.getBoundingClientRect()
+            : null;
+        const viewportTop = containerRect ? Math.max(0, containerRect.top) : 0;
+        const viewportBottom = containerRect ? Math.min(viewportHeight, containerRect.bottom) : viewportHeight;
+        const readingOffset = Math.max(10, Math.min(250, CONFIG.readingLineOffset || 150));
+        const readingAnchor = Math.max(
+            viewportTop + 10,
+            Math.min(viewportBottom - 10, viewportTop + readingOffset)
+        );
+
+        return { viewportTop, viewportBottom, readingAnchor };
+    }
+
+    function findDoubaoNodeBySignature(id, text) {
+        const normalizedId = String(id || '').trim();
+        const normalizedText = normalizeDoubaoTextForMatch(text);
+        if (normalizedId && nodesMap.has(normalizedId)) {
+            const byId = nodesMap.get(normalizedId);
+            if (normalizeDoubaoTextForMatch(byId?.text || '') === normalizedText) {
+                return byId;
+            }
+        }
+
+        if (!normalizedText) return null;
+        const prefix = normalizedText.slice(0, Math.min(28, normalizedText.length));
+        const middle = normalizedText.slice(Math.max(0, Math.floor(normalizedText.length / 2) - 16), Math.floor(normalizedText.length / 2) + 16);
+        const scoreNode = (node) => {
+            const nodeText = normalizeDoubaoTextForMatch(node?.text || '');
+            if (!nodeText) return -1;
+            let score = 0;
+            if (normalizedId && String(node?.id || '') === normalizedId) score += 18;
+            if (nodeText === normalizedText) score += 14;
+            if (prefix && nodeText.includes(prefix)) score += 8;
+            if (middle && nodeText.includes(middle)) score += 4;
+            if (normalizedText.includes(nodeText.slice(0, Math.min(24, nodeText.length)))) score += 3;
+            return score;
+        };
+
+        // 高频滚动路径优化：优先在当前激活节点附近窗口匹配。
+        const activeIdx = activeNodeId ? nodes.findIndex((n) => String(n?.id || '') === String(activeNodeId)) : -1;
+        const LOCAL_RADIUS = 140;
+        if (activeIdx >= 0) {
+            let localBestNode = null;
+            let localBestScore = -1;
+            const start = Math.max(0, activeIdx - LOCAL_RADIUS);
+            const end = Math.min(nodes.length - 1, activeIdx + LOCAL_RADIUS);
+            for (let i = start; i <= end; i++) {
+                const node = nodes[i];
+                const score = scoreNode(node);
+                if (score > localBestScore) {
+                    localBestScore = score;
+                    localBestNode = node;
+                }
+            }
+            if (localBestScore >= 8) return localBestNode;
+        }
+
+        // 兜底：窗口未命中再全量扫描，保证准确性。
+        let bestNode = null;
+        let bestScore = -1;
+        for (let i = 0; i < nodes.length; i++) {
+            const node = nodes[i];
+            const score = scoreNode(node);
+            if (score > bestScore) {
+                bestScore = score;
+                bestNode = node;
+            }
+        }
+        return bestScore >= 8 ? bestNode : null;
+    }
+
+    function resolveDoubaoNodeFromRow(row, rows) {
+        if (!row) return null;
+        const idx = rows.indexOf(row);
+        const rowType = getDoubaoRowType(row);
+
+        // 豆包阅读区经常停留在 AI 回复内部，这里回溯到最近一条用户消息。
+        if (rowType !== 'user' && idx !== -1) {
+            for (let i = idx - 1; i >= 0; i--) {
+                if (getDoubaoRowType(rows[i]) === 'user') {
+                    return resolveDoubaoNodeFromRow(rows[i], rows);
+                }
+            }
+            // 顶部虚拟列表可能暂时回收了上游用户行，兜底选择后续最近的用户行。
+            for (let i = idx + 1; i < rows.length; i++) {
+                if (getDoubaoRowType(rows[i]) === 'user') {
+                    return resolveDoubaoNodeFromRow(rows[i], rows);
+                }
+            }
+            if (nodes.length === 1) return nodes[0];
+        }
+
+        const resolved = findDoubaoNodeBySignature(getDoubaoRowId(row), getDoubaoRowText(row));
+        if (resolved) return resolved;
+        if (nodes.length === 1) return nodes[0];
+
+        // 兜底：按当前可见用户行的相对顺序映射到节点顺序，避免首次阶段文本匹配失败导致无激活态。
+        const userRows = rows.filter((r) => getDoubaoRowType(r) === 'user');
+        const userIdx = userRows.indexOf(row);
+        if (userRows.length > 1 && userIdx >= 0 && nodes.length > 1) {
+            const mapped = Math.round((userIdx / (userRows.length - 1)) * (nodes.length - 1));
+            const clamped = Math.max(0, Math.min(nodes.length - 1, mapped));
+            return nodes[clamped] || null;
+        }
+
+        return null;
+    }
+
+    function getDoubaoActiveNodeByConversationState(scrollEl) {
+        const rows = getDoubaoConversationRows();
+        if (!rows.length) return null;
+        if (nodes.length === 1) return nodes[0];
+
+        const { viewportTop, viewportBottom, readingAnchor } = getDoubaoViewportMetrics(scrollEl);
+
+        const visibleRows = rows.filter((row) => {
+            const rect = row.getBoundingClientRect();
+            return rect.bottom > viewportTop && rect.top < viewportBottom;
+        });
+
+        const isNearBottom = Boolean(scrollEl)
+            && ((scrollEl.scrollHeight - Math.max(0, Number(scrollEl.scrollTop || 0)) - scrollEl.clientHeight) < 140);
+        if (isNearBottom) {
+            return nodes[nodes.length - 1] || null;
+        }
+
+        const candidateRows = visibleRows.length ? visibleRows : rows;
+
+        let crossingRow = null;
+        for (const row of candidateRows) {
+            const rect = row.getBoundingClientRect();
+            if (rect.top <= readingAnchor && rect.bottom >= readingAnchor) {
+                crossingRow = row;
+                break;
+            }
+        }
+        if (crossingRow) {
+            return resolveDoubaoNodeFromRow(crossingRow, rows);
+        }
+
+        let bestRow = null;
+        let bestScore = -Infinity;
+        candidateRows.forEach((row) => {
+            const rect = row.getBoundingClientRect();
+            if (!(rect.bottom > viewportTop && rect.top < viewportBottom)) return;
+
+            // 优先选择已经越过阅读线的最近一行，否则退回阅读线下方最近一行。
+            const score = rect.top <= readingAnchor
+                ? 2000 - Math.abs(readingAnchor - rect.top)
+                : 1000 - Math.abs(rect.top - readingAnchor);
+
+            if (score > bestScore) {
+                bestScore = score;
+                bestRow = row;
+            }
+        });
+
+        if (!bestRow) return nodes.length === 1 ? nodes[0] : null;
+        return resolveDoubaoNodeFromRow(bestRow, rows);
+    }
+
     function findQwenDomElementByNode(node) {
         if (!node || !node.text) return null;
 
@@ -2392,7 +2936,8 @@
             const cacheData = nodes.map((n) => ({ id: n.id, text: n.text, role: n.role, sessionIndex: n.sessionIndex }));
             localStorage.setItem(storageKey, JSON.stringify(cacheData));
             render();
-            updateActiveNodeOnScroll();
+            bindConversationScrollListener();
+            scheduleActiveNodeUpdate();
         }
         return changed;
     }
@@ -2438,6 +2983,18 @@
                 const realScroll = findNearestScrollableAncestor(qwenInner);
                 if (realScroll) return realScroll;
                 return qwenInner;
+            }
+        }
+        if (host.includes('doubao.com')) {
+            const doubaoRow = document.querySelector('[data-testid="send_message"], [data-testid="receive_message"]');
+            if (doubaoRow) {
+                const realScroll = findNearestScrollableAncestor(doubaoRow);
+                if (realScroll) return realScroll;
+            }
+            const chatMain = document.querySelector('[data-testid="chat_content"], [class*="chat-content"], [class*="conversation"], main');
+            if (chatMain) {
+                const realScroll = findNearestScrollableAncestor(chatMain);
+                if (realScroll) return realScroll;
             }
         }
         
@@ -2489,6 +3046,7 @@
 
     function buildDot(node, topPx) {
         const dot = document.createElement('div');
+        dot.dataset.nodeId = String(node?.id || '');
         dot.style.position = 'absolute';
         dot.style.left = '50%';
         dot.style.top = topPx + 'px';
@@ -2510,93 +3068,6 @@
         
         // 应用统一状态样式
         dot.className = 'ai-nav-dot';
-        
-        // 首次发现提示
-        if (!node.isHistory && !node.notified) {
-            const badge = document.createElement('div');
-            badge.className = 'ai-dot-new-badge';
-            dot.appendChild(badge);
-            setTimeout(() => badge.remove(), 5000);
-            node.notified = true;
-        }
-        
-        dot.addEventListener('mouseenter', () => {
-            if (node.id !== activeNodeId) {
-                dot.style.transform = 'translate(-50%, -50%) scale(1.45)';
-            }
-            
-            globalTooltip.innerText = node.text.slice(0, 150) + (node.text.length > 150 ? '...' : '');
-            
-            const dotRect = dot.getBoundingClientRect();
-            const winWidth = window.innerWidth;
-            const winHeight = window.innerHeight;
-            const isOnRightHalf = dotRect.left > winWidth / 2;
-            
-            globalTooltip.style.transition = 'none';
-            
-            if (isOnRightHalf) {
-                globalTooltip.dataset.side = 'right';
-                globalTooltip.style.left = (dotRect.left - 15) + 'px';
-                globalTooltip.style.transform = 'translate(calc(-100% + 10px), -50%) scale(0.95)';
-            } else {
-                globalTooltip.dataset.side = 'left';
-                globalTooltip.style.left = (dotRect.right + 15) + 'px';
-                globalTooltip.style.transform = 'translate(-10px, -50%) scale(0.95)';
-            }
-            globalTooltip.style.top = (dotRect.top + dotRect.height / 2) + 'px';
-
-            globalTooltip.offsetHeight; 
-
-            globalTooltip.style.transition = 'opacity 0.2s ease, transform 0.2s cubic-bezier(0.18, 0.89, 0.32, 1.28)';
-            
-            requestAnimationFrame(() => {
-                globalTooltip.style.opacity = '1';
-                const finalTranslate = isOnRightHalf ? '-100%, -50%' : '0, -50%';
-                globalTooltip.style.transform = `translate(${finalTranslate}) scale(1)`;
-            });
-
-            setTimeout(() => {
-                const tooltipRect = globalTooltip.getBoundingClientRect();
-                if (tooltipRect.bottom > winHeight - 10) {
-                    globalTooltip.style.top = (winHeight - tooltipRect.height - 10) + (tooltipRect.height / 2) + 'px';
-                }
-                if (tooltipRect.top < 10) {
-                    globalTooltip.style.top = (10 + tooltipRect.height / 2) + 'px';
-                }
-            }, 50);
-        });
-
-        dot.addEventListener('mouseleave', () => {
-            if (node.id !== activeNodeId) {
-                dot.style.transform = 'translate(-50%, -50%) scale(1)';
-            }
-            globalTooltip.style.opacity = '0';
-            const side = globalTooltip.dataset.side || 'left';
-            if (side === 'right') {
-                globalTooltip.style.transform = 'translate(calc(-100% + 10px), -50%) scale(0.95)';
-            } else {
-                globalTooltip.style.transform = 'translate(-10px, -50%) scale(0.95)';
-            }
-        });
-
-        dot.addEventListener('click', (e) => {
-            e.stopPropagation();
-            // 直接调用 jumpToMessage 内部包含的寻址与搜寻逻辑
-            const jumpedNow = jumpToMessage(node.element, node.id);
-            if (jumpedNow) {
-                if (isQwen) {
-                    setTimeout(() => {
-                        updateActiveNodeOnScroll();
-                    }, 420);
-                } else {
-                    setActiveDot(dot, node.id);
-                    scrollDotIntoView(dot);
-                }
-            } else {
-                // 搜寻模式下由滚动实时驱动激活节点，避免长时间锁定在目标点
-                updateActiveNodeOnScroll();
-            }
-        });
         return dot;
     }
 
@@ -2697,7 +3168,7 @@
                     scrollDotIntoView(targetNode.dot);
                 } else if (isQwen) {
                     setTimeout(() => {
-                        updateActiveNodeOnScroll();
+                        scheduleActiveNodeUpdate();
                     }, 420);
                 }
                 return;
@@ -2732,7 +3203,7 @@
 
             // 自动搜寻期间强制同步一次激活节点，提升过程反馈
             requestAnimationFrame(() => {
-                updateActiveNodeOnScroll();
+                scheduleActiveNodeUpdate();
             });
         }
 
@@ -2794,7 +3265,7 @@
                 setTimeout(() => {
                     scrollEl.scrollTo({ top: maxTop, behavior: 'auto' });
                     sessionStorage.setItem(doneKey, '1');
-                    requestAnimationFrame(() => updateActiveNodeOnScroll());
+                    requestAnimationFrame(() => scheduleActiveNodeUpdate());
                     qwenInitUnlockInProgress = false;
                 }, 180);
             } else {
@@ -2807,7 +3278,7 @@
                 setTimeout(() => {
                     window.scrollTo({ top: maxTop, behavior: 'auto' });
                     sessionStorage.setItem(doneKey, '1');
-                    requestAnimationFrame(() => updateActiveNodeOnScroll());
+                    requestAnimationFrame(() => scheduleActiveNodeUpdate());
                     qwenInitUnlockInProgress = false;
                 }, 180);
             }
@@ -2964,9 +3435,10 @@
             });
         }
         if (globalTooltip) globalTooltip.style.opacity = '0';
-        dotsLayer.innerHTML = '';
 
         if (!nodes.length) {
+            if (typeof dotsLayer.replaceChildren === 'function') dotsLayer.replaceChildren();
+            else dotsLayer.innerHTML = '';
             track.style.top = '0';
             track.style.height = '0';
             content.style.height = '0';
@@ -3015,19 +3487,34 @@
         track.style.top = dotEdgePad + 'px';
         track.style.height = (finalVisibleHeight - dotEdgePad * 2) + 'px';
 
-        nodes.forEach((node, index) => {
+        const fragment = document.createDocumentFragment();
+        const edgeThreshold = 40;
+        const baseY = dotEdgePad + CONFIG.dotSize / 2;
+
+        let startIdx = 0;
+        let endIdx = nodes.length - 1;
+        if (!isCenteringMode) {
+            // 大会话性能优化：只渲染可见窗口内的点，避免全量遍历。
+            const minRel = (-15 - baseY) / CONFIG.dotGap;
+            const maxRel = (finalVisibleHeight + 15 - baseY) / CONFIG.dotGap;
+            startIdx = Math.max(0, Math.floor(runningOffset + minRel) - 1);
+            endIdx = Math.min(nodes.length - 1, Math.ceil(runningOffset + maxRel) + 1);
+        }
+
+        for (let index = startIdx; index <= endIdx; index++) {
+            const node = nodes[index];
             const relOffset = index - runningOffset;
-            const topPx = isCenteringMode ? (startY + index * CONFIG.dotGap) : (dotEdgePad + CONFIG.dotSize / 2 + relOffset * CONFIG.dotGap);
-            
-            // 简单的边界剔除：稍微收紧范围，并在物理边界外强制不可见
-            if (topPx < -15 || topPx > finalVisibleHeight + 15) return;
+            const topPx = isCenteringMode
+                ? (startY + index * CONFIG.dotGap)
+                : (baseY + relOffset * CONFIG.dotGap);
+
+            if (topPx < -15 || topPx > finalVisibleHeight + 15) continue;
 
             const dot = buildDot(node, topPx);
             node.dot = dot;
 
             const isActive = node.id === activeNodeId;
             if (isActive) {
-                // 激活态样式集成
                 const userColor = 'linear-gradient(135deg, #1E88E5 0%, #1565C0 100%)';
                 const aiColor = 'linear-gradient(135deg, #4FC3F7 0%, #03A9F4 100%)';
                 const isAI = node && (node.role === 'assistant' || node.role === 'ai');
@@ -3039,10 +3526,7 @@
                 dot.classList.add('ai-dot-active-ripple');
             }
 
-            // 边缘淡出效果：确保在 0 到 finalVisibleHeight 之外是完全消失的
-            const edgeThreshold = 40;
             let targetOpacity = isActive ? 1 : 0.6;
-            
             if (topPx < 0 || topPx > finalVisibleHeight) {
                 targetOpacity = 0;
             } else if (topPx < edgeThreshold) {
@@ -3052,12 +3536,20 @@
             }
 
             dot.style.opacity = String(Math.max(0, Math.min(1, targetOpacity)));
-            dotsLayer.appendChild(dot);
-        });
+            fragment.appendChild(dot);
+        }
+
+        if (typeof dotsLayer.replaceChildren === 'function') {
+            dotsLayer.replaceChildren(fragment);
+        } else {
+            dotsLayer.innerHTML = '';
+            dotsLayer.appendChild(fragment);
+        }
     }
 
     function update() {
         ensureNavigatorMounted();
+        bindConversationScrollListener();
         if (updateStorageKey()) {
             nodes = [];
             nodesMap.clear();
@@ -3071,14 +3563,15 @@
 
         const currentBatch = getMessages();
 
-        if (isQwen || isDeepSeek) {
-            const isPlatformQwen = isQwen;
-            const virtualCacheLength = isPlatformQwen ? qwenVirtualNodesCache.length : deepseekVirtualNodesCache.length;
+        if (isQwen || isDeepSeek || isDoubao) {
+            const virtualCacheLength = isQwen
+                ? qwenVirtualNodesCache.length
+                : (isDeepSeek ? deepseekVirtualNodesCache.length : doubaoVirtualNodesCache.length);
             const sig = `${currentBatch.length}|${nodes.length}|${nodesMap.size}|${virtualCacheLength}`;
             
             if (sig !== qwenLastUpdateDebugSig) {
                 qwenLastUpdateDebugSig = sig;
-                if (isPlatformQwen) {
+                if (isQwen) {
                     qwenNodeLog('update:snapshot', {
                         currentBatch: currentBatch.length,
                         nodes: nodes.length,
@@ -3089,12 +3582,18 @@
             }
 
             // 统一使用全量同步逻辑，防止旧缓存或切换对话导致的重复节点
-            const changed = isPlatformQwen ? syncQwenNodesFromApi(currentBatch) : syncDeepSeekNodesFromApi(currentBatch);
+            const changed = isQwen
+                ? syncQwenNodesFromApi(currentBatch)
+                : (isDeepSeek ? syncDeepSeekNodesFromApi(currentBatch) : syncDoubaoNodesFromApi(currentBatch));
             if (changed) {
                 const cacheData = nodes.map(n => ({ id: n.id, text: n.text, role: n.role, sessionIndex: n.sessionIndex }));
                 localStorage.setItem(storageKey, JSON.stringify(cacheData));
                 render();
-                updateActiveNodeOnScroll();
+                bindConversationScrollListener();
+                scheduleActiveNodeUpdate();
+            } else if (isDoubao && !activeNodeId) {
+                // 豆包初始化阶段即使节点集合未变化，也要尝试建立首个激活态。
+                scheduleActiveNodeUpdate();
             }
             return;
         }
@@ -3184,7 +3683,8 @@
             const cacheData = nodes.map(n => ({ id: n.id, text: n.text, role: n.role, sessionIndex: n.sessionIndex }));
             localStorage.setItem(storageKey, JSON.stringify(cacheData));
             render();
-            updateActiveNodeOnScroll();
+            bindConversationScrollListener();
+            scheduleActiveNodeUpdate();
         }
 
     }
@@ -3217,6 +3717,41 @@
             });
         }
         
+        return hasAnyChange;
+    }
+
+    function syncDoubaoNodesFromApi(currentBatch) {
+        if (!Array.isArray(currentBatch) || !doubaoVirtualNodesLoaded) return false;
+
+        let hasAnyChange = false;
+        if (nodes.length !== currentBatch.length) {
+            hasAnyChange = true;
+        } else {
+            for (let i = 0; i < nodes.length; i++) {
+                if (nodes[i]?.id !== currentBatch[i]?.id || nodes[i]?.text !== currentBatch[i]?.text) {
+                    hasAnyChange = true;
+                    break;
+                }
+            }
+        }
+
+        if (hasAnyChange) {
+            nodes = [...currentBatch];
+            nodesMap = new Map(nodes.map(n => [String(n.id), n]));
+            // 豆包首次初始化时，默认展示最新节点区域，避免停在最旧位置。
+            if (!activeNodeId && orbitalLastInteractionAt === 0) {
+                primeOrbitalToLatest();
+            }
+        } else {
+            // 性能优化：无变化时不对所有节点逐条做 DOM 反查。
+            // element 在 jumpToMessage 内部会按需惰性定位。
+            currentBatch.forEach((msg) => {
+                const node = nodesMap.get(String(msg.id));
+                if (!node) return;
+                if (msg.element) node.element = msg.element;
+            });
+        }
+
         return hasAnyChange;
     }
 
@@ -3339,7 +3874,11 @@
                     nodesMap.set(m.id, m);
                 });
                 nodes = cachedArr;
+                if (isDoubao && !activeNodeId && orbitalLastInteractionAt === 0) {
+                    primeOrbitalToLatest();
+                }
                 render();
+                bindConversationScrollListener();
             }
         } catch (e) {
             console.error('Failed to load nodes cache', e);
@@ -3355,6 +3894,21 @@
         if (isDeepSeek) {
             setTimeout(() => scheduleDeepSeekVirtualNodesRefresh(true), 1200);
         }
+        if (isDoubao) {
+            const convId = String((String(window.location.pathname || '').match(/\/chat\/([0-9]+)/i) || [])[1] || '').trim();
+            if (convId && doubaoInitialFetchConvId !== convId) {
+                doubaoInitialFetchConvId = convId;
+                // 页面加载后立即主动抓取全量节点，并做补偿重试。
+                setTimeout(() => scheduleDoubaoVirtualNodesRefresh(true), 60);
+                setTimeout(() => scheduleDoubaoVirtualNodesRefresh(true), 600);
+                setTimeout(() => scheduleDoubaoVirtualNodesRefresh(true), 1800);
+            } else {
+                setTimeout(() => scheduleDoubaoVirtualNodesRefresh(true), 300);
+                setTimeout(() => scheduleDoubaoVirtualNodesRefresh(), 1200);
+            }
+            setTimeout(() => kickstartActiveNodeAutoSync(12, 180), 320);
+        }
+        setTimeout(bindConversationScrollListener, 160);
         
         // 切换完成后触发滚动跳动，用以激活节点
         setTimeout(() => triggerInitialScrollJump(), 1800);
@@ -3371,18 +3925,108 @@
     });
 
     let scrollTicking = false;
+    let boundConversationScrollEl = null;
+    let activeUpdateRaf = 0;
+    let activeUpdateLastAt = 0;
+    let activeUpdatePendingOptions = null;
 
-    function updateActiveNodeOnScroll() {
+    function handleConversationScrollEvent() {
+        if (scrollTicking) return;
+        scrollTicking = true;
+        requestAnimationFrame(() => {
+            scheduleActiveNodeUpdate({ fromPageScroll: true });
+            scrollTicking = false;
+        });
+    }
+
+    function bindConversationScrollListener() {
+        const nextScrollEl = getScrollContainer();
+        const normalizedNext = (!nextScrollEl || nextScrollEl === document.documentElement) ? window : nextScrollEl;
+        if (boundConversationScrollEl === normalizedNext) return;
+
+        if (boundConversationScrollEl && boundConversationScrollEl !== window && boundConversationScrollEl.removeEventListener) {
+            boundConversationScrollEl.removeEventListener('scroll', handleConversationScrollEvent, true);
+        }
+
+        boundConversationScrollEl = normalizedNext;
+        if (boundConversationScrollEl && boundConversationScrollEl !== window && boundConversationScrollEl.addEventListener) {
+            boundConversationScrollEl.addEventListener('scroll', handleConversationScrollEvent, { passive: true, capture: true });
+        }
+    }
+
+    function kickstartActiveNodeAutoSync(retries = 8, delayMs = 220) {
+        if (activeNodeId || retries < 0) return;
+        scheduleActiveNodeUpdate();
+        if (retries === 0) return;
+        setTimeout(() => {
+            if (!activeNodeId) {
+                kickstartActiveNodeAutoSync(retries - 1, delayMs);
+            }
+        }, delayMs);
+    }
+
+    function bootstrapClickLatestDoubaoNodeOnce() {
+        if (!isDoubao || !nodes.length) return;
+        const convId = String((String(window.location.pathname || '').match(/\/chat\/([0-9]+)/i) || [])[1] || '').trim();
+        if (!convId || doubaoBootClickedConvId === convId) return;
+
+        const latestNode = nodes[nodes.length - 1];
+        const latestDot = latestNode?.dot || null;
+        if (!latestDot || !latestDot.isConnected) return;
+
+        doubaoBootClickedConvId = convId;
+        latestDot.dispatchEvent(new MouseEvent('click', {
+            bubbles: true,
+            cancelable: true,
+            view: window
+        }));
+    }
+
+    function scheduleActiveNodeUpdate(options = {}) {
+        activeUpdatePendingOptions = {
+            ...(activeUpdatePendingOptions || {}),
+            ...(options || {})
+        };
+
+        if (activeUpdateRaf) return;
+
+        activeUpdateRaf = requestAnimationFrame(() => {
+            activeUpdateRaf = 0;
+            const now = Date.now();
+            const minGap = 70;
+            if (now - activeUpdateLastAt < minGap) {
+                const pending = { ...(activeUpdatePendingOptions || {}) };
+                activeUpdatePendingOptions = null;
+                setTimeout(() => scheduleActiveNodeUpdate(pending), minGap - (now - activeUpdateLastAt));
+                return;
+            }
+            const pending = activeUpdatePendingOptions || {};
+            activeUpdatePendingOptions = null;
+            activeUpdateLastAt = Date.now();
+            updateActiveNodeOnScroll(pending);
+        });
+    }
+
+    function updateActiveNodeOnScroll(options = {}) {
+        const fromPageScroll = Boolean(options && options.fromPageScroll);
         if (!nodes.length) return;
         const scrollEl = getScrollContainer();
         if (!scrollEl) return;
 
-        if (isQwen || isDeepSeek) {
-            const node = isQwen ? getQwenActiveNodeByConversationState(scrollEl) : getDeepSeekActiveNodeByConversationState(scrollEl);
-            if (node && node.id !== activeNodeId) {
-                setActiveDot(node.dot, node.id);
-                const idx = nodes.indexOf(node);
-                if (Date.now() - orbitalLastInteractionAt > 420) centerNodeInOrbital(idx);
+        if (isQwen || isDeepSeek || isDoubao) {
+            const node = isQwen
+                ? getQwenActiveNodeByConversationState(scrollEl)
+                : (isDeepSeek ? getDeepSeekActiveNodeByConversationState(scrollEl) : getDoubaoActiveNodeByConversationState(scrollEl));
+            const resolvedNode = node || (nodes.length === 1 ? nodes[0] : null);
+            if (resolvedNode && resolvedNode.id !== activeNodeId) {
+                setActiveDot(resolvedNode.dot, resolvedNode.id);
+                const idx = nodes.indexOf(resolvedNode);
+                // 豆包仅在“页面滚动”时居中激活点；API 刷新/重渲染时不挪动轨道。
+                const shouldCenterForDoubao = isDoubao && fromPageScroll;
+                const shouldCenterForOthers = !isDoubao;
+                if ((shouldCenterForDoubao || shouldCenterForOthers) && idx >= 0 && Date.now() - orbitalLastInteractionAt > 420) {
+                    centerNodeInOrbital(idx);
+                }
             }
             return;
         }
@@ -3782,7 +4426,7 @@
             readingLinePreview.style.top = val + 'px';
             setGlobalValue(READING_LINE_KEY, val);
             rlTrigger.querySelector('span').innerText = `调整阅读线 (目前: ${val}px)`;
-            updateActiveNodeOnScroll();
+            scheduleActiveNodeUpdate();
         });
 
         rlTrigger.onclick = (e) => {
@@ -3877,14 +4521,26 @@
                         qwenEmptyRetryTimer = null;
                     }
                 }
-                // 清掉侧边栏 DOM
-                const wrapper = document.querySelector('#ai-nodes-nav-wrapper');
-                if (wrapper) wrapper.innerHTML = '';
+                if (isDoubao) {
+                    doubaoVirtualNodesCache = [];
+                    doubaoVirtualNodesLoading = false;
+                    doubaoVirtualNodesLoaded = false;
+                    doubaoVirtualNodesLastFetchAt = 0;
+                    doubaoVirtualNodesDirty = true;
+                    doubaoLastDomUserSignature = '';
+                    doubaoInitialFetchConvId = '';
+                    doubaoBootClickedConvId = '';
+                }
+                // 清掉节点层 DOM（保留容器结构与拖拽手柄）
+                if (dotsLayer) dotsLayer.innerHTML = '';
                 // 触发重新获取
                 update();
                 render(); // 核心修复：强制重新渲染圆点
                 if (isQwen) {
                     setTimeout(() => scheduleQwenVirtualNodesRefresh(true), 80);
+                }
+                if (isDoubao) {
+                    setTimeout(() => scheduleDoubaoVirtualNodesRefresh(true), 80);
                 }
                 // 关闭弹窗
                 hidePopup();
@@ -5860,13 +6516,7 @@
             });
         }
 
-        const DOUBAO_QUERY_DEFAULTS = 'version_code=20800&language=zh&device_platform=web&aid=497858&real_aid=497858&pkg_type=release_version&device_id=7571732726702835209&pc_version=3.12.3&web_id=7572300776296236571&tea_uuid=7572300776296236571&region=CN&sys_region=CN&samantha_web=1&use-olympus-account=1';
-        let doubaoCapturedTemplate = null;
-        let doubaoCapturedRecentConvUrl = '';
-        let doubaoCapturedRecentConvBodyText = '';
-        let doubaoCapturedMcsListRequest = null;
-        let doubaoCaptureHooksInstalled = false;
-        const doubaoArtifactContentCache = new Map();
+        
 
         function safeParseJson(text) {
             try {
@@ -5874,6 +6524,15 @@
             } catch (e) {
                 return null;
             }
+        }
+
+        function parseBoolLike(value) {
+            if (typeof value === 'boolean') return value;
+            if (typeof value === 'number') return value !== 0;
+            const s = String(value == null ? '' : value).trim().toLowerCase();
+            if (!s) return false;
+            if (s === '0' || s === 'false' || s === 'no' || s === 'off' || s === 'null') return false;
+            return true;
         }
 
         function isDoubaoSingleChainUrl(rawUrl) {
@@ -6013,7 +6672,7 @@
             };
         }
 
-        function installDoubaoCaptureHooks() {
+        installDoubaoCaptureHooks = function () {
             if (!isDoubao || doubaoCaptureHooksInstalled) return;
             doubaoCaptureHooksInstalled = true;
 
@@ -7312,16 +7971,17 @@
 
                 const indexInConv = Number(m?.index_in_conv || 0);
                 const createTime = Number(m?.create_time || 0);
+                const sourceMessageId = String(m?.message_id || m?.msg_id || '').trim();
 
                 if (normalText) {
-                    built.push({ role, text: normalText, indexInConv, createTime, subOrder: 0, isArtifact: false });
+                    built.push({ role, text: normalText, indexInConv, createTime, subOrder: 0, isArtifact: false, sourceMessageId });
                 }
                 if (artifactText) {
-                    built.push({ role, text: artifactText, indexInConv, createTime, subOrder: 1, isArtifact: true });
+                    built.push({ role, text: artifactText, indexInConv, createTime, subOrder: 1, isArtifact: true, sourceMessageId });
                 }
             }
 
-            const mapped = built
+            const enriched = built
                 .sort((a, b) => {
                     if ((a.indexInConv || 0) !== (b.indexInConv || 0)) {
                         return (a.indexInConv || 0) - (b.indexInConv || 0);
@@ -7331,17 +7991,33 @@
                     }
                     return (a.subOrder || 0) - (b.subOrder || 0);
                 })
-                .map(({ role, text, isArtifact }) => ({ role, text, isArtifact: Boolean(isArtifact) }));
+                .map(({ role, text, isArtifact, sourceMessageId, indexInConv, createTime }) => ({
+                    role,
+                    text,
+                    isArtifact: Boolean(isArtifact),
+                    sourceMessageId: String(sourceMessageId || '').trim(),
+                    index: Number(indexInConv || 0),
+                    createTime: Number(createTime || 0)
+                }));
 
-            return mapped;
-        }
+            return enriched;
+        };
 
-        async function getDoubaoMessagesByApi() {
+        getDoubaoMessagesByApi = async function () {
             if (!isDoubao) return [];
             installDoubaoCaptureHooks();
 
             const convId = getDoubaoConversationIdFromUrl();
             if (!convId) return [];
+
+            try {
+                const allRes = await fetchDoubaoAllConversationMessages(convId, DOUBAO_FULL_FETCH_MAX_PAGES, () => {});
+                if (Array.isArray(allRes?.messages) && allRes.messages.length) {
+                    return allRes.messages;
+                }
+            } catch (e) {
+                console.warn('AI-Chat-Nodes: 豆包全量分页获取失败，回退单页请求', e);
+            }
 
             const req = buildDoubaoRequest(convId);
 
@@ -7380,9 +8056,9 @@
                 console.warn('AI-Chat-Nodes: 豆包会话 API 解析失败', e);
                 return [];
             }
-        }
+        };
 
-        async function fetchDoubaoConversationMessagesByApi(convId, msgCursor = '') {
+        async function fetchDoubaoConversationMessagesByApi(convId, msgCursor = '', anchorIndex = null) {
             const req = buildDoubaoRequest(convId);
             const pullBody = req?.bodyText ? safeParseJson(req.bodyText) : null;
             const bodyObj = pullBody && typeof pullBody === 'object' ? pullBody : {
@@ -7415,8 +8091,14 @@
             const pull = bodyObj.uplink_body.pull_singe_chain_uplink_body;
             pull.conversation_id = convId;
             pull.limit = Number(pull.limit || 50) || 50;
+            pull.direction = 1;
             if (msgCursor) pull.msg_cursor = String(msgCursor);
             else if ('msg_cursor' in pull) delete pull.msg_cursor;
+            if (anchorIndex != null && Number.isFinite(Number(anchorIndex))) {
+                pull.anchor_index = Number(anchorIndex);
+            } else {
+                pull.anchor_index = Number.MAX_SAFE_INTEGER;
+            }
 
             bodyObj.sequence_id = genUuid();
 
@@ -7441,44 +8123,121 @@
 
             const payload = json?.downlink_body?.pull_singe_chain_downlink_body || {};
             const parsed = await parseDoubaoSingleChainMessages(json, req.headers);
+            const nextIndexNum = Number(payload.next_index);
+            const hasValidNextIndex = Number.isFinite(nextIndexNum) && nextIndexNum > 0;
+            const indexes = parsed
+                .map((m) => Number(m?.index || 0))
+                .filter((v) => Number.isFinite(v) && v > 0);
+            const minIndex = indexes.length ? Math.min(...indexes) : 0;
 
             return {
                 parsed,
-                hasMore: Boolean(payload.has_more),
+                hasMore: parseBoolLike(payload.has_more ?? payload.hasMore),
                 nextCursor: String(payload.msg_cursor || ''),
+                nextIndex: hasValidNextIndex ? nextIndexNum : 0,
+                minIndex,
                 rawText
             };
         }
 
         async function fetchDoubaoAllConversationMessages(convId, maxPages = 30, onProgress = () => {}) {
             let cursor = '';
+            let anchorIndex = null;
             let page = 0;
             let done = false;
             const all = [];
             const seen = new Set();
+            let lastPageSignature = '';
 
             while (!done && page < maxPages) {
                 page += 1;
-                const res = await fetchDoubaoConversationMessagesByApi(convId, cursor);
+                const res = await fetchDoubaoConversationMessagesByApi(convId, cursor, anchorIndex);
+                const parsed = Array.isArray(res?.parsed) ? res.parsed : [];
 
-                res.parsed.forEach((m) => {
-                    const idKey = String(m.id || `${m.role}_${(m.text || '').slice(0, 48)}`);
+                parsed.forEach((m) => {
+                    const idKey = String(
+                        m.sourceMessageId
+                        || m.id
+                        || `${m.role}_${Number(m.index || 0)}_${Boolean(m.isArtifact) ? 'a' : 'n'}_${(m.text || '').slice(0, 48)}`
+                    );
                     if (seen.has(idKey)) return;
                     seen.add(idKey);
                     all.push(m);
                 });
 
-                onProgress({ page, count: all.length, hasMore: res.hasMore, cursor: res.nextCursor });
+                onProgress({
+                    page,
+                    count: all.length,
+                    hasMore: Boolean(res.hasMore),
+                    cursor: res.nextCursor,
+                    nextIndex: res.nextIndex,
+                    minIndex: res.minIndex
+                });
 
-                if (!res.hasMore || !res.nextCursor || res.nextCursor === cursor) {
+                if (!res.hasMore) {
+                    done = true;
+                    continue;
+                }
+
+                if (parsed.length > 0) {
+                    const firstId = String(parsed[0]?.sourceMessageId || parsed[0]?.id || '').trim();
+                    const lastId = String(parsed[parsed.length - 1]?.sourceMessageId || parsed[parsed.length - 1]?.id || '').trim();
+                    const pageSignature = `${firstId}|${lastId}|${parsed.length}`;
+                    if (pageSignature && pageSignature === lastPageSignature) {
+                        done = true;
+                        continue;
+                    }
+                    lastPageSignature = pageSignature;
+                }
+
+                const nextCursor = String(res.nextCursor || '').trim();
+                const nextIndex = Number(res.nextIndex || 0);
+                const hasValidNextIndex = Number.isFinite(nextIndex) && nextIndex > 0;
+                const minIndex = Number(res.minIndex || 0);
+                const computedNextAnchor = minIndex > 1 ? (minIndex - 1) : 0;
+
+                if (nextCursor) {
+                    if (nextCursor !== cursor) {
+                        cursor = nextCursor;
+                        if (hasValidNextIndex) anchorIndex = nextIndex;
+                        continue;
+                    }
+                    if (hasValidNextIndex && nextIndex !== Number(anchorIndex)) {
+                        anchorIndex = nextIndex;
+                        cursor = '';
+                        continue;
+                    }
+                    if (computedNextAnchor > 0 && computedNextAnchor !== Number(anchorIndex)) {
+                        anchorIndex = computedNextAnchor;
+                        cursor = '';
+                        continue;
+                    }
                     done = true;
                 } else {
-                    cursor = res.nextCursor;
+                    if (hasValidNextIndex && nextIndex !== Number(anchorIndex)) {
+                        anchorIndex = nextIndex;
+                        continue;
+                    }
+                    if (computedNextAnchor > 0 && computedNextAnchor !== Number(anchorIndex)) {
+                        anchorIndex = computedNextAnchor;
+                        continue;
+                    }
+                    done = true;
                 }
             }
 
+            const sorted = all.sort((a, b) => {
+                const ai = Number(a?.index || 0);
+                const bi = Number(b?.index || 0);
+                if (ai !== bi) return ai - bi;
+                const at = Number(a?.createTime || 0);
+                const bt = Number(b?.createTime || 0);
+                if (at !== bt) return at - bt;
+                return 0;
+            });
+
             return {
-                messages: all,
+                messages: sorted,
                 pages: page
             };
         }
@@ -9881,14 +10640,7 @@
             render();
         });
 
-        window.addEventListener('scroll', () => {
-            if (scrollTicking) return;
-            scrollTicking = true;
-            requestAnimationFrame(() => {
-                updateActiveNodeOnScroll();
-                scrollTicking = false;
-            });
-        }, true);
+        window.addEventListener('scroll', handleConversationScrollEvent, true);
 
         init();
         setTimeout(() => {
