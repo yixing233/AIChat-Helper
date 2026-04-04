@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AI对话助手
 // @namespace    http://tampermonkey.net/
-// @version      2.0.0
+// @version      2.0.1
 // @description  支持 ChatGPT、通义千问、豆包、DeepSeek：自动生成对话节点导航、一键导出对话（PDF/Markdown/JSON/CSV/TXT）。
 // @author       xchengb
 // @updateURL    https://gitee.com/xcb157342/ai-chat-nodes/raw/master/AIChat-Helper.user.js
@@ -4399,6 +4399,25 @@
             ticking = false;
         });
     });
+    let realtimeFallbackTimer = null;
+    let realtimeFallbackTicking = false;
+
+    function startRealtimeUpdateFallback() {
+        if (realtimeFallbackTimer) return;
+        // DOM 监听在部分平台会偶发漏触发，增加低频兜底轮询保证新消息可被及时纳入节点。
+        realtimeFallbackTimer = setInterval(() => {
+            if (document.hidden) return;
+            if (ticking || realtimeFallbackTicking) return;
+            realtimeFallbackTicking = true;
+            requestAnimationFrame(() => {
+                try {
+                    update();
+                } finally {
+                    realtimeFallbackTicking = false;
+                }
+            });
+        }, 1200);
+    }
 
     let scrollTicking = false;
     let boundConversationScrollEl = null;
@@ -4699,42 +4718,34 @@
             </div>
             
             <div style="margin-top: 12px; padding-top: 8px; border-top: 1px dashed #eee; display: flex; flex-direction: column; gap: 8px;">
-                <div style="display:flex; align-items:center; justify-content:space-between; gap:10px;">
-                    <span style="font-size:12px; color:#64748b; font-weight:600;">节点间距</span>
-                    <div style="display:flex; align-items:center; gap:4px;">
-                        <input type="number" id="ai-nodes-dot-gap-val" value="${CONFIG.dotGap}" min="20" max="50" style="width:42px; text-align:center; border:1px solid #e2e8f0; border-radius:6px; font-size:11px; padding:3px 2px; color:#0f172a; outline:none;">
-                        <span style="font-size:11px; color:#94a3b8;">px</span>
-                    </div>
-                </div>
-                <div style="display:flex; align-items:center; justify-content:space-between; gap:10px;">
-                    <span style="font-size:12px; color:#64748b; font-weight:600;">单页数量</span>
-                    <div style="display:flex; align-items:center; gap:4px;">
-                        <input type="number" id="ai-nodes-visible-limit-val" value="${CONFIG.maxVisibleDotsBeforeScroll}" min="2" max="30" style="width:42px; text-align:center; border:1px solid #e2e8f0; border-radius:6px; font-size:11px; padding:3px 2px; color:#0f172a; outline:none;">
-                        <span style="font-size:11px; color:#94a3b8;">个</span>
-                    </div>
-                </div>
-                <button id="ai-nodes-reading-line-trigger" style="margin-top:2px; width:100%; padding:6px; background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; cursor:pointer; font-size:11px; font-weight:600; color:#64748b; display:flex; align-items:center; justify-content:center; gap:6px; transition:all 0.2s;">
+                <button id="ai-nodes-node-settings-trigger" style="width:100%; padding:7px 10px; background:#ffffff; border:1px solid #bfdbfe; border-radius:8px; cursor:pointer; font-size:11px; font-weight:700; color:#1d4ed8; display:flex; align-items:center; justify-content:space-between; gap:6px; transition:all 0.2s;">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.5 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.5-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.01a1.65 1.65 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.5h.01a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.01a1.65 1.65 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.5 1V15Z"/></svg>
+                    <span style="flex:1; text-align:left;">节点设置</span>
+                    <span id="ai-nodes-node-settings-trigger-val">${CONFIG.dotGap} px | ${CONFIG.maxVisibleDotsBeforeScroll}</span>
+                </button>
+                <button id="ai-nodes-reading-line-trigger" style="margin-top:2px; width:100%; padding:7px 10px; background:#ffffff; border:1px solid #bfdbfe; border-radius:8px; cursor:pointer; font-size:11px; font-weight:700; color:#1d4ed8; display:flex; align-items:center; justify-content:space-between; gap:6px; transition:all 0.2s;">
                     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M7 7h10M7 12h10M7 17h10"/></svg>
-                    <span>调整阅读线 (目前: ${CONFIG.readingLineOffset}px)</span>
+                    <span style="flex:1; text-align:left;">调整阅读线</span>
+                    <span id="ai-nodes-reading-line-trigger-val">${CONFIG.readingLineOffset} px</span>
                 </button>
             </div>
             ${isQwen ? `
                 <div style="margin-top: 12px; padding-top: 8px; border-top: 1px dashed #eee; display: flex; flex-direction: column; gap: 8px;">
-                    <label style="display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer;">
-                        <input type="checkbox" id="ai-nodes-opt-collapse" ${autoCollapse ? 'checked' : ''} style="cursor: pointer; width: 14px; height: 14px;">
-                        <span>自动收起侧边栏</span>
+                    <label style="display:flex; align-items:center; justify-content:space-between; gap:10px; font-size:12px; cursor:pointer; color:#0f172a; background:rgba(248,250,252,0.75); border:1px solid #e2e8f0; border-radius:8px; padding:7px 10px;">
+                        <span style="font-weight:600;">自动收起侧边栏</span>
+                        <input type="checkbox" id="ai-nodes-opt-collapse" ${autoCollapse ? 'checked' : ''} style="cursor:pointer; width:14px; height:14px; margin:0; accent-color:#2563eb;">
                     </label>
-                    <label style="display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer;">
-                        <input type="checkbox" id="ai-nodes-opt-ads" ${removeAds ? 'checked' : ''} style="cursor: pointer; width: 14px; height: 14px;">
-                        <span>移除推荐广告</span>
+                    <label style="display:flex; align-items:center; justify-content:space-between; gap:10px; font-size:12px; cursor:pointer; color:#0f172a; background:rgba(248,250,252,0.75); border:1px solid #e2e8f0; border-radius:8px; padding:7px 10px;">
+                        <span style="font-weight:600;">移除推荐广告</span>
+                        <input type="checkbox" id="ai-nodes-opt-ads" ${removeAds ? 'checked' : ''} style="cursor:pointer; width:14px; height:14px; margin:0; accent-color:#2563eb;">
                     </label>
                 </div>
             ` : ''}
             ${isDeepSeek ? `
                 <div style="margin-top: 12px; padding-top: 8px; border-top: 1px dashed #eee; display: flex; flex-direction: column; gap: 8px;">
-                    <label style="display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer;">
-                        <input type="checkbox" id="ai-nodes-opt-hide-deepseek-native-nav" ${hideDeepSeekNativeNav ? 'checked' : ''} style="cursor: pointer; width: 14px; height: 14px;">
-                        <span>隐藏原生节点导航</span>
+                    <label style="display:flex; align-items:center; justify-content:space-between; gap:10px; font-size:12px; cursor:pointer; color:#0f172a; background:rgba(248,250,252,0.75); border:1px solid #e2e8f0; border-radius:8px; padding:7px 10px;">
+                        <span style="font-weight:600;">隐藏原生节点导航</span>
+                        <input type="checkbox" id="ai-nodes-opt-hide-deepseek-native-nav" ${hideDeepSeekNativeNav ? 'checked' : ''} style="cursor:pointer; width:14px; height:14px; margin:0; accent-color:#2563eb;">
                     </label>
                 </div>
             ` : ''}
@@ -4746,7 +4757,7 @@
                 
                 <button id="ai-nodes-export-trigger" style="width: 100%; padding: 10px; background: #1E88E5; color: white; border: none; border-radius: 10px; cursor: pointer; font-size: 13px; font-weight: 600; display: flex; align-items: center; justify-content: center; gap: 8px; transition: all 0.2s; box-shadow: 0 4px 10px rgba(30, 136, 229, 0.2);">
                     <svg width="16" height="16" fill="currentColor" viewBox="0 0 16 16"><path d="M.5 9.9a.5.5 0 0 1 .5.5v2.5a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-2.5a.5.5 0 0 1 1 0v2.5a2 2 0 0 1-2 2H2a2 2 0 0 1-2-2v-2.5a.5.5 0 0 1 .5-.5z"/><path d="M7.646 11.854a.5.5 0 0 0 .708 0l3-3a.5.5 0 0 0-.708-.708L8.5 10.293V1.5a.5.5 0 0 0-1 0v8.793L5.354 8.146a.5.5 0 1 0-.708.708l3 3z"/></svg>
-                    <span>导出记录</span>
+                    <span>导出对话记录</span>
                 </button>
             </div>
         `;
@@ -4787,18 +4798,43 @@
         `;
         document.body.appendChild(exportMenu);
 
+        // 节点设置二级卡片
+        const nodeSettingsMenu = document.createElement('div');
+        nodeSettingsMenu.className = 'ai-nodes-node-settings-menu';
+        nodeSettingsMenu.style.cssText = exportMenu.style.cssText;
+        nodeSettingsMenu.innerHTML = `
+            <div style="width:186px; padding:8px; display:flex; flex-direction:column; gap:12px;">
+                <div style="display:flex; align-items:center; justify-content:space-between; gap:10px;">
+                    <span style="font-size:12px; color:#64748b; font-weight:700;">节点间距</span>
+                    <div style="display:flex; align-items:center; gap:4px;">
+                        <input type="text" inputmode="numeric" id="ai-nodes-dot-gap-val" value="${CONFIG.dotGap}" style="width:46px; text-align:center; border:1px solid #bfdbfe; border-radius:6px; font-size:11px; font-weight:700; padding:3px 2px; color:#1d4ed8; outline:none; background:rgba(239,246,255,0.65);">
+                        <span style="font-size:11px; color:#64748b;">px</span>
+                    </div>
+                </div>
+                <div style="display:flex; align-items:center; justify-content:space-between; gap:10px;">
+                    <span style="font-size:12px; color:#64748b; font-weight:700;">单页数量</span>
+                    <div style="display:flex; align-items:center; gap:4px;">
+                        <input type="text" inputmode="numeric" id="ai-nodes-visible-limit-val" value="${CONFIG.maxVisibleDotsBeforeScroll}" style="width:46px; text-align:center; border:1px solid #bfdbfe; border-radius:6px; font-size:11px; font-weight:700; padding:3px 2px; color:#1d4ed8; outline:none; background:rgba(239,246,255,0.65);">
+                        <span style="font-size:11px; color:#64748b;">个</span>
+                    </div>
+                </div>
+                <div style="font-size:10px; color:#64748b; line-height:1.45;">调整节点纵向间距与单页显示数量，修改后会立即生效。</div>
+            </div>
+        `;
+        document.body.appendChild(nodeSettingsMenu);
+
         // 阅读线调整二级卡片
         const readingLineMenu = document.createElement('div');
         readingLineMenu.className = 'ai-nodes-reading-line-menu';
         readingLineMenu.style.cssText = exportMenu.style.cssText;
         readingLineMenu.innerHTML = `
-            <div style="width:180px; padding:6px; display:flex; flex-direction:column; gap:12px;">
+            <div style="width:186px; padding:8px; display:flex; flex-direction:column; gap:12px;">
                 <div style="display:flex; align-items:center; justify-content:space-between;">
                     <span style="font-size:12px; font-weight:700; color:#0f172a;">阅读线高度</span>
-                    <span id="ai-nodes-reading-line-display" style="font-size:13px; font-weight:700; color:#1E88E5;">${CONFIG.readingLineOffset}px</span>
+                    <span id="ai-nodes-reading-line-display" style="font-size:12px; font-weight:800; color:#1d4ed8; background:rgba(219,234,254,0.85); border:1px solid #bfdbfe; border-radius:999px; padding:2px 8px; line-height:1.3;">${CONFIG.readingLineOffset}px</span>
                 </div>
-                <input type="range" id="ai-nodes-reading-line-slider" min="10" max="250" value="${CONFIG.readingLineOffset}" style="width:100%; cursor:pointer; accent-color:#1E88E5;">
-                <div style="font-size:10px; color:#94a3b8; line-height:1.4;">设置滚动到屏幕上方何处时激活左侧导航点。</div>
+                <input type="range" id="ai-nodes-reading-line-slider" min="10" max="250" value="${CONFIG.readingLineOffset}" style="width:100%; cursor:pointer; accent-color:#2563eb;">
+                <div style="font-size:10px; color:#64748b; line-height:1.45;">设置滚动到屏幕上方何处时激活左侧导航点。</div>
             </div>
         `;
         document.body.appendChild(readingLineMenu);
@@ -4807,19 +4843,24 @@
         const readingLinePreview = document.createElement('div');
         readingLinePreview.id = 'ai-nodes-reading-line-preview';
         readingLinePreview.style.cssText = `
-            position: fixed; left: 0; right: 0; height: 0;
-            border-top: 2px dashed #1E88E5;
+            position: fixed; top: 0; left: 0; right: 0; height: 0;
+            background: rgba(255,255,255,0.2);
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+            border-bottom: 2px solid rgba(37,99,235,0.92);
+            box-shadow: inset 0 -1px 0 rgba(147,197,253,0.42), 0 0 14px rgba(37,99,235,0.18);
             z-index: 10005; pointer-events: none; opacity: 0;
-            transition: opacity 0.2s;
+            transition: opacity 0.2s ease;
         `;
         const rlLabel = document.createElement('div');
         rlLabel.style.cssText = `
-            position: absolute; right: 20px; top: -20px;
-            background: #1E88E5; color: #fff; font-size: 11px;
+            position: absolute; right: 20px; bottom: -20px;
+            background: rgba(30,64,175,0.92); color: #fff; font-size: 11px;
             padding: 2px 8px; border-radius: 6px; font-weight: 700;
-            box-shadow: 0 4px 10px rgba(30,136,229,0.3);
+            border: 1px solid rgba(191,219,254,0.9);
+            box-shadow: 0 6px 16px rgba(30,64,175,0.36);
         `;
-        rlLabel.innerText = '激活判定基准线';
+        rlLabel.innerText = '阅读线基准';
         readingLinePreview.appendChild(rlLabel);
         document.body.appendChild(readingLinePreview);
 
@@ -4840,13 +4881,33 @@
             readingLinePreview.style.opacity = '0';
         };
 
-        // 绑定事件，防止点击菜单内部导致关闭
-        popup.addEventListener('click', (e) => e.stopPropagation());
+        const hideNodeSettingsMenu = () => {
+            nodeSettingsMenu.style.opacity = '0';
+            nodeSettingsMenu.style.pointerEvents = 'none';
+            nodeSettingsMenu.style.transform = 'translateY(-8px) scale(0.96)';
+        };
+
+        // 绑定事件，防止点击菜单内部导致关闭；点击主设置弹窗区域时收起二级卡片
+        popup.addEventListener('pointerdown', (e) => {
+            e.stopPropagation();
+            const target = e.target;
+            if (!(target instanceof Element)) return;
+            const clickedNodeSettingsTrigger = !!target.closest('#ai-nodes-node-settings-trigger');
+            const clickedReadingLineTrigger = !!target.closest('#ai-nodes-reading-line-trigger');
+            const clickedExportTrigger = !!target.closest('#ai-nodes-export-trigger');
+            if (!clickedNodeSettingsTrigger && !clickedReadingLineTrigger && !clickedExportTrigger) {
+                hideExportMenu();
+                hideNodeSettingsMenu();
+                hideReadingLineMenu();
+            }
+        });
         exportMenu.addEventListener('click', (e) => e.stopPropagation());
+        nodeSettingsMenu.addEventListener('click', (e) => e.stopPropagation());
         readingLineMenu.addEventListener('click', (e) => e.stopPropagation());
 
         const hideAllSubMenus = () => {
             hideExportMenu();
+            hideNodeSettingsMenu();
             hideReadingLineMenu();
         };
 
@@ -4869,8 +4930,10 @@
         };
 
         // 监听自定义参数变化
-        const dotGapInput = popup.querySelector('#ai-nodes-dot-gap-val');
-        const visibleLimitInput = popup.querySelector('#ai-nodes-visible-limit-val');
+        const dotGapInput = nodeSettingsMenu.querySelector('#ai-nodes-dot-gap-val');
+        const visibleLimitInput = nodeSettingsMenu.querySelector('#ai-nodes-visible-limit-val');
+        const nodeSettingsTrigger = popup.querySelector('#ai-nodes-node-settings-trigger');
+        const nodeSettingsTriggerVal = popup.querySelector('#ai-nodes-node-settings-trigger-val');
 
         const updateCustomParams = () => {
             let gap = parseInt(dotGapInput.value);
@@ -4885,6 +4948,7 @@
             CONFIG.maxVisibleDotsBeforeScroll = limit;
             setGlobalValue(DOT_GAP_KEY, gap);
             setGlobalValue(VISIBLE_LIMIT_KEY, limit);
+            if (nodeSettingsTriggerVal) nodeSettingsTriggerVal.innerText = `${gap} px | ${limit}`;
             
             render();
             const activeNode = nodes.find(n => n.id === activeNodeId);
@@ -4898,20 +4962,41 @@
         const rlSlider = readingLineMenu.querySelector('#ai-nodes-reading-line-slider');
         const rlDisplay = readingLineMenu.querySelector('#ai-nodes-reading-line-display');
         const rlTrigger = popup.querySelector('#ai-nodes-reading-line-trigger');
+        const rlTriggerVal = popup.querySelector('#ai-nodes-reading-line-trigger-val');
 
         rlSlider.addEventListener('input', (e) => {
             const val = parseInt(e.target.value);
             CONFIG.readingLineOffset = val;
             rlDisplay.innerText = val + 'px';
-            readingLinePreview.style.top = val + 'px';
+            readingLinePreview.style.height = val + 'px';
             setGlobalValue(READING_LINE_KEY, val);
-            rlTrigger.querySelector('span').innerText = `调整阅读线 (目前: ${val}px)`;
+            if (rlTriggerVal) rlTriggerVal.innerText = `${val} px`;
             scheduleActiveNodeUpdate();
         });
+
+        if (nodeSettingsTrigger) {
+            nodeSettingsTrigger.onclick = (e) => {
+                e.stopPropagation();
+                hideExportMenu();
+                hideReadingLineMenu();
+                const visible = nodeSettingsMenu.style.opacity === '1';
+                if (visible) {
+                    hideNodeSettingsMenu();
+                } else {
+                    const rect = nodeSettingsTrigger.getBoundingClientRect();
+                    nodeSettingsMenu.style.top = `${rect.top - 10}px`;
+                    nodeSettingsMenu.style.left = `${rect.left - 196}px`;
+                    nodeSettingsMenu.style.opacity = '1';
+                    nodeSettingsMenu.style.pointerEvents = 'auto';
+                    nodeSettingsMenu.style.transform = 'translateY(0) scale(1)';
+                }
+            };
+        }
 
         rlTrigger.onclick = (e) => {
             e.stopPropagation();
             hideExportMenu();
+            hideNodeSettingsMenu();
             const visible = readingLineMenu.style.opacity === '1';
             if (visible) {
                 hideReadingLineMenu();
@@ -4923,7 +5008,7 @@
                 readingLineMenu.style.pointerEvents = 'auto';
                 readingLineMenu.style.transform = 'translateY(0) scale(1)';
                 
-                readingLinePreview.style.top = `${CONFIG.readingLineOffset}px`;
+                readingLinePreview.style.height = `${CONFIG.readingLineOffset}px`;
                 readingLinePreview.style.opacity = '1';
             }
         };
@@ -5031,6 +5116,8 @@
         // 绑定导出二级入口
         popup.querySelector('#ai-nodes-export-trigger').onclick = (e) => {
             e.stopPropagation();
+            hideNodeSettingsMenu();
+            hideReadingLineMenu();
             const visible = exportMenu.style.opacity === '1';
             if (visible) {
                 hideExportMenu();
@@ -8904,7 +8991,7 @@
                     .db-batch-hit-right:hover { background:linear-gradient(90deg, rgba(37,99,235,.03), rgba(37,99,235,.10)); }
                     .db-batch-hit-left:focus-visible,
                     .db-batch-hit-right:focus-visible { outline:none; box-shadow:inset 0 0 0 2px rgba(37,99,235,.22); }
-                    .db-batch-ck { appearance:none; -webkit-appearance:none; width:16px; height:16px; border:1.5px solid #94a3b8; border-radius:4px; margin-top:2px; background:#fff; position:relative; flex-shrink:0; display:grid; place-items:center; }
+                    .db-batch-ck { appearance:none; -webkit-appearance:none; width:16px; height:16px; border:1.5px solid #94a3b8; border-radius:4px; margin-top:2px; background:#fff; position:relative; flex-shrink:0; display:grid; place-items:center; accent-color:#2563eb; }
                     .db-batch-ck:checked { border-color:#2563eb; background:#2563eb; }
                     .db-batch-ck:checked::after { content:''; position:absolute; left:50%; top:50%; width:5px; height:9px; border:solid #fff; border-width:0 2px 2px 0; transform:translate(-50%, -58%) rotate(45deg); }
                     .db-batch-main { min-width:0; }
@@ -8912,6 +8999,20 @@
                     .db-batch-meta { display:grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap:6px; margin-top:5px; }
                     .db-batch-tag { font-size:11px; color:#475569; background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; padding:4px 8px; line-height:1.4; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
                     .db-batch-index { justify-self:end; align-self:center; min-width:34px; text-align:center; font-size:11px; font-weight:700; color:#1d4ed8; background:#eff6ff; border:1px solid #bfdbfe; border-radius:999px; padding:4px 8px; line-height:1.2; white-space:nowrap; }
+                    .gpt-batch-export-item:hover,
+                    .ds-batch-export-item:hover,
+                    .db-batch-export-item:hover,
+                    .qw-batch-export-item:hover { background:#f8fbff !important; }
+                    .gpt-batch-export-item:focus-visible,
+                    .ds-batch-export-item:focus-visible,
+                    .db-batch-export-item:focus-visible,
+                    .qw-batch-export-item:focus-visible { outline:none; box-shadow:inset 0 0 0 2px rgba(37,99,235,0.18); }
+                    .gpt-batch-export-item:first-child, .ds-batch-export-item:first-child, .db-batch-export-item:first-child, .qw-batch-export-item:first-child { border-top-left-radius:8px !important; border-top-right-radius:8px !important; }
+                    .gpt-batch-export-item:last-child, .ds-batch-export-item:last-child, .db-batch-export-item:last-child, .qw-batch-export-item:last-child { border-bottom-left-radius:8px !important; border-bottom-right-radius:8px !important; }
+                    .gpt-batch-export-item + .gpt-batch-export-item,
+                    .ds-batch-export-item + .ds-batch-export-item,
+                    .db-batch-export-item + .db-batch-export-item,
+                    .qw-batch-export-item + .qw-batch-export-item { border-top:1px solid #dbeafe !important; }
                     @media (max-width: 860px) { .db-batch-meta { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
                 `;
         }
@@ -9004,7 +9105,7 @@
                         <h3 style="margin:0;font-size:18px;white-space:nowrap;">${escapeHtml(headerTitle)}</h3>
                         ${headerMetaText ? `<span style="font-size:12px;padding:4px 8px;border-radius:999px;background:#eff6ff;color:#1d4ed8;border:1px solid #bfdbfe;max-width:320px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(headerMetaText)}</span>` : ''}
                     </div>
-                    <button id="modal-x" style="cursor:pointer;border:none;background:#eee;width:28px;height:28px;border-radius:50%;font-size:16px;display:flex;align-items:center;justify-content:center;">&times;</button>
+                    <button id="modal-x" aria-label="关闭" title="关闭" style="cursor:pointer;border:none;background:#e5e7eb;color:#1f2937;width:32px;height:32px;border-radius:999px;font-size:20px;line-height:1;display:flex;align-items:center;justify-content:center;padding:0;transition:background .2s ease;">&times;</button>
                 </div>
             `;
 
@@ -9077,15 +9178,15 @@
                     <div style="flex:1"></div>
                     <span style="font-size:12px;color:#666;">已选 <b id="m-count-view">${selectedIndexSet.size}</b> 条</span>
                     <div style="position:relative;display:flex;align-items:center;">
-                        <button id="m-export-menu-trigger" style="border:1px solid #2563eb;background:#2563eb;color:#fff;border-radius:8px;font-size:12px;padding:7px 12px;cursor:pointer;font-weight:700;display:flex;align-items:center;gap:6px;">
+                        <button id="m-export-menu-trigger" style="border:1px solid #2563eb;background:#fff;color:#2563eb;border-radius:8px;font-size:12px;padding:7px 12px;cursor:pointer;font-weight:700;display:flex;align-items:center;gap:6px;">
                             <span>导出</span><span id="m-export-menu-icon" style="font-size:10px;opacity:.9;display:inline-block;transition:transform .2s ease;transform:rotate(0deg);">▼</span>
                         </button>
-                        <div id="m-export-menu" style="position:absolute;right:0;top:36px;width:148px;background:#fff;border:1px solid #dbe3ee;border-radius:10px;box-shadow:0 10px 30px rgba(15,23,42,.15);padding:8px;z-index:7;opacity:0;pointer-events:none;transform:translateY(-8px) scale(0.96);transition:opacity .22s cubic-bezier(0.22,0.61,0.36,1), transform .22s cubic-bezier(0.22,0.61,0.36,1);">
-                            <button class="m-export-item" data-f="md" style="display:block;width:100%;text-align:left;background:#333;color:#fff;border:none;border-radius:8px;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;">Markdown</button>
-                            <button class="m-export-item" data-f="pdf" style="display:block;width:100%;text-align:left;background:#dc3545;color:#fff;border:none;border-radius:8px;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;margin-top:6px;">PDF</button>
-                            <button class="m-export-item" data-f="txt" style="display:block;width:100%;text-align:left;background:#28a745;color:#fff;border:none;border-radius:8px;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;margin-top:6px;">TXT</button>
-                            <button class="m-export-item" data-f="csv" style="display:block;width:100%;text-align:left;background:#0ea5a8;color:#fff;border:none;border-radius:8px;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;margin-top:6px;">CSV</button>
-                            <button class="m-export-item" data-f="json" style="display:block;width:100%;text-align:left;background:#f39c12;color:#fff;border:none;border-radius:8px;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;margin-top:6px;">JSON</button>
+                        <div id="m-export-menu" style="position:absolute;right:0;top:36px;width:100px;background:rgba(255, 255, 255, 0.2);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);border:1px solid rgba(255,255,255,0.35);border-radius:10px;box-shadow:0 10px 30px rgba(15,23,42,.15);padding:0;z-index:7;opacity:0;pointer-events:none;transform:translateY(-8px) scale(0.96);transition:opacity .22s cubic-bezier(0.22,0.61,0.36,1), transform .22s cubic-bezier(0.22,0.61,0.36,1);">
+                            <button class="m-export-item" data-f="md" style="display:block;width:100%;margin:0;text-align:center;background:transparent;color:#2563eb;border-radius:0;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;transition:border-color .18s ease, box-shadow .18s ease, background-color .18s ease;border:none;">Markdown</button>
+                            <button class="m-export-item" data-f="pdf" style="display:block;width:100%;margin:0;text-align:center;background:transparent;color:#2563eb;border-radius:0;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;transition:border-color .18s ease, box-shadow .18s ease, background-color .18s ease;border:none;">PDF</button>
+                            <button class="m-export-item" data-f="txt" style="display:block;width:100%;margin:0;text-align:center;background:transparent;color:#2563eb;border-radius:0;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;transition:border-color .18s ease, box-shadow .18s ease, background-color .18s ease;border:none;">TXT</button>
+                            <button class="m-export-item" data-f="csv" style="display:block;width:100%;margin:0;text-align:center;background:transparent;color:#2563eb;border-radius:0;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;transition:border-color .18s ease, box-shadow .18s ease, background-color .18s ease;border:none;">CSV</button>
+                            <button class="m-export-item" data-f="json" style="display:block;width:100%;margin:0;text-align:center;background:transparent;color:#2563eb;border-radius:0;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;transition:border-color .18s ease, box-shadow .18s ease, background-color .18s ease;border:none;">JSON</button>
                         </div>
                     </div>
                 </div>
@@ -9093,6 +9194,16 @@
                 <div id="m-list-box" style="flex:1;overflow-y:auto;padding:10px 24px;"></div>
                 <style>
                     .m-util-btn { cursor:pointer;padding:6px 12px;border:1px solid #ddd;border-radius:8px;background:#fff;font-size:12px; }
+                    #m-export-menu-trigger:hover { background:rgba(37,99,235,0.12) !important; box-shadow:inset 0 0 0 1px rgba(37,99,235,0.26); }
+                    #ai-nodes-node-settings-trigger:hover { background:rgba(37,99,235,0.1) !important; border-color:#93c5fd !important; box-shadow:inset 0 0 0 1px rgba(37,99,235,0.2); }
+                    #ai-nodes-node-settings-trigger:focus-visible { outline:none; box-shadow:0 0 0 2px rgba(37,99,235,0.2); }
+                    #ai-nodes-reading-line-trigger:hover { background:rgba(37,99,235,0.1) !important; border-color:#93c5fd !important; box-shadow:inset 0 0 0 1px rgba(37,99,235,0.2); }
+                    #ai-nodes-reading-line-trigger:focus-visible { outline:none; box-shadow:0 0 0 2px rgba(37,99,235,0.2); }
+                    .m-export-item:hover { background:rgba(37,99,235,0.16) !important; box-shadow:inset 0 0 0 1px rgba(37,99,235,0.28); }
+                    .m-export-item:focus-visible { outline:none; box-shadow:inset 0 0 0 2px rgba(37,99,235,0.18); }
+                    .m-export-item:first-child { border-top-left-radius:8px !important; border-top-right-radius:8px !important; }
+                    .m-export-item:last-child { border-bottom-left-radius:8px !important; border-bottom-right-radius:8px !important; }
+                    .m-export-item + .m-export-item { border-top:1px solid #dbeafe !important; }
                     .m-item-row { display:flex;gap:15px;padding:16px;border-bottom:1px solid #f2f2f2;position:relative;transition:background 0.2s; }
                     .m-item-row:hover { background:#fcfdfe; }
                     .m-msg-wrap { width:100%; display:flex; align-items:center; gap:12px; }
@@ -9146,7 +9257,7 @@
 
                 item.innerHTML = `
                     <div style="width:25px; flex-shrink:0; display:flex; align-items:center;">
-                        <input type="checkbox" class="m-row-ck" data-i="${i}" ${selectedIndexSet.has(i) ? 'checked' : ''} style="width:18px;height:18px;cursor:pointer;">
+                        <input type="checkbox" class="m-row-ck" data-i="${i}" ${selectedIndexSet.has(i) ? 'checked' : ''} style="width:18px;height:18px;cursor:pointer;accent-color:#2563eb;">
                     </div>
                     <div style="flex:1; display:flex; flex-direction:column; gap:4px;">
                         <div class="m-msg-wrap ${isU ? 'user' : 'assistant'}">
@@ -9189,7 +9300,7 @@
                 const subModal = document.createElement('div');
                 subModal.style.cssText = `background:#fff;width:80%;max-width:600px;max-height:80vh;border-radius:12px;padding:24px;display:flex;flex-direction:column;box-shadow:0 10px 30px rgba(0,0,0,0.2);`;
                 subModal.innerHTML = `
-                    <div style="display:flex;justify-content:space-between;margin-bottom:15px;align-items:center;"><h4 style="margin:0">${escapeHtml(title)}</h4><button id="sub-x" style="border:none;background:none;font-size:22px;cursor:pointer;">&times;</button></div>
+                    <div style="display:flex;justify-content:space-between;margin-bottom:15px;align-items:center;"><h4 style="margin:0">${escapeHtml(title)}</h4><button id="sub-x" aria-label="关闭" title="关闭" style="cursor:pointer;border:none;background:#e5e7eb;color:#1f2937;width:32px;height:32px;border-radius:999px;font-size:20px;line-height:1;display:flex;align-items:center;justify-content:center;padding:0;transition:background .2s ease;">&times;</button></div>
                     <div id="sub-body" style="flex:1;overflow-y:auto;font-size:14px;line-height:1.6;color:#333;white-space:pre-wrap;padding-top:10px;border-top:1px solid #eee;"></div>
                 `;
                 subModal.querySelector('#sub-body').textContent = txt;
@@ -9394,7 +9505,7 @@
                     <div>
                         <div style="font-size:16px;font-weight:700;color:#0f172a;">ChatGPT 批量导出</div>
                     </div>
-                    <button id="gpt-batch-close" style="border:1px solid #d1d5db;background:#fff;border-radius:8px;padding:6px 10px;cursor:pointer;font-size:12px;color:#334155;">关闭</button>
+                    <button id="gpt-batch-close" aria-label="关闭" title="关闭" style="cursor:pointer;border:none;background:#e5e7eb;color:#1f2937;width:32px;height:32px;border-radius:999px;font-size:20px;line-height:1;display:flex;align-items:center;justify-content:center;padding:0;transition:background .2s ease;">&times;</button>
                 </div>
                 <div class="db-batch-scroll" style="padding:16px 20px;overflow:auto;background:#f8fafc;">
                     <div style="border:1px solid #e2e8f0;border-radius:12px;padding:14px;background:#fff;">
@@ -9415,11 +9526,11 @@
                                     <span>导出</span><span id="gpt-batch-export-menu-icon" style="font-size:10px;opacity:.9;display:inline-block;transition:transform .2s ease;transform:rotate(0deg);">▼</span>
                                 </button>
                                 <div id="gpt-batch-export-menu" style="position:absolute;right:0;top:40px;width:140px;background:#fff;border:1px solid #dbe3ee;border-radius:10px;box-shadow:0 10px 30px rgba(15,23,42,.15);padding:8px;z-index:5;opacity:0;pointer-events:none;transform:translateY(-8px) scale(0.96);transition:opacity .22s cubic-bezier(0.22, 0.61, 0.36, 1), transform .22s cubic-bezier(0.22, 0.61, 0.36, 1);">
-                                    <button class="gpt-batch-export-item" data-format="json" style="display:block;width:100%;text-align:left;background:#f39c12;color:#ffffff;border:none;border-radius:8px;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;">JSON</button>
-                                    <button class="gpt-batch-export-item" data-format="md" style="display:block;width:100%;text-align:left;background:#333333;color:#ffffff;border:none;border-radius:8px;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;margin-top:6px;">Markdown</button>
-                                    <button class="gpt-batch-export-item" data-format="txt" style="display:block;width:100%;text-align:left;background:#28a745;color:#ffffff;border:none;border-radius:8px;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;margin-top:6px;">TXT</button>
-                                    <button class="gpt-batch-export-item" data-format="csv" style="display:block;width:100%;text-align:left;background:#0ea5a8;color:#ffffff;border:none;border-radius:8px;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;margin-top:6px;">CSV</button>
-                                    <button class="gpt-batch-export-item" data-format="pdf" style="display:block;width:100%;text-align:left;background:#dc3545;color:#ffffff;border:none;border-radius:8px;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;margin-top:6px;">PDF</button>
+                                    <button class="gpt-batch-export-item" data-format="json" style="display:block;width:100%;margin:0;text-align:center;background:#ffffff;color:#2563eb;border-radius:0;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;transition:border-color .18s ease, box-shadow .18s ease, background-color .18s ease;border:none;">JSON</button>
+                                    <button class="gpt-batch-export-item" data-format="md" style="display:block;width:100%;margin:0;text-align:center;background:#ffffff;color:#2563eb;border-radius:0;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;transition:border-color .18s ease, box-shadow .18s ease, background-color .18s ease;border:none;">Markdown</button>
+                                    <button class="gpt-batch-export-item" data-format="txt" style="display:block;width:100%;margin:0;text-align:center;background:#ffffff;color:#2563eb;border-radius:0;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;transition:border-color .18s ease, box-shadow .18s ease, background-color .18s ease;border:none;">TXT</button>
+                                    <button class="gpt-batch-export-item" data-format="csv" style="display:block;width:100%;margin:0;text-align:center;background:#ffffff;color:#2563eb;border-radius:0;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;transition:border-color .18s ease, box-shadow .18s ease, background-color .18s ease;border:none;">CSV</button>
+                                    <button class="gpt-batch-export-item" data-format="pdf" style="display:block;width:100%;margin:0;text-align:center;background:#ffffff;color:#2563eb;border-radius:0;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;transition:border-color .18s ease, box-shadow .18s ease, background-color .18s ease;border:none;">PDF</button>
                                 </div>
                             </div>
                         </div>
@@ -9872,7 +9983,7 @@
                     <div>
                         <div style="font-size:16px;font-weight:700;color:#0f172a;">DeepSeek 批量导出</div>
                     </div>
-                    <button id="ds-batch-close" style="border:1px solid #d1d5db;background:#fff;border-radius:8px;padding:6px 10px;cursor:pointer;font-size:12px;color:#334155;">关闭</button>
+                    <button id="ds-batch-close" aria-label="关闭" title="关闭" style="cursor:pointer;border:none;background:#e5e7eb;color:#1f2937;width:32px;height:32px;border-radius:999px;font-size:20px;line-height:1;display:flex;align-items:center;justify-content:center;padding:0;transition:background .2s ease;">&times;</button>
                 </div>
                 <div class="db-batch-scroll" style="padding:16px 20px;overflow:auto;background:#f8fafc;">
                     <div style="border:1px solid #e2e8f0;border-radius:12px;padding:14px;background:#fff;">
@@ -9893,11 +10004,11 @@
                                     <span>导出</span><span id="ds-batch-export-menu-icon" style="font-size:10px;opacity:.9;display:inline-block;transition:transform .2s ease;transform:rotate(0deg);">▼</span>
                                 </button>
                                 <div id="ds-batch-export-menu" style="position:absolute;right:0;top:40px;width:140px;background:#fff;border:1px solid #dbe3ee;border-radius:10px;box-shadow:0 10px 30px rgba(15,23,42,.15);padding:8px;z-index:5;opacity:0;pointer-events:none;transform:translateY(-8px) scale(0.96);transition:opacity .22s cubic-bezier(0.22, 0.61, 0.36, 1), transform .22s cubic-bezier(0.22, 0.61, 0.36, 1);">
-                                    <button class="ds-batch-export-item" data-format="json" style="display:block;width:100%;text-align:left;background:#f39c12;color:#ffffff;border:none;border-radius:8px;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;">JSON</button>
-                                    <button class="ds-batch-export-item" data-format="md" style="display:block;width:100%;text-align:left;background:#333333;color:#ffffff;border:none;border-radius:8px;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;margin-top:6px;">Markdown</button>
-                                    <button class="ds-batch-export-item" data-format="txt" style="display:block;width:100%;text-align:left;background:#28a745;color:#ffffff;border:none;border-radius:8px;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;margin-top:6px;">TXT</button>
-                                    <button class="ds-batch-export-item" data-format="csv" style="display:block;width:100%;text-align:left;background:#0ea5a8;color:#ffffff;border:none;border-radius:8px;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;margin-top:6px;">CSV</button>
-                                    <button class="ds-batch-export-item" data-format="pdf" style="display:block;width:100%;text-align:left;background:#dc3545;color:#ffffff;border:none;border-radius:8px;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;margin-top:6px;">PDF</button>
+                                    <button class="ds-batch-export-item" data-format="json" style="display:block;width:100%;margin:0;text-align:center;background:#ffffff;color:#2563eb;border-radius:0;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;transition:border-color .18s ease, box-shadow .18s ease, background-color .18s ease;border:none;">JSON</button>
+                                    <button class="ds-batch-export-item" data-format="md" style="display:block;width:100%;margin:0;text-align:center;background:#ffffff;color:#2563eb;border-radius:0;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;transition:border-color .18s ease, box-shadow .18s ease, background-color .18s ease;border:none;">Markdown</button>
+                                    <button class="ds-batch-export-item" data-format="txt" style="display:block;width:100%;margin:0;text-align:center;background:#ffffff;color:#2563eb;border-radius:0;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;transition:border-color .18s ease, box-shadow .18s ease, background-color .18s ease;border:none;">TXT</button>
+                                    <button class="ds-batch-export-item" data-format="csv" style="display:block;width:100%;margin:0;text-align:center;background:#ffffff;color:#2563eb;border-radius:0;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;transition:border-color .18s ease, box-shadow .18s ease, background-color .18s ease;border:none;">CSV</button>
+                                    <button class="ds-batch-export-item" data-format="pdf" style="display:block;width:100%;margin:0;text-align:center;background:#ffffff;color:#2563eb;border-radius:0;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;transition:border-color .18s ease, box-shadow .18s ease, background-color .18s ease;border:none;">PDF</button>
                                 </div>
                             </div>
                         </div>
@@ -10145,7 +10256,7 @@
                     <div>
                         <div style="font-size:16px;font-weight:700;color:#0f172a;">豆包批量导出</div>
                     </div>
-                    <button id="db-batch-close" style="border:1px solid #d1d5db;background:#fff;border-radius:8px;padding:6px 10px;cursor:pointer;font-size:12px;color:#334155;">关闭</button>
+                    <button id="db-batch-close" aria-label="关闭" title="关闭" style="cursor:pointer;border:none;background:#e5e7eb;color:#1f2937;width:32px;height:32px;border-radius:999px;font-size:20px;line-height:1;display:flex;align-items:center;justify-content:center;padding:0;transition:background .2s ease;">&times;</button>
                 </div>
                 <div class="db-batch-scroll" style="padding:16px 20px;overflow:auto;background:#f8fafc;">
                     <div style="border:1px solid #e2e8f0;border-radius:12px;padding:14px;background:#fff;">
@@ -10166,11 +10277,11 @@
                                     <span>导出</span><span id="db-batch-export-menu-icon" style="font-size:10px;opacity:.9;display:inline-block;transition:transform .2s ease;transform:rotate(0deg);">▼</span>
                                 </button>
                                 <div id="db-batch-export-menu" style="position:absolute;right:0;top:40px;width:140px;background:#fff;border:1px solid #dbe3ee;border-radius:10px;box-shadow:0 10px 30px rgba(15,23,42,.15);padding:8px;z-index:5;opacity:0;pointer-events:none;transform:translateY(-8px) scale(0.96);transition:opacity .22s cubic-bezier(0.22, 0.61, 0.36, 1), transform .22s cubic-bezier(0.22, 0.61, 0.36, 1);">
-                                    <button class="db-batch-export-item" data-format="json" style="display:block;width:100%;text-align:left;background:#f39c12;color:#ffffff;border-radius:8px;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;">JSON</button>
-                                    <button class="db-batch-export-item" data-format="md" style="display:block;width:100%;text-align:left;background:#333333;color:#ffffff;border-radius:8px;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;margin-top:6px;">Markdown</button>
-                                    <button class="db-batch-export-item" data-format="txt" style="display:block;width:100%;text-align:left;background:#28a745;color:#ffffff;border-radius:8px;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;margin-top:6px;">TXT</button>
-                                    <button class="db-batch-export-item" data-format="csv" style="display:block;width:100%;text-align:left;background:#0ea5a8;color:#ffffff;border-radius:8px;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;margin-top:6px;">CSV</button>
-                                    <button class="db-batch-export-item" data-format="pdf" style="display:block;width:100%;text-align:left;background:#dc3545;color:#ffffff;border-radius:8px;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;margin-top:6px;">PDF</button>
+                                    <button class="db-batch-export-item" data-format="json" style="display:block;width:100%;margin:0;text-align:center;background:#ffffff;color:#2563eb;border-radius:0;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;transition:border-color .18s ease, box-shadow .18s ease, background-color .18s ease;border:none;">JSON</button>
+                                    <button class="db-batch-export-item" data-format="md" style="display:block;width:100%;margin:0;text-align:center;background:#ffffff;color:#2563eb;border-radius:0;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;transition:border-color .18s ease, box-shadow .18s ease, background-color .18s ease;border:none;">Markdown</button>
+                                    <button class="db-batch-export-item" data-format="txt" style="display:block;width:100%;margin:0;text-align:center;background:#ffffff;color:#2563eb;border-radius:0;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;transition:border-color .18s ease, box-shadow .18s ease, background-color .18s ease;border:none;">TXT</button>
+                                    <button class="db-batch-export-item" data-format="csv" style="display:block;width:100%;margin:0;text-align:center;background:#ffffff;color:#2563eb;border-radius:0;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;transition:border-color .18s ease, box-shadow .18s ease, background-color .18s ease;border:none;">CSV</button>
+                                    <button class="db-batch-export-item" data-format="pdf" style="display:block;width:100%;margin:0;text-align:center;background:#ffffff;color:#2563eb;border-radius:0;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;transition:border-color .18s ease, box-shadow .18s ease, background-color .18s ease;border:none;">PDF</button>
                                 </div>
                             </div>
                         </div>
@@ -10436,7 +10547,7 @@
                     <div>
                         <div style="font-size:16px;font-weight:700;color:#0f172a;">千问批量导出</div>
                     </div>
-                    <button id="qw-batch-close" style="border:1px solid #d1d5db;background:#fff;border-radius:8px;padding:6px 10px;cursor:pointer;font-size:12px;color:#334155;">关闭</button>
+                    <button id="qw-batch-close" aria-label="关闭" title="关闭" style="cursor:pointer;border:none;background:#e5e7eb;color:#1f2937;width:32px;height:32px;border-radius:999px;font-size:20px;line-height:1;display:flex;align-items:center;justify-content:center;padding:0;transition:background .2s ease;">&times;</button>
                 </div>
                 <div class="db-batch-scroll" style="padding:16px 20px;overflow:auto;background:#f8fafc;">
                     <div style="border:1px solid #e2e8f0;border-radius:12px;padding:14px;background:#fff;">
@@ -10457,11 +10568,11 @@
                                     <span>导出</span><span id="qw-batch-export-menu-icon" style="font-size:10px;opacity:.9;display:inline-block;transition:transform .2s ease;transform:rotate(0deg);">▼</span>
                                 </button>
                                 <div id="qw-batch-export-menu" style="position:absolute;right:0;top:40px;width:140px;background:#fff;border:1px solid #dbe3ee;border-radius:10px;box-shadow:0 10px 30px rgba(15,23,42,.15);padding:8px;z-index:5;opacity:0;pointer-events:none;transform:translateY(-8px) scale(0.96);transition:opacity .22s cubic-bezier(0.22, 0.61, 0.36, 1), transform .22s cubic-bezier(0.22, 0.61, 0.36, 1);">
-                                    <button class="qw-batch-export-item" data-format="json" style="display:block;width:100%;text-align:left;background:#f39c12;color:#ffffff;border-radius:8px;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;">JSON</button>
-                                    <button class="qw-batch-export-item" data-format="md" style="display:block;width:100%;text-align:left;background:#333333;color:#ffffff;border-radius:8px;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;margin-top:6px;">Markdown</button>
-                                    <button class="qw-batch-export-item" data-format="txt" style="display:block;width:100%;text-align:left;background:#28a745;color:#ffffff;border-radius:8px;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;margin-top:6px;">TXT</button>
-                                    <button class="qw-batch-export-item" data-format="csv" style="display:block;width:100%;text-align:left;background:#0ea5a8;color:#ffffff;border-radius:8px;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;margin-top:6px;">CSV</button>
-                                    <button class="qw-batch-export-item" data-format="pdf" style="display:block;width:100%;text-align:left;background:#dc3545;color:#ffffff;border-radius:8px;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;margin-top:6px;">PDF</button>
+                                    <button class="qw-batch-export-item" data-format="json" style="display:block;width:100%;margin:0;text-align:center;background:#ffffff;color:#2563eb;border-radius:0;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;transition:border-color .18s ease, box-shadow .18s ease, background-color .18s ease;border:none;">JSON</button>
+                                    <button class="qw-batch-export-item" data-format="md" style="display:block;width:100%;margin:0;text-align:center;background:#ffffff;color:#2563eb;border-radius:0;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;transition:border-color .18s ease, box-shadow .18s ease, background-color .18s ease;border:none;">Markdown</button>
+                                    <button class="qw-batch-export-item" data-format="txt" style="display:block;width:100%;margin:0;text-align:center;background:#ffffff;color:#2563eb;border-radius:0;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;transition:border-color .18s ease, box-shadow .18s ease, background-color .18s ease;border:none;">TXT</button>
+                                    <button class="qw-batch-export-item" data-format="csv" style="display:block;width:100%;margin:0;text-align:center;background:#ffffff;color:#2563eb;border-radius:0;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;transition:border-color .18s ease, box-shadow .18s ease, background-color .18s ease;border:none;">CSV</button>
+                                    <button class="qw-batch-export-item" data-format="pdf" style="display:block;width:100%;margin:0;text-align:center;background:#ffffff;color:#2563eb;border-radius:0;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;transition:border-color .18s ease, box-shadow .18s ease, background-color .18s ease;border:none;">PDF</button>
                                 </div>
                             </div>
                         </div>
@@ -11427,10 +11538,23 @@
         };
         btn.addEventListener('click', toggleSettingsPopup);
 
-        document.addEventListener('click', () => {
+        const isWithinSettingsUi = (target) => {
+            if (!target || !(target instanceof Element)) return false;
+            if (btn.contains(target)) return true;
+            if (popup.contains(target)) return true;
+            if (exportMenu.contains(target)) return true;
+            if (nodeSettingsMenu.contains(target)) return true;
+            if (readingLineMenu.contains(target)) return true;
+            return false;
+        };
+
+        document.addEventListener('pointerdown', (e) => {
+            if (isWithinSettingsUi(e.target)) return;
             hidePopup();
             hideExportMenu();
-        });
+            hideNodeSettingsMenu();
+            hideReadingLineMenu();
+        }, true);
 
         // 收起逻辑实现
         function applyAutoCollapse() {
@@ -11676,8 +11800,14 @@
         });
 
         window.addEventListener('scroll', handleConversationScrollEvent, true);
+        document.addEventListener('visibilitychange', () => {
+            if (!document.hidden) {
+                requestAnimationFrame(() => update());
+            }
+        });
 
         init();
+        startRealtimeUpdateFallback();
         setTimeout(() => {
             injectSettings();
         }, 0);
@@ -11694,4 +11824,13 @@
         }, 50);
     }
 })();
+
+
+
+
+
+
+
+
+
 
