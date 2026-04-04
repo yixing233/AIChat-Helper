@@ -532,7 +532,7 @@
         dotBorder: 2,
         dotGap: Math.max(20, Math.min(50, getGlobalValue(DOT_GAP_KEY, 36))),
         maxVisibleDotsBeforeScroll: getGlobalValue(VISIBLE_LIMIT_KEY, 12),
-        readingLineOffset: Math.max(10, Math.min(250, getGlobalValue(READING_LINE_KEY, 150))),
+        readingLineOffset: Math.max(10, Math.min(500, getGlobalValue(READING_LINE_KEY, 150))),
         maxTrackViewportRatio: 0.4
     };
 
@@ -1038,7 +1038,52 @@
                 scheduleQwenVirtualNodesRefresh();
             }
             if (!qwenVirtualNodesSessionId || !currentSessionId || qwenVirtualNodesSessionId === currentSessionId) {
-                qwenVirtualNodesCache.forEach((item) => list.push(item));
+                const cached = Array.isArray(qwenVirtualNodesCache) ? qwenVirtualNodesCache : [];
+                const domCandidates = getQwenUserDomCandidates();
+
+                if (domCandidates.length) {
+                    const consumedCacheNodes = new Set();
+                    const merged = domCandidates.map((domItem, idx) => {
+                        const domId = normalizeQwenMessageId(domItem?.id || '');
+                        const domText = normalizeQwenTextForMatch(domItem?.text || '');
+                        let matched = null;
+
+                        if (domId) {
+                            matched = cached.find((c) => normalizeQwenMessageId(c?.id || '') === domId) || null;
+                        }
+                        if (!matched && domText) {
+                            matched = cached.find((c) => !consumedCacheNodes.has(c) && isLikelySameQwenNodeText(c?.text || '', domText)) || null;
+                        }
+                        if (matched) consumedCacheNodes.add(matched);
+
+                        const fallbackId = `qwen-dom-user-${idx + 1}-${hashStr(domText || String(idx)).slice(0, 8)}`;
+                        return {
+                            id: domId || normalizeQwenMessageId(matched?.id || '') || fallbackId,
+                            role: 'user',
+                            text: domText || normalizeQwenTextForMatch(matched?.text || ''),
+                            sessionIndex: idx,
+                            element: domItem?.element || matched?.element || null
+                        };
+                    }).filter((item) => item.text);
+
+                    cached.forEach((item) => {
+                        if (consumedCacheNodes.has(item)) return;
+                        merged.push({
+                            ...item,
+                            sessionIndex: merged.length
+                        });
+                    });
+
+                    const normalizedMerged = normalizeQwenNodeOrder(merged);
+                    normalizedMerged.forEach((item) => list.push(item));
+
+                    // DOM 已出现但缓存尚未收敛时，主动触发一次 API 强刷，尽快固化 ID/顺序。
+                    if (domCandidates.length > cached.length) {
+                        scheduleQwenVirtualNodesRefresh(true);
+                    }
+                } else {
+                    cached.forEach((item) => list.push(item));
+                }
             }
         } else if (host.includes('doubao.com')) {
             const domUserCount = document.querySelectorAll('[data-testid="send_message"]').length;
@@ -1052,10 +1097,107 @@
             if (!doubaoVirtualNodesLoaded || doubaoVirtualNodesDirty) {
                 scheduleDoubaoVirtualNodesRefresh();
             }
-            doubaoVirtualNodesCache.forEach((item) => list.push(item));
+            const cached = Array.isArray(doubaoVirtualNodesCache) ? doubaoVirtualNodesCache : [];
+            const domCandidates = getDoubaoUserDomCandidates();
+            if (domCandidates.length) {
+                const consumedCacheNodes = new Set();
+                const merged = domCandidates.map((domItem, idx) => {
+                    const domId = String(domItem?.id || '').trim();
+                    const domText = normalizeDoubaoTextForMatch(domItem?.text || '');
+                    let matched = null;
+
+                    if (domId) {
+                        matched = cached.find((c) => String(c?.id || '').trim() === domId) || null;
+                    }
+                    if (!matched && domText) {
+                        const domPrefix = domText.slice(0, Math.min(28, domText.length));
+                        matched = cached.find((c) => {
+                            if (consumedCacheNodes.has(c)) return false;
+                            const t = normalizeDoubaoTextForMatch(c?.text || '');
+                            if (!t) return false;
+                            return t === domText || (domPrefix && t.includes(domPrefix));
+                        }) || null;
+                    }
+                    if (matched) consumedCacheNodes.add(matched);
+
+                    const fallbackId = `doubao-dom-user-${idx + 1}-${hashStr(domText || String(idx)).slice(0, 8)}`;
+                    return {
+                        id: domId || String(matched?.id || '').trim() || fallbackId,
+                        role: 'user',
+                        text: domText || normalizeDoubaoTextForMatch(matched?.text || ''),
+                        sourceMessageId: String(domItem?.id || matched?.sourceMessageId || matched?.id || '').trim(),
+                        sessionIndex: idx,
+                        element: domItem?.element || matched?.element || null
+                    };
+                }).filter((item) => item.text);
+
+                cached.forEach((item) => {
+                    if (consumedCacheNodes.has(item)) return;
+                    merged.push({
+                        ...item,
+                        sessionIndex: merged.length
+                    });
+                });
+
+                merged.forEach((item) => list.push(item));
+                if (domCandidates.length > cached.length) {
+                    scheduleDoubaoVirtualNodesRefresh(true);
+                }
+            } else {
+                cached.forEach((item) => list.push(item));
+            }
         } else if (host.includes('deepseek.com')) {
             scheduleDeepSeekVirtualNodesRefresh();
-            deepseekVirtualNodesCache.forEach((item) => list.push(item));
+            const cached = Array.isArray(deepseekVirtualNodesCache) ? deepseekVirtualNodesCache : [];
+            const domCandidates = getDeepSeekUserDomCandidates();
+            if (domCandidates.length) {
+                const consumedCacheNodes = new Set();
+                const merged = domCandidates.map((domItem, idx) => {
+                    const domId = String(domItem?.id || '').trim();
+                    const domText = normalizeDeepSeekTextForMatch(domItem?.text || '');
+                    let matched = null;
+
+                    if (domId) {
+                        matched = cached.find((c) => String(c?.sourceMessageId || c?.id || '').trim() === domId) || null;
+                    }
+                    if (!matched && domText) {
+                        const domPrefix = domText.slice(0, Math.min(28, domText.length));
+                        matched = cached.find((c) => {
+                            if (consumedCacheNodes.has(c)) return false;
+                            const t = normalizeDeepSeekTextForMatch(c?.text || '');
+                            if (!t) return false;
+                            return t === domText || (domPrefix && t.includes(domPrefix));
+                        }) || null;
+                    }
+                    if (matched) consumedCacheNodes.add(matched);
+
+                    const fallbackId = `deepseek-dom-user-${idx + 1}-${hashStr(domText || String(idx)).slice(0, 8)}`;
+                    const resolvedId = String(matched?.id || '').trim() || (domId ? `deepseek-user-${domId}` : fallbackId);
+                    return {
+                        id: resolvedId,
+                        sourceMessageId: domId || String(matched?.sourceMessageId || '').trim(),
+                        role: 'user',
+                        text: domText || normalizeDeepSeekTextForMatch(matched?.text || ''),
+                        sessionIndex: idx,
+                        element: domItem?.element || matched?.element || null
+                    };
+                }).filter((item) => item.text);
+
+                cached.forEach((item) => {
+                    if (consumedCacheNodes.has(item)) return;
+                    merged.push({
+                        ...item,
+                        sessionIndex: merged.length
+                    });
+                });
+
+                merged.forEach((item) => list.push(item));
+                if (domCandidates.length > cached.length) {
+                    scheduleDeepSeekVirtualNodesRefresh(true);
+                }
+            } else {
+                cached.forEach((item) => list.push(item));
+            }
         }
 
         return list;
@@ -1799,10 +1941,11 @@
             const text = normalizeDeepSeekTextForMatch(bubble.innerText || '');
             if (!text || text === '深度思考' || text === '联网搜索') return;
 
-            const key = text.slice(0, 80);
+            const rowId = String(el.closest?.('[data-virtual-list-item-key]')?.getAttribute?.('data-virtual-list-item-key') || '').trim();
+            const key = `${rowId}::${text.slice(0, 80)}`;
             if (seen.has(key)) return;
             seen.add(key);
-            out.push({ element: bubble, text });
+            out.push({ id: rowId, element: bubble, text });
         });
 
         return out;
@@ -2024,10 +2167,9 @@
 
     function scheduleDoubaoVirtualNodesRefresh(force = false) {
         if (!isDoubao || doubaoVirtualNodesLoading) return;
-        if (doubaoVirtualNodesLoaded && !doubaoVirtualNodesDirty && !force) return;
 
         const now = Date.now();
-        const retryGap = doubaoVirtualNodesCache.length ? 4000 : 900;
+        const retryGap = doubaoVirtualNodesCache.length ? 1800 : 700;
         if (!force && (now - doubaoVirtualNodesLastFetchAt < retryGap)) return;
 
         doubaoVirtualNodesLoading = true;
@@ -2139,12 +2281,11 @@
         
         const scrollEl = getScrollContainer();
         const executeJump = () => { 
-            const rect = targetEl.getBoundingClientRect();
             const containerRect = (scrollEl === window || scrollEl === document.documentElement) 
                 ? { top: 0 } 
                 : scrollEl.getBoundingClientRect();
-            const readingLineOffset = Math.max(10, Math.min(250, CONFIG.readingLineOffset || 150));
-            
+            const readingLineOffset = Math.max(10, Math.min(500, CONFIG.readingLineOffset || 150));
+            const rect = targetEl.getBoundingClientRect();
             const targetTop = scrollEl.scrollTop + rect.top - containerRect.top - readingLineOffset;
             
             if (typeof scrollEl.scrollTo === 'function') {
@@ -2979,7 +3120,7 @@
             : null;
         const viewportTop = containerRect ? Math.max(0, containerRect.top) : 0;
         const viewportBottom = containerRect ? Math.min(viewportHeight, containerRect.bottom) : viewportHeight;
-        const readingOffset = Math.max(10, Math.min(250, CONFIG.readingLineOffset || 150));
+        const readingOffset = Math.max(10, Math.min(500, CONFIG.readingLineOffset || 150));
         const readingAnchor = Math.max(
             viewportTop + 10,
             Math.min(viewportBottom - 10, viewportTop + readingOffset)
@@ -3195,11 +3336,10 @@
 
     function scheduleQwenVirtualNodesRefresh(force = false) {
         if (!isQwen || qwenVirtualNodesLoading) return;
-        if (qwenVirtualNodesLoaded && !qwenVirtualNodesDirty) return;
 
         const refreshStorageKey = storageKey;
         const now = Date.now();
-        const retryGap = qwenVirtualNodesCache.length ? 4000 : 900;
+        const retryGap = qwenVirtualNodesCache.length ? 1800 : 700;
         if (!force && (now - qwenVirtualNodesLastFetchAt < retryGap)) return;
 
         qwenVirtualNodesLoading = true;
@@ -3412,6 +3552,7 @@
         const aiColor = 'linear-gradient(135deg, #4FC3F7 0%, #03A9F4 100%)';
         const isAI = node && (node.role === 'assistant' || node.role === 'ai');
         dot.style.background = isAI ? aiColor : userColor;
+        dot.style.opacity = '1';
         dot.style.filter = 'none';
         dot.style.boxShadow = '0 6px 16px rgba(0, 0, 0, 0.2), 0 0 0 2px #fff';
         dot.style.transform = 'translate(-50%, -50%) scale(1.6)';
@@ -3918,14 +4059,15 @@
         const trackHeight = nodes.length === 1
             ? Math.min(fullTrackHeight, singleNodeMinTrackHeight)
             : Math.max(minTrackHeight, Math.min(fullTrackHeight, Math.round(desiredTrackHeight)));
+        const trackTop = Math.round((finalVisibleHeight - trackHeight) / 2);
+        const trackBottom = trackTop + trackHeight;
         track.style.display = 'block';
-        track.style.top = Math.round((finalVisibleHeight - trackHeight) / 2) + 'px';
+        track.style.top = trackTop + 'px';
         track.style.height = trackHeight + 'px';
         track.style.width = '4px';
         track.style.background = 'linear-gradient(180deg, rgba(200,200,200,0.15) 0%, rgba(200,200,200,0.3) 50%, rgba(200,200,200,0.15) 100%)';
 
         const fragment = document.createDocumentFragment();
-        const edgeThreshold = 40;
         const baseY = dotEdgePad + CONFIG.dotSize / 2;
 
         let startIdx = 0;
@@ -3954,12 +4096,8 @@
             if (isActive) applyDotActiveVisual(dot, node);
 
             let targetOpacity = isActive ? 1 : (nodes.length === 1 ? 0.9 : 0.6);
-            if (topPx < 0 || topPx > finalVisibleHeight) {
+            if (!isActive && (topPx < trackTop || topPx > trackBottom)) {
                 targetOpacity = 0;
-            } else if (nodes.length > 1 && topPx < edgeThreshold) {
-                targetOpacity *= (topPx / edgeThreshold);
-            } else if (nodes.length > 1 && topPx > finalVisibleHeight - edgeThreshold) {
-                targetOpacity *= ((finalVisibleHeight - topPx) / edgeThreshold);
             }
 
             dot.style.opacity = String(Math.max(0, Math.min(1, targetOpacity)));
@@ -4418,6 +4556,57 @@
             });
         }, 1200);
     }
+    let composerRealtimeTriggerBound = false;
+    let realtimeBurstTimerIds = [];
+
+    function triggerRealtimeRefreshBurst() {
+        if (isQwen) {
+            scheduleQwenVirtualNodesRefresh(true);
+        } else if (isDoubao) {
+            scheduleDoubaoVirtualNodesRefresh(true);
+        } else if (isDeepSeek) {
+            scheduleDeepSeekVirtualNodesRefresh(true);
+        }
+
+        requestAnimationFrame(() => update());
+        realtimeBurstTimerIds.forEach((id) => clearTimeout(id));
+        realtimeBurstTimerIds = [
+            setTimeout(() => update(), 360),
+            setTimeout(() => update(), 980),
+            setTimeout(() => update(), 1850)
+        ];
+    }
+
+    function bindComposerRealtimeTriggers() {
+        if (composerRealtimeTriggerBound) return;
+        composerRealtimeTriggerBound = true;
+
+        document.addEventListener('keydown', (e) => {
+            if (e.key !== 'Enter') return;
+            const target = e.target;
+            if (!(target instanceof Element)) return;
+            const tagName = String(target.tagName || '').toLowerCase();
+            const isTextInput = tagName === 'textarea'
+                || (tagName === 'input' && (target.getAttribute('type') || 'text').toLowerCase() !== 'checkbox')
+                || target.getAttribute('contenteditable') === 'true';
+            if (!isTextInput) return;
+            if (e.shiftKey || e.ctrlKey || e.altKey || e.metaKey) return;
+            triggerRealtimeRefreshBurst();
+        }, true);
+
+        document.addEventListener('click', (e) => {
+            const target = e.target;
+            if (!(target instanceof Element)) return;
+            const sendButton = target.closest('button,[role="button"]');
+            if (!sendButton) return;
+            const text = String(sendButton.innerText || sendButton.textContent || '').trim();
+            const label = String(sendButton.getAttribute('aria-label') || sendButton.getAttribute('title') || '').trim();
+            const dataTestid = String(sendButton.getAttribute('data-testid') || '').trim();
+            const haystack = `${text} ${label} ${dataTestid}`.toLowerCase();
+            if (!/(发送|send|submit|qwpcicon-send|send_message|chat-send|send-button)/.test(haystack)) return;
+            triggerRealtimeRefreshBurst();
+        }, true);
+    }
 
     let scrollTicking = false;
     let boundConversationScrollEl = null;
@@ -4833,7 +5022,7 @@
                     <span style="font-size:12px; font-weight:700; color:#0f172a;">阅读线高度</span>
                     <span id="ai-nodes-reading-line-display" style="font-size:12px; font-weight:800; color:#1d4ed8; background:rgba(219,234,254,0.85); border:1px solid #bfdbfe; border-radius:999px; padding:2px 8px; line-height:1.3;">${CONFIG.readingLineOffset}px</span>
                 </div>
-                <input type="range" id="ai-nodes-reading-line-slider" min="10" max="250" value="${CONFIG.readingLineOffset}" style="width:100%; cursor:pointer; accent-color:#2563eb;">
+                <input type="range" id="ai-nodes-reading-line-slider" min="10" max="500" value="${CONFIG.readingLineOffset}" style="width:100%; cursor:pointer; accent-color:#2563eb;">
                 <div style="font-size:10px; color:#64748b; line-height:1.45;">设置滚动到屏幕上方何处时激活左侧导航点。</div>
             </div>
         `;
@@ -11808,6 +11997,7 @@
 
         init();
         startRealtimeUpdateFallback();
+        bindComposerRealtimeTriggers();
         setTimeout(() => {
             injectSettings();
         }, 0);
