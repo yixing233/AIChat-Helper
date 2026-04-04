@@ -7,10 +7,10 @@
 // @updateURL    https://gitee.com/xcb157342/ai-chat-nodes/raw/master/AIChat-Helper.user.js
 // @downloadURL  https://gitee.com/xcb157342/ai-chat-nodes/raw/master/AIChat-Helper.user.js
 // @icon         data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIzMiIgaGVpZ2h0PSIzMiIgdmlld0JveD0iMCAwIDMyIDMyIj48cmVjdCB3aWR0aD0iMzIiIGhlaWdodD0iMzIiIGZpbGw9Im5vbmUiLz48cGF0aCBmaWxsPSIjMDQwMGU2IiBkPSJNMTYgMTlhNi45OSAxNi45OSAwIDAgMS01LjgzMy0zLjEyOWwxLjY2Ni0xLjEwN2E1IDUgMCAwIDAgOC4zMzQgMGwxLjY2NiAxLjEwN0E2Ljk5IDYuOTkgMCAwIDEgMTYgMTl6Ii8+PGNpcmNsZSBjeD0iMjAyMCIgY3k9IjEwIiByPSIyIiBmaWxsPSIjMDQwMGU2Ii8+PGNpcmNsZSBjeD0iMTIiIGN5PSIxMCIgcj0iMiIgZmlsbD0iIzA0MDBlNiIvPjxjaXJjbGUgY3g9IjEyIiBjeT0iMTAiIHI9IjIiIGZpbGw9IiMwNDAwZTYiLz48Y2lyY2xlIGN4PSIxMiIgY3k9IjEwIiByPSIyIiBmaWxsPSIjMDQwMGU2Ii8+PHBhdGggZmlsbD0iIzA0MDBlNiIgZD0iTTE3LjczNiAzMEwxNiAyOWw0LTdoNmEyIDIgMCAwIDAgMi0yVjZhMiAyIDAgMCAwLTItMkg2YTIgMiAwIDAgMC0yIDJ2MTRhMiAyIDAgMCAwIDIgMmg5djJINmE0IDQgMCAwIDEtNC00VjZhNCA0IDAgMCAxIDQtNGgyMGE0IDQgMCAwIDEgNCA0djE0YTQgNCAwIDAgMS00IDRoLTQuODM1eiIvPjwvc3ZnPg==
-// @match        *://chatgpt.com/c/*
-// @match        *://www.qianwen.com/chat/*
-// @match        *://www.doubao.com/chat/*
-// @match        *://chat.deepseek.com/a/chat/s/*
+// @match        *://chatgpt.com/*
+// @match        *://www.qianwen.com/chat*
+// @match        *://www.doubao.com/chat*
+// @match        *://chat.deepseek.com/a/chat/s*
 // @grant        GM_addStyle
 // @grant        GM_getValue
 // @grant        GM_setValue
@@ -28,10 +28,10 @@
     const isDoubaoHost = /^www\.doubao\.com$/i.test(host);
     const isDeepSeekHost = /^chat\.deepseek\.com$/i.test(host);
 
-    const isChatGPTPath = /^\/c\/[a-z0-9-]+\/?$/i.test(pathname);
-    const isQwenPath = /^\/chat\/[a-f0-9]{32}\/?$/i.test(pathname);
-    const isDoubaoPath = /^\/chat\/\d+\/?$/i.test(pathname);
-    const isDeepSeekPath = /^\/a\/chat\/s\/[0-9a-f-]{36}\/?$/i.test(pathname);
+    const isChatGPTPath = /^\/(?:$|c\/[a-z0-9-]+\/?)$/i.test(pathname);
+    const isQwenPath = /^\/chat(?:\/[a-z0-9_-]{8,})?\/?$/i.test(pathname);
+    const isDoubaoPath = /^\/chat(?:\/\d+)?\/?$/i.test(pathname);
+    const isDeepSeekPath = /^\/a\/chat\/s(?:\/[0-9a-f-]{36})?\/?$/i.test(pathname);
 
     const isChatGPT = isChatGPTHost && isChatGPTPath;
     const isQwen = isQwenHost && isQwenPath;
@@ -63,7 +63,9 @@
     let storageKey = '';
     const COLLAPSE_KEY = 'ai-nodes-auto-collapse-qwen';
     const ADS_KEY = 'ai-nodes-remove-qwen-ads';
+    const QWEN_GLASS_POPUPS_KEY = 'ai-nodes-qwen-glass-popups';
     const DEEPSEEK_NATIVE_NAV_KEY = 'ai-nodes-hide-deepseek-native-nav';
+    const DOUBAO_GLASS_POPUPS_KEY = 'ai-nodes-doubao-glass-popups';
     const DOT_GAP_KEY = 'ai-nodes-dot-gap';
     const VISIBLE_LIMIT_KEY = 'ai-nodes-visible-limit';
     const READING_LINE_KEY = 'ai-nodes-reading-line';
@@ -519,7 +521,9 @@
     let ticking = false;
     let autoCollapse = getGlobalValue(COLLAPSE_KEY, false);
     let removeAds = getGlobalValue(ADS_KEY, false);
+    let qwenGlassPopups = getGlobalValue(QWEN_GLASS_POPUPS_KEY, true);
     let hideDeepSeekNativeNav = getGlobalValue(DEEPSEEK_NATIVE_NAV_KEY, false);
+    let doubaoGlassPopups = getGlobalValue(DOUBAO_GLASS_POPUPS_KEY, true);
 
     const CONFIG = {
         topGap: 80,
@@ -552,7 +556,7 @@
         box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
         pointer-events: none;
         opacity: 0;
-        z-index: 10000;
+        z-index: 10140;
         border: 1px solid rgba(0, 0, 0, 0.05);
         backdrop-filter: blur(8px);
         white-space: pre-wrap;
@@ -576,7 +580,7 @@
     container.style.width = CONFIG.panelWidth + 'px';
     container.style.height = 'auto';
     container.style.maxHeight = `calc(100vh - ${CONFIG.topGap + CONFIG.bottomGap}px)`;
-    container.style.zIndex = '9999';
+    container.style.zIndex = '10110';
     container.style.pointerEvents = 'auto';
     container.style.overflow = 'visible';
     container.style.display = 'flex';
@@ -623,6 +627,25 @@
         body.ai-nodes-hide-deepseek-native-nav ._189b4a0 .ds-virtual-list {
             display: none !important;
         }
+        /* 豆包输入框弹层卡片玻璃背景（更多/附件/快速-思考-专家） */
+        body.ai-nodes-doubao-glass-popups [data-radix-popper-content-wrapper] [data-slot="dropdown-menu-content"]:has(input[data-testid="upload-file-input"]),
+        body.ai-nodes-doubao-glass-popups [data-radix-popper-content-wrapper] [data-slot="dropdown-menu-content"]:has([data-testid="upload_file_panel_upload_item"]),
+        body.ai-nodes-doubao-glass-popups [data-radix-popper-content-wrapper] [data-slot="dropdown-menu-content"]:has([data-testid^="deep-thinking-action-item-"]),
+        body.ai-nodes-doubao-glass-popups [data-radix-popper-content-wrapper] [role="dialog"]:has([data-testid^="skill_bar_button_"]) {
+            background: rgba(255, 255, 255, 0.5) !important;
+            backdrop-filter: blur(10px) saturate(118%) !important;
+            -webkit-backdrop-filter: blur(10px) saturate(118%) !important;
+            border: 1px solid rgba(255, 255, 255, 0.34) !important;
+            box-shadow: 0 6px 16px rgba(15, 23, 42, 0.08), inset 0 1px 0 rgba(255, 255, 255, 0.36) !important;
+        }
+        /* 千问输入框弹层卡片玻璃背景 */
+        body.ai-nodes-qwen-glass-popups [data-radix-popper-content-wrapper] [role="menu"][data-radix-menu-content]:has([data-overflow-activator="true"]) {
+            background: rgba(255, 255, 255, 0.5) !important;
+            backdrop-filter: blur(10px) saturate(118%) !important;
+            -webkit-backdrop-filter: blur(10px) saturate(118%) !important;
+            border: 1px solid rgba(255, 255, 255, 0.34) !important;
+            box-shadow: 0 6px 16px rgba(15, 23, 42, 0.08), inset 0 1px 0 rgba(255, 255, 255, 0.36) !important;
+        }
         /* 节点标识样式优化 */
         .ai-nav-dot {
             box-shadow: 0 1px 3px rgba(0,0,0,0.08);
@@ -648,7 +671,9 @@
     if (document.head) document.head.appendChild(styleTag);
 
     if (removeAds && document.body) document.body.classList.add('ai-nodes-hide-ads');
+    if (isQwen && qwenGlassPopups && document.body) document.body.classList.add('ai-nodes-qwen-glass-popups');
     if (hideDeepSeekNativeNav && document.body) document.body.classList.add('ai-nodes-hide-deepseek-native-nav');
+    if (isDoubao && doubaoGlassPopups && document.body) document.body.classList.add('ai-nodes-doubao-glass-popups');
 
     // ===== 拖拽手柄 =====
     const dragHandle = document.createElement('div');
@@ -886,7 +911,9 @@
         if (!globalTooltip.isConnected) document.body.appendChild(globalTooltip);
         if (!styleTag.isConnected) document.head.appendChild(styleTag);
         document.body.classList.toggle('ai-nodes-hide-ads', Boolean(removeAds));
+        document.body.classList.toggle('ai-nodes-qwen-glass-popups', Boolean(isQwen && qwenGlassPopups));
         document.body.classList.toggle('ai-nodes-hide-deepseek-native-nav', Boolean(isDeepSeek && hideDeepSeekNativeNav));
+        document.body.classList.toggle('ai-nodes-doubao-glass-popups', Boolean(isDoubao && doubaoGlassPopups));
         if (!container.isConnected) {
             document.body.appendChild(container);
             qwenNodeLog('nav:reattach-container', { isConnected: container.isConnected });
@@ -4809,7 +4836,7 @@
             flex-shrink: 0;
             position: relative;
             pointer-events: auto;
-            z-index: 10060;
+            z-index: 10150;
             background-clip: padding-box;
         `;
         btn.addEventListener('mouseenter', () => {
@@ -4829,7 +4856,7 @@
             justify-content: center;
             flex-shrink: 0;
             pointer-events: auto;
-            z-index: 10060;
+            z-index: 10150;
         `;
         buttonHost.appendChild(btn);
 
@@ -4840,7 +4867,7 @@
             top: 16px;
             right: 16px;
             left: auto;
-            z-index: 10050;
+            z-index: 10145;
             display: flex;
             align-items: center;
             justify-content: center;
@@ -4888,11 +4915,11 @@
             padding: 16px;
             box-shadow: 0 10px 40px rgba(0, 0, 0, 0.12);
             width: 220px;
-            z-index: 10001;
+            z-index: 10160;
             opacity: 0;
             pointer-events: none;
             transition: opacity 0.24s cubic-bezier(0.22, 0.61, 0.36, 1), transform 0.24s cubic-bezier(0.22, 0.61, 0.36, 1);
-            transform: translateY(-10px) scale(0.95);
+            transform: translateX(10px) scale(0.95);
             backdrop-filter: blur(10px);
         `;
         const platformIconUrl = getPlatformIconUrl();
@@ -4918,23 +4945,50 @@
                     <span id="ai-nodes-reading-line-trigger-val">${CONFIG.readingLineOffset} px</span>
                 </button>
             </div>
-            ${isQwen ? `
+            ${(isQwen || isDoubao) ? `
                 <div style="margin-top: 12px; padding-top: 8px; border-top: 1px dashed #eee; display: flex; flex-direction: column; gap: 8px;">
                     <label style="display:flex; align-items:center; justify-content:space-between; gap:10px; font-size:12px; cursor:pointer; color:#0f172a; background:rgba(248,250,252,0.75); border:1px solid #e2e8f0; border-radius:8px; padding:7px 10px;">
                         <span style="font-weight:600;">自动收起侧边栏</span>
-                        <input type="checkbox" id="ai-nodes-opt-collapse" ${autoCollapse ? 'checked' : ''} style="cursor:pointer; width:14px; height:14px; margin:0; accent-color:#2563eb;">
+                        <span class="ai-nodes-switch">
+                            <input type="checkbox" id="ai-nodes-opt-collapse" ${autoCollapse ? 'checked' : ''}>
+                            <span class="ai-nodes-switch-slider"></span>
+                        </span>
                     </label>
+                    ${isQwen ? `
                     <label style="display:flex; align-items:center; justify-content:space-between; gap:10px; font-size:12px; cursor:pointer; color:#0f172a; background:rgba(248,250,252,0.75); border:1px solid #e2e8f0; border-radius:8px; padding:7px 10px;">
                         <span style="font-weight:600;">移除推荐广告</span>
-                        <input type="checkbox" id="ai-nodes-opt-ads" ${removeAds ? 'checked' : ''} style="cursor:pointer; width:14px; height:14px; margin:0; accent-color:#2563eb;">
+                        <span class="ai-nodes-switch">
+                            <input type="checkbox" id="ai-nodes-opt-ads" ${removeAds ? 'checked' : ''}>
+                            <span class="ai-nodes-switch-slider"></span>
+                        </span>
                     </label>
+                    <label style="display:flex; align-items:center; justify-content:space-between; gap:10px; font-size:12px; cursor:pointer; color:#0f172a; background:rgba(248,250,252,0.75); border:1px solid #e2e8f0; border-radius:8px; padding:7px 10px;">
+                        <span style="font-weight:600;">输入弹层玻璃背景</span>
+                        <span class="ai-nodes-switch">
+                            <input type="checkbox" id="ai-nodes-opt-qwen-glass-popups" ${qwenGlassPopups ? 'checked' : ''}>
+                            <span class="ai-nodes-switch-slider"></span>
+                        </span>
+                    </label>
+                    ` : ''}
+                    ${isDoubao ? `
+                    <label style="display:flex; align-items:center; justify-content:space-between; gap:10px; font-size:12px; cursor:pointer; color:#0f172a; background:rgba(248,250,252,0.75); border:1px solid #e2e8f0; border-radius:8px; padding:7px 10px;">
+                        <span style="font-weight:600;">输入弹层玻璃背景</span>
+                        <span class="ai-nodes-switch">
+                            <input type="checkbox" id="ai-nodes-opt-doubao-glass-popups" ${doubaoGlassPopups ? 'checked' : ''}>
+                            <span class="ai-nodes-switch-slider"></span>
+                        </span>
+                    </label>
+                    ` : ''}
                 </div>
             ` : ''}
             ${isDeepSeek ? `
                 <div style="margin-top: 12px; padding-top: 8px; border-top: 1px dashed #eee; display: flex; flex-direction: column; gap: 8px;">
                     <label style="display:flex; align-items:center; justify-content:space-between; gap:10px; font-size:12px; cursor:pointer; color:#0f172a; background:rgba(248,250,252,0.75); border:1px solid #e2e8f0; border-radius:8px; padding:7px 10px;">
                         <span style="font-weight:600;">隐藏原生节点导航</span>
-                        <input type="checkbox" id="ai-nodes-opt-hide-deepseek-native-nav" ${hideDeepSeekNativeNav ? 'checked' : ''} style="cursor:pointer; width:14px; height:14px; margin:0; accent-color:#2563eb;">
+                        <span class="ai-nodes-switch">
+                            <input type="checkbox" id="ai-nodes-opt-hide-deepseek-native-nav" ${hideDeepSeekNativeNav ? 'checked' : ''}>
+                            <span class="ai-nodes-switch-slider"></span>
+                        </span>
                     </label>
                 </div>
             ` : ''}
@@ -4951,6 +5005,70 @@
             </div>
         `;
         document.body.appendChild(popup);
+        if (!document.getElementById('ai-nodes-settings-hover-style')) {
+            const hoverStyle = document.createElement('style');
+            hoverStyle.id = 'ai-nodes-settings-hover-style';
+            hoverStyle.textContent = `
+                #ai-nodes-node-settings-trigger:hover,
+                #ai-nodes-reading-line-trigger:hover {
+                    border-color: #3b82f6 !important;
+                    box-shadow: 0 0 0 2px rgba(59,130,246,0.16);
+                }
+                #ai-nodes-clear-refresh:hover {
+                    border-color: #ef4444 !important;
+                    box-shadow: 0 0 0 2px rgba(239,68,68,0.14);
+                }
+                .ai-nodes-switch {
+                    position: relative;
+                    width: 34px;
+                    height: 20px;
+                    flex-shrink: 0;
+                    display: inline-flex;
+                    align-items: center;
+                }
+                .ai-nodes-switch input {
+                    position: absolute;
+                    inset: 0;
+                    opacity: 0;
+                    margin: 0;
+                    cursor: pointer;
+                    z-index: 2;
+                }
+                .ai-nodes-switch-slider {
+                    position: absolute;
+                    inset: 0;
+                    border-radius: 999px;
+                    background: #cbd5e1;
+                    transition: background-color .2s ease;
+                    box-shadow: inset 0 0 0 1px rgba(15, 23, 42, 0.08);
+                }
+                .ai-nodes-switch-slider::before {
+                    content: '';
+                    position: absolute;
+                    width: 16px;
+                    height: 16px;
+                    left: 2px;
+                    top: 2px;
+                    border-radius: 50%;
+                    background: #fff;
+                    box-shadow: 0 1px 2px rgba(15, 23, 42, 0.2);
+                    transition: transform .2s ease;
+                }
+                .ai-nodes-switch input:checked + .ai-nodes-switch-slider {
+                    background: #2563eb;
+                }
+                .ai-nodes-switch input:checked + .ai-nodes-switch-slider::before {
+                    transform: translateX(14px);
+                }
+                .ai-nodes-switch input:focus-visible + .ai-nodes-switch-slider {
+                    box-shadow: inset 0 0 0 1px rgba(15, 23, 42, 0.08), 0 0 0 2px rgba(37, 99, 235, 0.22);
+                }
+                #ai-nodes-export-trigger:hover {
+                    box-shadow: inset 0 0 0 1px rgba(191,219,254,0.9), 0 6px 14px rgba(30,136,229,0.28);
+                }
+            `;
+            document.head.appendChild(hoverStyle);
+        }
 
         // 导出二级卡片
         const exportMenu = document.createElement('div');
@@ -4961,17 +5079,18 @@
             width: auto;
             min-width: 0;
             max-width: calc(100vw - 24px);
-            background: rgba(255, 255, 255, 0.2);
-            border: 1px solid rgba(0, 0, 0, 0.08);
+            background: rgba(255, 255, 255, 0.5);
+            border: 1px solid rgba(255, 255, 255, 0.34);
             border-radius: 12px;
-            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.12);
+            box-shadow: 0 6px 16px rgba(15, 23, 42, 0.08), inset 0 1px 0 rgba(255, 255, 255, 0.36);
             padding: 10px;
-            z-index: 10002;
+            z-index: 10161;
             opacity: 0;
             pointer-events: none;
             transform: translateY(-8px) scale(0.96);
             transition: opacity 0.24s cubic-bezier(0.22, 0.61, 0.36, 1), transform 0.24s cubic-bezier(0.22, 0.61, 0.36, 1);
-            backdrop-filter: blur(10px);
+            backdrop-filter: blur(10px) saturate(118%);
+            -webkit-backdrop-filter: blur(10px) saturate(118%);
         `;
         exportMenu.innerHTML = `
             <div style="display:flex;flex-direction:column;gap:8px;align-items:center;">
@@ -4990,24 +5109,39 @@
         // 节点设置二级卡片
         const nodeSettingsMenu = document.createElement('div');
         nodeSettingsMenu.className = 'ai-nodes-node-settings-menu';
-        nodeSettingsMenu.style.cssText = exportMenu.style.cssText;
+        nodeSettingsMenu.style.cssText = `
+            position: fixed;
+            width: auto;
+            min-width: 0;
+            max-width: calc(100vw - 24px);
+            background: #ffffff;
+            border: 1px solid rgba(0, 0, 0, 0.08);
+            border-radius: 12px;
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.12);
+            padding: 10px;
+            z-index: 10161;
+            opacity: 0;
+            pointer-events: none;
+            transform: translateY(-8px) scale(0.96);
+            transition: opacity 0.24s cubic-bezier(0.22, 0.61, 0.36, 1), transform 0.24s cubic-bezier(0.22, 0.61, 0.36, 1);
+        `;
         nodeSettingsMenu.innerHTML = `
             <div style="width:186px; padding:8px; display:flex; flex-direction:column; gap:12px;">
                 <div style="display:flex; align-items:center; justify-content:space-between; gap:10px;">
-                    <span style="font-size:12px; color:#64748b; font-weight:700;">节点间距</span>
+                    <span style="font-size:12px; color:#0f172a; font-weight:700;">节点间距</span>
                     <div style="display:flex; align-items:center; gap:4px;">
-                        <input type="text" inputmode="numeric" id="ai-nodes-dot-gap-val" value="${CONFIG.dotGap}" style="width:46px; text-align:center; border:1px solid #bfdbfe; border-radius:6px; font-size:11px; font-weight:700; padding:3px 2px; color:#1d4ed8; outline:none; background:rgba(239,246,255,0.65);">
+                        <input type="text" inputmode="numeric" id="ai-nodes-dot-gap-val" value="${CONFIG.dotGap}" style="width:46px; text-align:center; border:1px solid #bfdbfe; border-radius:6px; font-size:11px; font-weight:700; padding:3px 2px; color:#0f172a; outline:none; background:rgba(255,255,255,0.75);">
                         <span style="font-size:11px; color:#64748b;">px</span>
                     </div>
                 </div>
                 <div style="display:flex; align-items:center; justify-content:space-between; gap:10px;">
-                    <span style="font-size:12px; color:#64748b; font-weight:700;">单页数量</span>
+                    <span style="font-size:12px; color:#0f172a; font-weight:700;">单页数量</span>
                     <div style="display:flex; align-items:center; gap:4px;">
-                        <input type="text" inputmode="numeric" id="ai-nodes-visible-limit-val" value="${CONFIG.maxVisibleDotsBeforeScroll}" style="width:46px; text-align:center; border:1px solid #bfdbfe; border-radius:6px; font-size:11px; font-weight:700; padding:3px 2px; color:#1d4ed8; outline:none; background:rgba(239,246,255,0.65);">
+                        <input type="text" inputmode="numeric" id="ai-nodes-visible-limit-val" value="${CONFIG.maxVisibleDotsBeforeScroll}" style="width:46px; text-align:center; border:1px solid #bfdbfe; border-radius:6px; font-size:11px; font-weight:700; padding:3px 2px; color:#0f172a; outline:none; background:rgba(255,255,255,0.75);">
                         <span style="font-size:11px; color:#64748b;">个</span>
                     </div>
                 </div>
-                <div style="font-size:10px; color:#64748b; line-height:1.45;">调整节点纵向间距与单页显示数量，修改后会立即生效。</div>
+                <div style="font-size:10px; color:#64748b; line-height:1.45;">调整节点纵向间距与单页显示数量。</div>
             </div>
         `;
         document.body.appendChild(nodeSettingsMenu);
@@ -5015,7 +5149,22 @@
         // 阅读线调整二级卡片
         const readingLineMenu = document.createElement('div');
         readingLineMenu.className = 'ai-nodes-reading-line-menu';
-        readingLineMenu.style.cssText = exportMenu.style.cssText;
+        readingLineMenu.style.cssText = `
+            position: fixed;
+            width: auto;
+            min-width: 0;
+            max-width: calc(100vw - 24px);
+            background: #ffffff;
+            border: 1px solid rgba(0, 0, 0, 0.08);
+            border-radius: 12px;
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.12);
+            padding: 10px;
+            z-index: 10161;
+            opacity: 0;
+            pointer-events: none;
+            transform: translateY(-8px) scale(0.96);
+            transition: opacity 0.24s cubic-bezier(0.22, 0.61, 0.36, 1), transform 0.24s cubic-bezier(0.22, 0.61, 0.36, 1);
+        `;
         readingLineMenu.innerHTML = `
             <div style="width:186px; padding:8px; display:flex; flex-direction:column; gap:12px;">
                 <div style="display:flex; align-items:center; justify-content:space-between;">
@@ -5023,7 +5172,7 @@
                     <span id="ai-nodes-reading-line-display" style="font-size:12px; font-weight:800; color:#1d4ed8; background:rgba(219,234,254,0.85); border:1px solid #bfdbfe; border-radius:999px; padding:2px 8px; line-height:1.3;">${CONFIG.readingLineOffset}px</span>
                 </div>
                 <input type="range" id="ai-nodes-reading-line-slider" min="10" max="500" value="${CONFIG.readingLineOffset}" style="width:100%; cursor:pointer; accent-color:#2563eb;">
-                <div style="font-size:10px; color:#64748b; line-height:1.45;">设置滚动到屏幕上方何处时激活左侧导航点。</div>
+                <div style="font-size:10px; color:#64748b; line-height:1.45;">设置滚动到屏幕何处时激活导航点。</div>
             </div>
         `;
         document.body.appendChild(readingLineMenu);
@@ -5038,7 +5187,7 @@
             -webkit-backdrop-filter: blur(10px);
             border-bottom: 2px solid rgba(37,99,235,0.92);
             box-shadow: inset 0 -1px 0 rgba(147,197,253,0.42), 0 0 14px rgba(37,99,235,0.18);
-            z-index: 10005; pointer-events: none; opacity: 0;
+            z-index: 10162; pointer-events: none; opacity: 0;
             transition: opacity 0.2s ease;
         `;
         const rlLabel = document.createElement('div');
@@ -5064,16 +5213,24 @@
         };
 
         const hideReadingLineMenu = () => {
+            const openDirection = readingLineMenu.dataset.openDirection || 'left';
+            const hiddenTransform = openDirection === 'left'
+                ? 'translateX(8px) scale(0.96)'
+                : 'translateX(-8px) scale(0.96)';
             readingLineMenu.style.opacity = '0';
             readingLineMenu.style.pointerEvents = 'none';
-            readingLineMenu.style.transform = 'translateY(-8px) scale(0.96)';
+            readingLineMenu.style.transform = hiddenTransform;
             readingLinePreview.style.opacity = '0';
         };
 
         const hideNodeSettingsMenu = () => {
+            const openDirection = nodeSettingsMenu.dataset.openDirection || 'left';
+            const hiddenTransform = openDirection === 'left'
+                ? 'translateX(8px) scale(0.96)'
+                : 'translateX(-8px) scale(0.96)';
             nodeSettingsMenu.style.opacity = '0';
             nodeSettingsMenu.style.pointerEvents = 'none';
-            nodeSettingsMenu.style.transform = 'translateY(-8px) scale(0.96)';
+            nodeSettingsMenu.style.transform = hiddenTransform;
         };
 
         // 绑定事件，防止点击菜单内部导致关闭；点击主设置弹窗区域时收起二级卡片
@@ -5101,12 +5258,42 @@
         };
 
         const hidePopup = () => {
+            const openDirection = popup.dataset.openDirection || 'left';
+            const hiddenTransform = openDirection === 'left'
+                ? 'translateX(10px) scale(0.95)'
+                : 'translateX(-10px) scale(0.95)';
             popup.style.opacity = '0';
             popup.style.pointerEvents = 'none';
-            popup.style.transform = 'translateY(-10px) scale(0.95)';
+            popup.style.transform = hiddenTransform;
             hideAllSubMenus();
         };
         let lastToggleSettingsAt = 0;
+
+        const placeSideMenuByTrigger = (menuEl, triggerEl, fallbackWidth = 186) => {
+            const rect = triggerEl.getBoundingClientRect();
+            const margin = 8;
+            const sideGap = 10;
+            const menuWidth = Math.max(fallbackWidth, Math.round(menuEl.offsetWidth || fallbackWidth));
+            const menuHeight = Math.max(80, Math.round(menuEl.offsetHeight || 120));
+            const leftSide = rect.left - menuWidth - sideGap;
+            const rightSide = rect.right + sideGap;
+            const canUseLeft = leftSide >= margin;
+            const canUseRight = rightSide + menuWidth <= window.innerWidth - margin;
+            const openDirection = canUseLeft ? 'left' : (canUseRight ? 'right' : (rect.left > (window.innerWidth / 2) ? 'left' : 'right'));
+            const rawLeft = openDirection === 'left' ? leftSide : rightSide;
+            const left = Math.max(margin, Math.min(rawLeft, window.innerWidth - menuWidth - margin));
+            const desiredTop = rect.top + ((rect.height - menuHeight) / 2);
+            const top = Math.max(margin, Math.min(desiredTop, window.innerHeight - menuHeight - margin));
+            const hiddenTransform = openDirection === 'left'
+                ? 'translateX(8px) scale(0.96)'
+                : 'translateX(-8px) scale(0.96)';
+            return {
+                left: Math.round(left),
+                top: Math.round(top),
+                openDirection,
+                hiddenTransform
+            };
+        };
 
         const openCurrentConversationExport = async () => {
             hidePopup();
@@ -5172,12 +5359,15 @@
                 if (visible) {
                     hideNodeSettingsMenu();
                 } else {
-                    const rect = nodeSettingsTrigger.getBoundingClientRect();
-                    nodeSettingsMenu.style.top = `${rect.top - 10}px`;
-                    nodeSettingsMenu.style.left = `${rect.left - 196}px`;
+                    const placement = placeSideMenuByTrigger(nodeSettingsMenu, nodeSettingsTrigger, 186);
+                    nodeSettingsMenu.style.top = `${placement.top}px`;
+                    nodeSettingsMenu.style.left = `${placement.left}px`;
+                    nodeSettingsMenu.dataset.openDirection = placement.openDirection;
+                    nodeSettingsMenu.style.transform = placement.hiddenTransform;
+                    void nodeSettingsMenu.offsetHeight;
                     nodeSettingsMenu.style.opacity = '1';
                     nodeSettingsMenu.style.pointerEvents = 'auto';
-                    nodeSettingsMenu.style.transform = 'translateY(0) scale(1)';
+                    nodeSettingsMenu.style.transform = 'translateX(0) scale(1)';
                 }
             };
         }
@@ -5190,12 +5380,15 @@
             if (visible) {
                 hideReadingLineMenu();
             } else {
-                const rect = rlTrigger.getBoundingClientRect();
-                readingLineMenu.style.top = `${rect.top - 10}px`;
-                readingLineMenu.style.left = `${rect.left - 190}px`;
+                const placement = placeSideMenuByTrigger(readingLineMenu, rlTrigger, 186);
+                readingLineMenu.style.top = `${placement.top}px`;
+                readingLineMenu.style.left = `${placement.left}px`;
+                readingLineMenu.dataset.openDirection = placement.openDirection;
+                readingLineMenu.style.transform = placement.hiddenTransform;
+                void readingLineMenu.offsetHeight;
                 readingLineMenu.style.opacity = '1';
                 readingLineMenu.style.pointerEvents = 'auto';
-                readingLineMenu.style.transform = 'translateY(0) scale(1)';
+                readingLineMenu.style.transform = 'translateX(0) scale(1)';
                 
                 readingLinePreview.style.height = `${CONFIG.readingLineOffset}px`;
                 readingLinePreview.style.opacity = '1';
@@ -5205,19 +5398,33 @@
         // 监听设置项变化
 
 
-        if (isQwen) {
+        if (isQwen || isDoubao) {
             popup.querySelector('#ai-nodes-opt-collapse').addEventListener('change', (e) => {
                 autoCollapse = e.target.checked;
                 setGlobalValue(COLLAPSE_KEY, autoCollapse);
-                if (autoCollapse) applyAutoCollapse();
+                if (autoCollapse) {
+                    applyAutoCollapse();
+                    scheduleAutoCollapseRetry();
+                }
             });
+        }
 
+
+        if (isQwen) {
             popup.querySelector('#ai-nodes-opt-ads').addEventListener('change', (e) => {
                 removeAds = e.target.checked;
                 setGlobalValue(ADS_KEY, removeAds);
                 if (removeAds) document.body.classList.add('ai-nodes-hide-ads');
                 else document.body.classList.remove('ai-nodes-hide-ads');
             });
+            const qwenGlassOpt = popup.querySelector('#ai-nodes-opt-qwen-glass-popups');
+            if (qwenGlassOpt) {
+                qwenGlassOpt.addEventListener('change', (e) => {
+                    qwenGlassPopups = e.target.checked;
+                    setGlobalValue(QWEN_GLASS_POPUPS_KEY, qwenGlassPopups);
+                    document.body.classList.toggle('ai-nodes-qwen-glass-popups', qwenGlassPopups);
+                });
+            }
 
             // 加载全部历史节点按鈕
             const loadAllBtn = popup.querySelector('#ai-nodes-load-all');
@@ -5225,11 +5432,20 @@
                 loadAllBtn.onclick = (e) => {
                     e.stopPropagation();
                     // 关闭弹窗
-                    popup.style.opacity = '0';
-                    popup.style.pointerEvents = 'none';
-                    popup.style.transform = 'translateY(-10px) scale(0.95)';
+                    hidePopup();
                     startLoadAllHistory(loadAllBtn);
                 };
+            }
+        }
+
+        if (isDoubao) {
+            const doubaoGlassOpt = popup.querySelector('#ai-nodes-opt-doubao-glass-popups');
+            if (doubaoGlassOpt) {
+                doubaoGlassOpt.addEventListener('change', (e) => {
+                    doubaoGlassPopups = e.target.checked;
+                    setGlobalValue(DOUBAO_GLASS_POPUPS_KEY, doubaoGlassPopups);
+                    document.body.classList.toggle('ai-nodes-doubao-glass-popups', doubaoGlassPopups);
+                });
             }
         }
 
@@ -11711,17 +11927,30 @@
                 hideExportMenu();
             } else {
                 const rect = btn.getBoundingClientRect();
+                const margin = 8;
+                const sideGap = 10;
                 const popupWidth = 220;
                 const popupHeight = Math.max(180, popup.offsetHeight || 280);
-                const desiredLeft = rect.left - 180;
-                const desiredTop = rect.bottom + 10;
-                const clampedLeft = Math.max(8, Math.min(window.innerWidth - popupWidth - 8, desiredLeft));
-                const clampedTop = Math.max(8, Math.min(window.innerHeight - popupHeight - 8, desiredTop));
+                const leftSide = rect.left - popupWidth - sideGap;
+                const rightSide = rect.right + sideGap;
+                const canUseLeft = leftSide >= margin;
+                const canUseRight = rightSide + popupWidth <= window.innerWidth - margin;
+                const openDirection = canUseLeft ? 'left' : (canUseRight ? 'right' : (rect.left > (window.innerWidth / 2) ? 'left' : 'right'));
+                const desiredLeft = openDirection === 'left' ? leftSide : rightSide;
+                const desiredTop = rect.top + ((rect.height - popupHeight) / 2);
+                const clampedLeft = Math.max(margin, Math.min(window.innerWidth - popupWidth - margin, desiredLeft));
+                const clampedTop = Math.max(margin, Math.min(window.innerHeight - popupHeight - margin, desiredTop));
+                const hiddenTransform = openDirection === 'left'
+                    ? 'translateX(10px) scale(0.95)'
+                    : 'translateX(-10px) scale(0.95)';
                 popup.style.left = clampedLeft + 'px';
                 popup.style.top = clampedTop + 'px';
+                popup.dataset.openDirection = openDirection;
+                popup.style.transform = hiddenTransform;
+                void popup.offsetHeight;
                 popup.style.opacity = '1';
                 popup.style.pointerEvents = 'auto';
-                popup.style.transform = 'translateY(0) scale(1)';
+                popup.style.transform = 'translateX(0) scale(1)';
                 hideExportMenu();
             }
         };
@@ -11747,25 +11976,111 @@
 
         // 收起逻辑实现
         function applyAutoCollapse() {
-            if (!isQwen || !autoCollapse) return;
-            // 使用用户提供的 ID 准确定位侧边栏
-            const sidebar = document.querySelector("#new-nav-tab-wrapper");
-            if (sidebar) {
-                // 判断是否处于展开状态（没有 !w-0 类名即为展开）
-                const isExpanded = !sidebar.classList.contains('!w-0');
-                if (isExpanded) {
-                    // 准确定位侧边的收起按钮（依据 data-icon-type="qwpcicon-sidebarLeft"）
-                    const icon = sidebar.querySelector('span[data-icon-type="qwpcicon-sidebarLeft"]');
-                    const toggleBtn = icon ? icon.closest('button') : null;
-                    
-                    if (toggleBtn) {
-                        toggleBtn.click();
-                    } else {
-                        // 强制注入样式（备用）
-                        sidebar.classList.add('!w-0', 'basis-0', '!min-w-0');
+            if (!autoCollapse) return;
+            if (isQwen) {
+                const sidebar = document.querySelector("#new-nav-tab-wrapper");
+                if (sidebar) {
+                    const width = sidebar.getBoundingClientRect().width || 0;
+                    const isExpanded = !sidebar.classList.contains('!w-0') && width > 40;
+                    if (isExpanded) {
+                        const icon = sidebar.querySelector('span[data-icon-type="qwpcicon-sidebarLeft"]');
+                        const toggleBtn = (icon ? icon.closest('button') : null)
+                            || sidebar.querySelector('button[aria-label*="收起"], button[title*="收起"], button[class*="sidebar"]')
+                            || document.querySelector('button[aria-label*="收起侧边栏"], button[title*="收起侧边栏"], button[aria-label*="侧边栏"], button[title*="侧边栏"]');
+
+                        if (toggleBtn) {
+                            toggleBtn.click();
+                        } else {
+                            sidebar.classList.add('!w-0', 'basis-0', '!min-w-0');
+                        }
                     }
                 }
+                return;
             }
+            if (!isDoubao) return;
+
+            const sidebar = document.querySelector('nav[data-testid="chat_route_layout_leftside_nav"]');
+            if (!sidebar) return;
+
+            const cls = String(sidebar.className || '');
+            const isExpandedByClass = /left-side__expand/i.test(cls);
+            const width = sidebar.getBoundingClientRect().width || 0;
+            const isExpanded = isExpandedByClass || width > 120;
+            if (!isExpanded) return;
+
+            const dispatchSmartClick = (el) => {
+                if (!(el instanceof HTMLElement)) return false;
+                try {
+                    ['pointerdown', 'mousedown', 'mouseup', 'click'].forEach((type) => {
+                        el.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, view: window }));
+                    });
+                    return true;
+                } catch (_) {
+                    try {
+                        el.click();
+                        return true;
+                    } catch (__){}
+                }
+                return false;
+            };
+
+            const directToggleBtn = document.querySelector('[data-testid="siderbar_close_btn"], [data-testid="sidebar_close_btn"]');
+            if (directToggleBtn && isElementVisiblyRenderable(directToggleBtn) && dispatchSmartClick(directToggleBtn)) {
+                return;
+            }
+
+            const candidateSelector = [
+                '[data-testid="siderbar_close_btn"]',
+                '[data-testid="sidebar_close_btn"]',
+                '[data-testid="chat_header_fold_sidebar_button"]',
+                '[data-testid="chat_header_sidebar_button"]',
+                '[data-testid*="fold_sidebar"]',
+                '[data-testid*="sidebar_fold"]',
+                '[data-testid*="collapse_sidebar"]',
+                'button[aria-label*="收起侧边栏"]',
+                'button[title*="收起侧边栏"]',
+                'button[aria-label*="侧边栏"]',
+                'button[title*="侧边栏"]',
+                'div[role="button"][aria-label*="收起侧边栏"]',
+                'div[role="button"][title*="收起侧边栏"]',
+                'div[role="button"][aria-label*="侧边栏"]',
+                'div[role="button"][title*="侧边栏"]'
+            ].join(', ');
+
+            const candidates = Array.from(document.querySelectorAll(candidateSelector))
+                .filter((el) => el instanceof HTMLElement)
+                .filter((el) => isElementVisiblyRenderable(el));
+
+            if (candidates.length) {
+                candidates.sort((a, b) => {
+                    const ra = a.getBoundingClientRect();
+                    const rb = b.getBoundingClientRect();
+                    const sa = (ra.top <= 180 ? 1000 : 0) + (ra.left >= window.innerWidth * 0.45 ? 500 : 0);
+                    const sb = (rb.top <= 180 ? 1000 : 0) + (rb.left >= window.innerWidth * 0.45 ? 500 : 0);
+                    return sb - sa;
+                });
+                if (dispatchSmartClick(candidates[0])) return;
+            }
+
+            // 兜底：切换容器状态类（一次性），不做持续样式锁定。
+            const expandClass = String(sidebar.className || '').split(/\s+/).find((c) => /left-side__expand/i.test(c));
+            if (expandClass) {
+                const collapseClass = expandClass.replace(/expand/i, 'collapse');
+                sidebar.classList.remove(expandClass);
+                if (collapseClass && collapseClass !== expandClass) {
+                    sidebar.classList.add(collapseClass);
+                }
+            }
+        }
+
+        function scheduleAutoCollapseRetry() {
+            if (!autoCollapse) return;
+            [0, 160, 420, 900, 1600].forEach((delay) => {
+                setTimeout(() => {
+                    if (!autoCollapse) return;
+                    applyAutoCollapse();
+                }, delay);
+            });
         }
 
         const DEEPSEEK_ANCHOR_PATH_D = 'M7.95889 1.52285C7.95888 0.826234 8.76055 0.467983 9.27669 0.875208L9.37524 0.967191L15.1317 7.18358C15.5582 7.64419 15.5582 8.35614 15.1317 8.81676L9.37524 15.0331C8.87034 15.578 7.95888 15.2205 7.95889 14.4775V10.8207C7.10614 10.8432 6.31361 10.9316 5.45468 11.2515C4.39484 11.6463 3.18248 12.413 1.64676 13.9425C1.4533 14.135 1.18329 14.1696 0.969086 14.0908C0.74748 14.0091 0.547307 13.7879 0.54859 13.4844L0.55516 13.1315C0.618924 11.3494 1.11153 9.29838 2.27656 7.63787C3.45289 5.96147 5.29554 4.71635 7.95889 4.54797V1.52285ZM9.20911 5.13366C9.20899 5.50567 8.9031 5.77687 8.56523 5.77755C5.99383 5.78282 4.33736 6.8762 3.29964 8.35496C2.54519 9.43014 2.10739 10.7283 1.9152 11.9939C3.04749 11.0323 4.0569 10.4385 5.01917 10.0801C6.29638 9.60449 7.4406 9.56343 8.56429 9.56295C8.9178 9.5628 9.20894 9.84909 9.20911 10.2068L9.20817 13.3737L14.1837 8.00017L9.20817 2.62571L9.20911 5.13366Z';
@@ -11972,7 +12287,12 @@
         });
         window.addEventListener('resize', ensureInjected, { passive: true });
         window.addEventListener('scroll', ensureInjected, { passive: true });
+
+        if (autoCollapse) {
+            scheduleAutoCollapseRetry();
+        }
     }
+
 
     let appBootstrapped = false;
     function bootstrapApp() {
