@@ -4,8 +4,8 @@
 // @version      2.0.0
 // @description  支持 ChatGPT、通义千问、豆包、DeepSeek：自动生成对话节点导航、一键导出对话（PDF/Markdown/JSON/CSV/TXT）。
 // @author       xchengb
-// @updateURL    https://gitee.com/xcb157342/AI-Chat-Helper/raw/master/AIChat-Helper.user.js
-// @downloadURL  https://gitee.com/xcb157342/AI-Chat-Helper/raw/master/AIChat-Helper.user.js
+// @updateURL    https://gitee.com/xcb157342/ai-chat-nodes/raw/master/AIChat-Helper.user.js
+// @downloadURL  https://gitee.com/xcb157342/ai-chat-nodes/raw/master/AIChat-Helper.user.js
 // @icon         data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIzMiIgaGVpZ2h0PSIzMiIgdmlld0JveD0iMCAwIDMyIDMyIj48cmVjdCB3aWR0aD0iMzIiIGhlaWdodD0iMzIiIGZpbGw9Im5vbmUiLz48cGF0aCBmaWxsPSIjMDQwMGU2IiBkPSJNMTYgMTlhNi45OSAxNi45OSAwIDAgMS01LjgzMy0zLjEyOWwxLjY2Ni0xLjEwN2E1IDUgMCAwIDAgOC4zMzQgMGwxLjY2NiAxLjEwN0E2Ljk5IDYuOTkgMCAwIDEgMTYgMTl6Ii8+PGNpcmNsZSBjeD0iMjAyMCIgY3k9IjEwIiByPSIyIiBmaWxsPSIjMDQwMGU2Ii8+PGNpcmNsZSBjeD0iMTIiIGN5PSIxMCIgcj0iMiIgZmlsbD0iIzA0MDBlNiIvPjxjaXJjbGUgY3g9IjEyIiBjeT0iMTAiIHI9IjIiIGZpbGw9IiMwNDAwZTYiLz48Y2lyY2xlIGN4PSIxMiIgY3k9IjEwIiByPSIyIiBmaWxsPSIjMDQwMGU2Ii8+PHBhdGggZmlsbD0iIzA0MDBlNiIgZD0iTTE3LjczNiAzMEwxNiAyOWw0LTdoNmEyIDIgMCAwIDAgMi0yVjZhMiAyIDAgMCAwLTItMkg2YTIgMiAwIDAgMC0yIDJ2MTRhMiAyIDAgMCAwIDIgMmg5djJINmE0IDQgMCAwIDEtNC00VjZhNCA0IDAgMCAxIDQtNGgyMGE0IDQgMCAwIDEgNCA0djE0YTQgNCAwIDAgMS00IDRoLTQuODM1eiIvPjwvc3ZnPg==
 // @match        *://chatgpt.com/c/*
 // @match        *://www.qianwen.com/chat/*
