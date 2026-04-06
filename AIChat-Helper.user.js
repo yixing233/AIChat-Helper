@@ -8,9 +8,9 @@
 // @downloadURL  https://gitee.com/xcb157342/ai-chat-nodes/raw/master/AIChat-Helper.user.js
 // @icon         data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIzMiIgaGVpZ2h0PSIzMiIgdmlld0JveD0iMCAwIDMyIDMyIj48cmVjdCB3aWR0aD0iMzIiIGhlaWdodD0iMzIiIGZpbGw9Im5vbmUiLz48cGF0aCBmaWxsPSIjMDQwMGU2IiBkPSJNMTYgMTlhNi45OSAxNi45OSAwIDAgMS01LjgzMy0zLjEyOWwxLjY2Ni0xLjEwN2E1IDUgMCAwIDAgOC4zMzQgMGwxLjY2NiAxLjEwN0E2Ljk5IDYuOTkgMCAwIDEgMTYgMTl6Ii8+PGNpcmNsZSBjeD0iMjAyMCIgY3k9IjEwIiByPSIyIiBmaWxsPSIjMDQwMGU2Ii8+PGNpcmNsZSBjeD0iMTIiIGN5PSIxMCIgcj0iMiIgZmlsbD0iIzA0MDBlNiIvPjxjaXJjbGUgY3g9IjEyIiBjeT0iMTAiIHI9IjIiIGZpbGw9IiMwNDAwZTYiLz48Y2lyY2xlIGN4PSIxMiIgY3k9IjEwIiByPSIyIiBmaWxsPSIjMDQwMGU2Ii8+PHBhdGggZmlsbD0iIzA0MDBlNiIgZD0iTTE3LjczNiAzMEwxNiAyOWw0LTdoNmEyIDIgMCAwIDAgMi0yVjZhMiAyIDAgMCAwLTItMkg2YTIgMiAwIDAgMC0yIDJ2MTRhMiAyIDAgMCAwIDIgMmg5djJINmE0IDQgMCAwIDEtNC00VjZhNCA0IDAgMCAxIDQtNGgyMGE0IDQgMCAwIDEgNCA0djE0YTQgNCAwIDAgMS00IDRoLTQuODM1eiIvPjwvc3ZnPg==
 // @match        *://chatgpt.com/*
-// @match        *://www.qianwen.com/chat*
+// @match        *://www.qianwen.com/*
 // @match        *://www.doubao.com/chat*
-// @match        *://chat.deepseek.com/a/chat/s*
+// @match        *://chat.deepseek.com/*
 // @grant        GM_addStyle
 // @grant        GM_getValue
 // @grant        GM_setValue
@@ -29,9 +29,9 @@
     const isDeepSeekHost = /^chat\.deepseek\.com$/i.test(host);
 
     const isChatGPTPath = /^\/(?:$|c\/[a-z0-9-]+\/?)$/i.test(pathname);
-    const isQwenPath = /^\/chat(?:\/[a-z0-9_-]{8,})?\/?$/i.test(pathname);
+    const isQwenPath = /^\/(?:$|chat(?:\/[a-z0-9_-]{8,})?\/?)$/i.test(pathname);
     const isDoubaoPath = /^\/chat(?:\/\d+)?\/?$/i.test(pathname);
-    const isDeepSeekPath = /^\/a\/chat\/s(?:\/[0-9a-f-]{36})?\/?$/i.test(pathname);
+    const isDeepSeekPath = /^\/(?:$|a\/chat\/s(?:\/[0-9a-f-]{36})?\/?|chat(?:\/[0-9a-f-]{36})?\/?)$/i.test(pathname);
 
     const isChatGPT = isChatGPTHost && isChatGPTPath;
     const isQwen = isQwenHost && isQwenPath;
@@ -116,6 +116,11 @@
     let qwenVirtualNodesLoaded = false;
     let qwenVirtualNodesLastFetchAt = 0;
     let qwenVirtualNodesDirty = true;
+    let qwenPendingDomNodes = [];
+    let qwenDomMutationDebounceTimer = null;
+    let qwenAutoApiRefreshTimer = null;
+    let qwenAutoApiRefreshInFlight = false;
+    let qwenLastAutoApiRefreshAt = 0;
     let qwenLastUpdateDebugSig = '';
     let qwenEmptyRetryTimer = null;
     let qwenHistoryHydrationInFlight = false;
@@ -128,15 +133,24 @@
     let qwenInternalFetchDepth = 0;
     let qwenSuppressCapturedPayloads = 0;
     let qwenInternalRequestMarks = new Map();
+    let qwenNavJumpSeq = 0;
+    let doubaoNavJumpSeq = 0;
+    let deepseekNavJumpSeq = 0;
     let deepseekVirtualNodesCache = [];
     let deepseekVirtualNodesLoading = false;
     let deepseekVirtualNodesLoaded = false;
     let deepseekVirtualNodesLastFetchAt = 0;
+    let deepseekDomNodesSnapshot = [];
     let doubaoVirtualNodesCache = [];
     let doubaoVirtualNodesLoading = false;
     let doubaoVirtualNodesLoaded = false;
     let doubaoVirtualNodesLastFetchAt = 0;
     let doubaoVirtualNodesDirty = true;
+    let doubaoPendingDomNodes = [];
+    let doubaoDomMutationDebounceTimer = null;
+    let doubaoAutoApiRefreshTimer = null;
+    let doubaoAutoApiRefreshInFlight = false;
+    let doubaoLastAutoApiRefreshAt = 0;
     let doubaoLastDomUserSignature = '';
     let doubaoInitialFetchConvId = '';
     let doubaoBootClickedConvId = '';
@@ -158,7 +172,7 @@
     const DEEPSEEK_PAGE_LIST_PATH = '/api/v0/chat_session/fetch_page';
     const DEEPSEEK_HISTORY_PATH = '/api/v0/chat/history_messages';
     const CHATGPT_BATCH_PAGE_LIMIT = 100;
-    const QWEN_NODE_DEBUG = true;
+    const QWEN_NODE_DEBUG = false;
 
     // 先放占位实现，避免页面初始阶段因执行时序触发 ReferenceError。
     let installQwenCaptureHooks = function () {
@@ -457,6 +471,19 @@
     }
 
     function getConvId() {
+        if (isDeepSeek) {
+            const fromRoute = getDeepSeekSessionIdFromLocation();
+            if (isLikelyUuid(fromRoute)) return fromRoute;
+
+            const fromLinks = getDeepSeekSessionIdFromLinks();
+            if (isLikelyUuid(fromLinks)) return fromLinks;
+
+            const fromStorage = sessionStorage.getItem('deepseek_api_test_last_session_id')
+                || localStorage.getItem('deepseek_api_test_last_session_id')
+                || '';
+            if (isLikelyUuid(fromStorage)) return fromStorage;
+        }
+
         const path = window.location.pathname;
         // 兼容不同平台的 URL 结构
         return path.split('/').filter(p => p.length > 5).pop() || 'default';
@@ -482,6 +509,17 @@
                 qwenVirtualNodesLoading = false;
                 qwenVirtualNodesLoaded = false;
                 qwenVirtualNodesLastFetchAt = 0;
+                qwenPendingDomNodes = [];
+                if (qwenDomMutationDebounceTimer) {
+                    clearTimeout(qwenDomMutationDebounceTimer);
+                    qwenDomMutationDebounceTimer = null;
+                }
+                if (qwenAutoApiRefreshTimer) {
+                    clearTimeout(qwenAutoApiRefreshTimer);
+                    qwenAutoApiRefreshTimer = null;
+                }
+                qwenAutoApiRefreshInFlight = false;
+                qwenLastAutoApiRefreshAt = 0;
                 qwenSuppressCapturedPayloads = 0;
                 qwenInternalRequestMarks.clear();
                 qwenVirtualNodesDirty = true;
@@ -498,6 +536,7 @@
                 deepseekVirtualNodesCache = [];
                 deepseekVirtualNodesLoaded = false;
                 deepseekVirtualNodesLastFetchAt = 0;
+                deepseekDomNodesSnapshot = [];
                 deepseekPageListTemplate = null;
                 deepseekLastSessionMeta = null;
             }
@@ -507,9 +546,21 @@
                 doubaoVirtualNodesLoaded = false;
                 doubaoVirtualNodesLastFetchAt = 0;
                 doubaoVirtualNodesDirty = true;
+                doubaoPendingDomNodes = [];
+                if (doubaoDomMutationDebounceTimer) {
+                    clearTimeout(doubaoDomMutationDebounceTimer);
+                    doubaoDomMutationDebounceTimer = null;
+                }
+                if (doubaoAutoApiRefreshTimer) {
+                    clearTimeout(doubaoAutoApiRefreshTimer);
+                    doubaoAutoApiRefreshTimer = null;
+                }
+                doubaoAutoApiRefreshInFlight = false;
+                doubaoLastAutoApiRefreshAt = 0;
                 doubaoLastDomUserSignature = '';
                 doubaoInitialFetchConvId = '';
                 doubaoBootClickedConvId = '';
+                doubaoNavJumpSeq = 0;
             }
             return true;
         }
@@ -902,6 +953,17 @@
     dotsLayer.style.overflow = 'visible';
     content.appendChild(dotsLayer);
     let hoveredDot = null;
+    let jumpToastEl = null;
+    let jumpToastStateEl = null;
+    let jumpToastNodeEl = null;
+    let jumpToastSecondaryEl = null;
+    let jumpToastSecondaryStateEl = null;
+    let jumpToastSecondaryNodeEl = null;
+    let jumpToastSecondaryHideTimer = 0;
+    let jumpToastPendingNodeId = '';
+    let jumpToastWatchRaf = 0;
+    let jumpToastArrivedTimer = 0;
+    let jumpToastArrivedShownId = '';
 
     let fixedScrollDragging = false; // 虽然移除了 UI，但保留部分内部状态标记以防代码依赖
 
@@ -990,6 +1052,387 @@
         }
     }
 
+    function clearJumpToastWatch() {
+        if (jumpToastWatchRaf) {
+            cancelAnimationFrame(jumpToastWatchRaf);
+            jumpToastWatchRaf = 0;
+        }
+    }
+
+    function clearJumpToastArrivedTimer() {
+        if (jumpToastArrivedTimer) {
+            clearTimeout(jumpToastArrivedTimer);
+            jumpToastArrivedTimer = 0;
+        }
+    }
+
+    function clearJumpToastSecondaryTimer() {
+        if (jumpToastSecondaryHideTimer) {
+            clearTimeout(jumpToastSecondaryHideTimer);
+            jumpToastSecondaryHideTimer = 0;
+        }
+    }
+
+    function getJumpToastNodeLabel(nodeId) {
+        const id = String(nodeId || '').trim();
+        if (!id) return '';
+        const node = nodesMap.get(id) || nodes.find((n) => String(n?.id || '') === id) || null;
+        return String(node?.text || '').trim().slice(0, 36) || String(id).slice(0, 16);
+    }
+
+    function parseCssColorToRgb(rawColor) {
+        const color = String(rawColor || '').trim();
+        if (!color) return null;
+        const hexMatch = color.match(/^#([0-9a-f]{3,8})$/i);
+        if (hexMatch) {
+            const hex = hexMatch[1];
+            if (hex.length === 3 || hex.length === 4) {
+                const r = parseInt(hex[0] + hex[0], 16);
+                const g = parseInt(hex[1] + hex[1], 16);
+                const b = parseInt(hex[2] + hex[2], 16);
+                return { r, g, b };
+            }
+            if (hex.length === 6 || hex.length === 8) {
+                const r = parseInt(hex.slice(0, 2), 16);
+                const g = parseInt(hex.slice(2, 4), 16);
+                const b = parseInt(hex.slice(4, 6), 16);
+                return { r, g, b };
+            }
+        }
+        const rgbMatch = color.match(/rgba?\(\s*([0-9.]+)\s*[, ]\s*([0-9.]+)\s*[, ]\s*([0-9.]+)/i);
+        if (!rgbMatch) return null;
+        return {
+            r: Math.max(0, Math.min(255, Math.round(Number(rgbMatch[1]) || 0))),
+            g: Math.max(0, Math.min(255, Math.round(Number(rgbMatch[2]) || 0))),
+            b: Math.max(0, Math.min(255, Math.round(Number(rgbMatch[3]) || 0)))
+        };
+    }
+
+    function rgbToRgbaText(rgb, alpha) {
+        if (!rgb) return `rgba(59,130,246,${alpha})`;
+        return `rgba(${rgb.r},${rgb.g},${rgb.b},${alpha})`;
+    }
+
+    function mixRgb(rgbA, rgbB, ratio) {
+        const safeRatio = Math.max(0, Math.min(1, Number(ratio) || 0));
+        const inv = 1 - safeRatio;
+        return {
+            r: Math.round((rgbA.r * inv) + (rgbB.r * safeRatio)),
+            g: Math.round((rgbA.g * inv) + (rgbB.g * safeRatio)),
+            b: Math.round((rgbA.b * inv) + (rgbB.b * safeRatio))
+        };
+    }
+
+    function resolveThemeAccentRgb() {
+        const fallback = isChatGPT
+            ? { r: 16, g: 163, b: 127 }
+            : (isDeepSeek ? { r: 59, g: 130, b: 246 } : { r: 37, g: 99, b: 235 });
+        try {
+            const roots = [document.documentElement, document.body].filter(Boolean);
+            const varNames = [
+                '--primary-color',
+                '--theme-primary',
+                '--theme-color',
+                '--color-primary',
+                '--brand-color',
+                '--accent-color',
+                '--link-color',
+                '--ds-color-brand',
+                '--semi-color-primary'
+            ];
+            for (const root of roots) {
+                const style = window.getComputedStyle(root);
+                for (const varName of varNames) {
+                    const rgb = parseCssColorToRgb(style.getPropertyValue(varName));
+                    if (rgb) return rgb;
+                }
+            }
+            const probeSelectors = [
+                'button[class*="primary"]',
+                '[class*="primary"] button',
+                '[role="button"][class*="primary"]',
+                'a[href]'
+            ];
+            for (const selector of probeSelectors) {
+                const el = document.querySelector(selector);
+                if (!el) continue;
+                const style = window.getComputedStyle(el);
+                const rgb = parseCssColorToRgb(style.color) || parseCssColorToRgb(style.backgroundColor);
+                if (rgb) return rgb;
+            }
+        } catch (e) {
+            // ignore theme sampling errors
+        }
+        return fallback;
+    }
+
+    function ensureJumpToastLayout() {
+        if (jumpToastEl && jumpToastEl.isConnected && jumpToastStateEl && jumpToastNodeEl) return;
+        if (!jumpToastEl || !jumpToastEl.isConnected) {
+            jumpToastEl = document.createElement('div');
+            jumpToastEl.id = 'ai-nodes-jump-toast';
+            jumpToastEl.style.cssText = [
+                'position:fixed',
+                'left:50%',
+                'top:24px',
+                'transform:translateX(-50%) translateY(-8px)',
+                'z-index:1000005',
+                'background:rgba(255,255,255,0.5)',
+                'color:rgba(0,0,0,0.92)',
+                'border-radius:14px',
+                'border:none',
+                'padding:8px 12px',
+                'line-height:1.3',
+                'backdrop-filter:blur(14px) saturate(1.12)',
+                '-webkit-backdrop-filter:blur(14px) saturate(1.12)',
+                'box-shadow:0 12px 30px rgba(15,23,42,0.12)',
+                'opacity:0',
+                'transition:opacity .2s ease, transform .2s ease',
+                'display:flex',
+                'align-items:center',
+                'gap:8px',
+                'max-width:min(70vw, 560px)'
+            ].join(';');
+            document.body.appendChild(jumpToastEl);
+        }
+        jumpToastEl.innerHTML = '';
+        jumpToastStateEl = document.createElement('span');
+        jumpToastStateEl.style.cssText = [
+            'flex:none',
+            'padding:2px 8px',
+            'border-radius:999px',
+            'font-size:11px',
+            'font-weight:700',
+            'letter-spacing:.2px',
+            'background:transparent',
+            'color:rgba(37,99,235,0.96)'
+        ].join(';');
+        jumpToastNodeEl = document.createElement('span');
+        jumpToastNodeEl.style.cssText = [
+            'min-width:0',
+            'font-size:12px',
+            'font-weight:500',
+            'color:rgba(0,0,0,0.88)',
+            'white-space:nowrap',
+            'overflow:hidden',
+            'text-overflow:ellipsis'
+        ].join(';');
+        jumpToastEl.appendChild(jumpToastStateEl);
+        jumpToastEl.appendChild(jumpToastNodeEl);
+    }
+
+    function ensureJumpToastSecondaryLayout() {
+        if (jumpToastSecondaryEl && jumpToastSecondaryEl.isConnected && jumpToastSecondaryStateEl && jumpToastSecondaryNodeEl) return;
+        if (!jumpToastSecondaryEl || !jumpToastSecondaryEl.isConnected) {
+            jumpToastSecondaryEl = document.createElement('div');
+            jumpToastSecondaryEl.id = 'ai-nodes-jump-toast-secondary';
+            jumpToastSecondaryEl.style.cssText = [
+                'position:fixed',
+                'left:50%',
+                'top:64px',
+                'transform:translateX(-50%) translateY(-8px)',
+                'z-index:1000004',
+                'background:rgba(255,255,255,0.5)',
+                'color:rgba(0,0,0,0.92)',
+                'border-radius:14px',
+                'border:none',
+                'padding:8px 12px',
+                'line-height:1.3',
+                'backdrop-filter:blur(14px) saturate(1.12)',
+                '-webkit-backdrop-filter:blur(14px) saturate(1.12)',
+                'box-shadow:0 10px 22px rgba(15,23,42,0.1)',
+                'opacity:0',
+                'transition:opacity .2s ease, transform .2s ease',
+                'display:flex',
+                'align-items:center',
+                'gap:8px',
+                'max-width:min(70vw, 560px)',
+                'pointer-events:none'
+            ].join(';');
+            document.body.appendChild(jumpToastSecondaryEl);
+        }
+        jumpToastSecondaryEl.innerHTML = '';
+        jumpToastSecondaryStateEl = document.createElement('span');
+        jumpToastSecondaryStateEl.style.cssText = [
+            'flex:none',
+            'padding:2px 8px',
+            'border-radius:999px',
+            'font-size:11px',
+            'font-weight:700',
+            'letter-spacing:.2px',
+            'background:transparent',
+            'color:rgba(37,99,235,0.96)'
+        ].join(';');
+        jumpToastSecondaryNodeEl = document.createElement('span');
+        jumpToastSecondaryNodeEl.style.cssText = [
+            'min-width:0',
+            'font-size:12px',
+            'font-weight:500',
+            'color:rgba(0,0,0,0.88)',
+            'white-space:nowrap',
+            'overflow:hidden',
+            'text-overflow:ellipsis'
+        ].join(';');
+        jumpToastSecondaryEl.appendChild(jumpToastSecondaryStateEl);
+        jumpToastSecondaryEl.appendChild(jumpToastSecondaryNodeEl);
+    }
+
+    function renderJumpToastSecondary(stateText, nodeText, arrived = false) {
+        ensureJumpToastSecondaryLayout();
+        if (!jumpToastSecondaryStateEl || !jumpToastSecondaryNodeEl || !jumpToastSecondaryEl) return;
+        const themeBlueRgb = { r: 37, g: 99, b: 235 };
+        jumpToastSecondaryEl.style.background = 'rgba(255,255,255,0.5)';
+        jumpToastSecondaryStateEl.textContent = String(stateText || '').trim();
+        jumpToastSecondaryNodeEl.textContent = String(nodeText || '').trim();
+        if (arrived) {
+            jumpToastSecondaryStateEl.style.background = 'transparent';
+            jumpToastSecondaryStateEl.style.color = rgbToRgbaText(themeBlueRgb, 0.98);
+            jumpToastSecondaryNodeEl.style.color = 'rgba(0,0,0,0.88)';
+        } else {
+            jumpToastSecondaryStateEl.style.background = 'transparent';
+            jumpToastSecondaryStateEl.style.color = rgbToRgbaText(themeBlueRgb, 0.96);
+            jumpToastSecondaryNodeEl.style.color = 'rgba(0,0,0,0.88)';
+        }
+        jumpToastSecondaryEl.style.opacity = '1';
+        jumpToastSecondaryEl.style.transform = 'translateX(-50%) translateY(0)';
+        clearJumpToastSecondaryTimer();
+        jumpToastSecondaryHideTimer = setTimeout(() => {
+            jumpToastSecondaryHideTimer = 0;
+            if (!jumpToastSecondaryEl) return;
+            jumpToastSecondaryEl.style.opacity = '0';
+            jumpToastSecondaryEl.style.transform = 'translateX(-50%) translateY(-8px)';
+        }, 1200);
+    }
+
+    function renderJumpToast(stateText, nodeText, arrived = false) {
+        ensureJumpToastLayout();
+        if (!jumpToastStateEl || !jumpToastNodeEl || !jumpToastEl) return;
+        const themeBlueRgb = { r: 37, g: 99, b: 235 };
+        jumpToastEl.style.background = 'rgba(255,255,255,0.5)';
+        jumpToastStateEl.textContent = String(stateText || '').trim();
+        jumpToastNodeEl.textContent = String(nodeText || '').trim();
+        if (arrived) {
+            jumpToastStateEl.style.background = 'transparent';
+            jumpToastStateEl.style.color = rgbToRgbaText(themeBlueRgb, 0.98);
+            jumpToastNodeEl.style.color = 'rgba(0,0,0,0.88)';
+        } else {
+            jumpToastStateEl.style.background = 'transparent';
+            jumpToastStateEl.style.color = rgbToRgbaText(themeBlueRgb, 0.96);
+            jumpToastNodeEl.style.color = 'rgba(0,0,0,0.88)';
+        }
+    }
+
+    function scheduleJumpToastHideAfterArrived(nodeId) {
+        const id = String(nodeId || '').trim();
+        if (!id || jumpToastArrivedTimer) return;
+        if (jumpToastEl && jumpToastArrivedShownId !== id) {
+            renderJumpToast('已达到', getJumpToastNodeLabel(id), true);
+            jumpToastArrivedShownId = id;
+        }
+        jumpToastArrivedTimer = setTimeout(() => {
+            jumpToastArrivedTimer = 0;
+            if (!jumpToastPendingNodeId || String(jumpToastPendingNodeId) !== id) return;
+            if (!isJumpTargetArrived(id)) return;
+            hideJumpToast();
+        }, 1000);
+    }
+
+    function hideJumpToast() {
+        clearJumpToastWatch();
+        clearJumpToastArrivedTimer();
+        clearJumpToastSecondaryTimer();
+        jumpToastPendingNodeId = '';
+        jumpToastArrivedShownId = '';
+        if (!jumpToastEl) return;
+        jumpToastEl.style.opacity = '0';
+        jumpToastEl.style.transform = 'translateX(-50%) translateY(-8px)';
+        if (jumpToastSecondaryEl) {
+            jumpToastSecondaryEl.style.opacity = '0';
+            jumpToastSecondaryEl.style.transform = 'translateX(-50%) translateY(-8px)';
+        }
+    }
+
+    function isJumpTargetArrived(nodeId) {
+        const id = String(nodeId || '').trim();
+        if (!id) return false;
+
+        if ((isQwen || isDoubao || isDeepSeek) && String(activeNodeId || '') === id) {
+            return true;
+        }
+
+        const node = nodesMap.get(id) || nodes.find((n) => String(n?.id || '') === id) || null;
+        let targetEl = node?.element || null;
+        if ((!targetEl || !targetEl.isConnected) && node) {
+            if (isQwen) targetEl = findQwenDomElementByNode(node);
+            else if (isDeepSeek) targetEl = findDeepSeekDomElementByNode(node);
+            else if (isDoubao) targetEl = findDoubaoDomElementByNode(node);
+            if (targetEl) node.element = targetEl;
+        }
+        if (!targetEl || !targetEl.isConnected) return String(activeNodeId || '') === id;
+
+        const scrollEl = getScrollContainer();
+        if (!scrollEl) return false;
+        const containerTop = (scrollEl === window || scrollEl === document.documentElement || scrollEl === document.scrollingElement)
+            ? 0
+            : scrollEl.getBoundingClientRect().top;
+        const readingLineOffset = Math.max(10, Math.min(500, CONFIG.readingLineOffset || 150));
+        const targetTop = containerTop + readingLineOffset;
+        if (isDeepSeek && node) {
+            const alignY = getDeepSeekNodeAlignY(node, scrollEl);
+            const readingY = getDeepSeekReadingY(scrollEl);
+            const delta = alignY - readingY;
+            if (Math.abs(delta) <= 28) return true;
+            const metrics = getDeepSeekScrollMetrics(scrollEl);
+            const atTop = metrics.top <= 1;
+            const atBottom = metrics.top >= metrics.maxTop - 1;
+            if ((delta < 0 && atTop) || (delta > 0 && atBottom)) return true;
+            return false;
+        }
+        const rect = targetEl.getBoundingClientRect();
+        return Math.abs(rect.top - targetTop) <= 28;
+    }
+
+    function startJumpToastWatch(nodeId) {
+        const id = String(nodeId || '').trim();
+        clearJumpToastWatch();
+        jumpToastPendingNodeId = id;
+        if (!id) return;
+        const tick = () => {
+            if (!jumpToastPendingNodeId) return;
+            if (isJumpTargetArrived(jumpToastPendingNodeId)) {
+                scheduleJumpToastHideAfterArrived(jumpToastPendingNodeId);
+            } else {
+                clearJumpToastArrivedTimer();
+            }
+            jumpToastWatchRaf = requestAnimationFrame(tick);
+        };
+        jumpToastWatchRaf = requestAnimationFrame(tick);
+    }
+
+    function showJumpToast(node) {
+        const label = String(node?.text || '').trim().slice(0, 36) || String(node?.id || '').slice(0, 16);
+        const nodeIndex = Math.max(0, nodes.findIndex((n) => String(n?.id || '') === String(node?.id || ''))) + 1;
+        const total = nodes.length || 0;
+        const state = total > 0 ? `正在跳转 ${nodeIndex}/${total}` : '正在跳转';
+        ensureJumpToastLayout();
+        if (
+            jumpToastEl &&
+            jumpToastEl.style.opacity === '1' &&
+            (String(jumpToastStateEl?.textContent || '').trim() || String(jumpToastNodeEl?.textContent || '').trim())
+        ) {
+            const prevStateText = String(jumpToastStateEl?.textContent || '').trim();
+            const prevNodeText = String(jumpToastNodeEl?.textContent || '').trim();
+            if (prevStateText || prevNodeText) {
+                renderJumpToastSecondary(prevStateText, prevNodeText, /^已达到/.test(prevStateText));
+            }
+        }
+        renderJumpToast(state, label, false);
+        jumpToastArrivedShownId = '';
+        jumpToastEl.style.opacity = '1';
+        jumpToastEl.style.transform = 'translateX(-50%) translateY(0)';
+        startJumpToastWatch(node?.id);
+    }
+
     dotsLayer.addEventListener('mouseover', (e) => {
         const dot = e.target && e.target.closest ? e.target.closest('.ai-nav-dot') : null;
         if (!dot || !dotsLayer.contains(dot) || hoveredDot === dot) return;
@@ -1017,15 +1460,17 @@
         e.stopPropagation();
         const node = getNodeFromDotElement(dot);
         if (!node) return;
+        showJumpToast(node);
         const jumpedNow = jumpToMessage(node.element, node.id);
         if (jumpedNow) {
-            if (isQwen) {
+            if (isQwen || isDeepSeek) {
                 setTimeout(() => {
                     scheduleActiveNodeUpdate();
                 }, 420);
             } else {
                 setActiveDot(dot, node.id);
                 scrollDotIntoView(dot);
+                scheduleActiveNodeUpdate();
             }
         } else {
             scheduleActiveNodeUpdate();
@@ -1064,53 +1509,28 @@
             if (!qwenVirtualNodesLoaded || qwenVirtualNodesDirty || !qwenVirtualNodesSessionId || (currentSessionId && qwenVirtualNodesSessionId !== currentSessionId)) {
                 scheduleQwenVirtualNodesRefresh();
             }
+            reconcileQwenPendingDomNodesWithApi();
+            // 千问节点主链路：仅使用 API 结果构建轨道顺序，避免 DOM 分页窗口导致顺序抖动。
+            // DOM 仅用于“点击后定位/激活判定”，不再参与节点集合生成。
             if (!qwenVirtualNodesSessionId || !currentSessionId || qwenVirtualNodesSessionId === currentSessionId) {
                 const cached = Array.isArray(qwenVirtualNodesCache) ? qwenVirtualNodesCache : [];
-                const domCandidates = getQwenUserDomCandidates();
-
-                if (domCandidates.length) {
-                    const consumedCacheNodes = new Set();
-                    const merged = domCandidates.map((domItem, idx) => {
-                        const domId = normalizeQwenMessageId(domItem?.id || '');
-                        const domText = normalizeQwenTextForMatch(domItem?.text || '');
-                        let matched = null;
-
-                        if (domId) {
-                            matched = cached.find((c) => normalizeQwenMessageId(c?.id || '') === domId) || null;
-                        }
-                        if (!matched && domText) {
-                            matched = cached.find((c) => !consumedCacheNodes.has(c) && isLikelySameQwenNodeText(c?.text || '', domText)) || null;
-                        }
-                        if (matched) consumedCacheNodes.add(matched);
-
-                        const fallbackId = `qwen-dom-user-${idx + 1}-${hashStr(domText || String(idx)).slice(0, 8)}`;
-                        return {
-                            id: domId || normalizeQwenMessageId(matched?.id || '') || fallbackId,
-                            role: 'user',
-                            text: domText || normalizeQwenTextForMatch(matched?.text || ''),
-                            sessionIndex: idx,
-                            element: domItem?.element || matched?.element || null
-                        };
-                    }).filter((item) => item.text);
-
-                    cached.forEach((item) => {
-                        if (consumedCacheNodes.has(item)) return;
-                        merged.push({
-                            ...item,
-                            sessionIndex: merged.length
-                        });
+                const merged = cached.slice();
+                qwenPendingDomNodes.forEach((p) => {
+                    if (!p || !p.text) return;
+                    if (hasQwenApiNodeForDom(p.sourceMessageId || '', p.text || '')) return;
+                    merged.push(p);
+                });
+                merged.sort((a, b) => getQwenSessionIndexValue(a?.sessionIndex) - getQwenSessionIndexValue(b?.sessionIndex));
+                merged.forEach((item, idx) => {
+                    if (!item || !item.text) return;
+                    list.push({
+                        ...item,
+                        sessionIndex: getQwenSessionIndexValue(item.sessionIndex) !== -1
+                            ? getQwenSessionIndexValue(item.sessionIndex)
+                            : idx,
+                        element: null
                     });
-
-                    const normalizedMerged = normalizeQwenNodeOrder(merged);
-                    normalizedMerged.forEach((item) => list.push(item));
-
-                    // DOM 已出现但缓存尚未收敛时，主动触发一次 API 强刷，尽快固化 ID/顺序。
-                    if (domCandidates.length > cached.length) {
-                        scheduleQwenVirtualNodesRefresh(true);
-                    }
-                } else {
-                    cached.forEach((item) => list.push(item));
-                }
+                });
             }
         } else if (host.includes('doubao.com')) {
             const domUserCount = document.querySelectorAll('[data-testid="send_message"]').length;
@@ -1124,107 +1544,42 @@
             if (!doubaoVirtualNodesLoaded || doubaoVirtualNodesDirty) {
                 scheduleDoubaoVirtualNodesRefresh();
             }
+            reconcileDoubaoPendingDomNodesWithApi();
             const cached = Array.isArray(doubaoVirtualNodesCache) ? doubaoVirtualNodesCache : [];
-            const domCandidates = getDoubaoUserDomCandidates();
-            if (domCandidates.length) {
-                const consumedCacheNodes = new Set();
-                const merged = domCandidates.map((domItem, idx) => {
-                    const domId = String(domItem?.id || '').trim();
-                    const domText = normalizeDoubaoTextForMatch(domItem?.text || '');
-                    let matched = null;
-
-                    if (domId) {
-                        matched = cached.find((c) => String(c?.id || '').trim() === domId) || null;
-                    }
-                    if (!matched && domText) {
-                        const domPrefix = domText.slice(0, Math.min(28, domText.length));
-                        matched = cached.find((c) => {
-                            if (consumedCacheNodes.has(c)) return false;
-                            const t = normalizeDoubaoTextForMatch(c?.text || '');
-                            if (!t) return false;
-                            return t === domText || (domPrefix && t.includes(domPrefix));
-                        }) || null;
-                    }
-                    if (matched) consumedCacheNodes.add(matched);
-
-                    const fallbackId = `doubao-dom-user-${idx + 1}-${hashStr(domText || String(idx)).slice(0, 8)}`;
-                    return {
-                        id: domId || String(matched?.id || '').trim() || fallbackId,
-                        role: 'user',
-                        text: domText || normalizeDoubaoTextForMatch(matched?.text || ''),
-                        sourceMessageId: String(domItem?.id || matched?.sourceMessageId || matched?.id || '').trim(),
-                        sessionIndex: idx,
-                        element: domItem?.element || matched?.element || null
-                    };
-                }).filter((item) => item.text);
-
-                cached.forEach((item) => {
-                    if (consumedCacheNodes.has(item)) return;
-                    merged.push({
-                        ...item,
-                        sessionIndex: merged.length
-                    });
+            // 豆包节点主链路：仅使用 API 结果构建轨道顺序。
+            // DOM 仅用于定位与激活判断，不参与节点集合生成。
+            const merged = cached.slice();
+            doubaoPendingDomNodes.forEach((p) => {
+                if (!p || !p.text) return;
+                if (hasDoubaoApiNodeForDom(p.sourceMessageId || '', p.text || '')) return;
+                merged.push(p);
+            });
+            merged.sort((a, b) => {
+                const ia = Number(a?.sessionIndex);
+                const ib = Number(b?.sessionIndex);
+                const va = Number.isFinite(ia) ? ia : Number.MAX_SAFE_INTEGER;
+                const vb = Number.isFinite(ib) ? ib : Number.MAX_SAFE_INTEGER;
+                return va - vb;
+            });
+            merged.forEach((item, idx) => {
+                if (!item || !item.text) return;
+                list.push({
+                    ...item,
+                    sessionIndex: Number.isInteger(Number(item.sessionIndex)) ? Number(item.sessionIndex) : idx,
+                    element: null
                 });
-
-                merged.forEach((item) => list.push(item));
-                if (domCandidates.length > cached.length) {
-                    scheduleDoubaoVirtualNodesRefresh(true);
-                }
-            } else {
-                cached.forEach((item) => list.push(item));
-            }
+            });
         } else if (host.includes('deepseek.com')) {
             scheduleDeepSeekVirtualNodesRefresh();
             const cached = Array.isArray(deepseekVirtualNodesCache) ? deepseekVirtualNodesCache : [];
-            const domCandidates = getDeepSeekUserDomCandidates();
-            if (domCandidates.length) {
-                const consumedCacheNodes = new Set();
-                const merged = domCandidates.map((domItem, idx) => {
-                    const domId = String(domItem?.id || '').trim();
-                    const domText = normalizeDeepSeekTextForMatch(domItem?.text || '');
-                    let matched = null;
-
-                    if (domId) {
-                        matched = cached.find((c) => String(c?.sourceMessageId || c?.id || '').trim() === domId) || null;
-                    }
-                    if (!matched && domText) {
-                        const domPrefix = domText.slice(0, Math.min(28, domText.length));
-                        matched = cached.find((c) => {
-                            if (consumedCacheNodes.has(c)) return false;
-                            const t = normalizeDeepSeekTextForMatch(c?.text || '');
-                            if (!t) return false;
-                            return t === domText || (domPrefix && t.includes(domPrefix));
-                        }) || null;
-                    }
-                    if (matched) consumedCacheNodes.add(matched);
-
-                    const fallbackId = `deepseek-dom-user-${idx + 1}-${hashStr(domText || String(idx)).slice(0, 8)}`;
-                    const resolvedId = String(matched?.id || '').trim() || (domId ? `deepseek-user-${domId}` : fallbackId);
-                    return {
-                        id: resolvedId,
-                        sourceMessageId: domId || String(matched?.sourceMessageId || '').trim(),
-                        role: 'user',
-                        text: domText || normalizeDeepSeekTextForMatch(matched?.text || ''),
-                        sessionIndex: idx,
-                        element: domItem?.element || matched?.element || null
-                    };
-                }).filter((item) => item.text);
-
-                cached.forEach((item) => {
-                    if (consumedCacheNodes.has(item)) return;
-                    merged.push({
-                        ...item,
-                        sessionIndex: merged.length
-                    });
-                });
-
-                merged.forEach((item) => list.push(item));
-                if (domCandidates.length > cached.length) {
-                    scheduleDeepSeekVirtualNodesRefresh(true);
-                }
-            } else {
-                cached.forEach((item) => list.push(item));
-            }
+            const fromApi = cached.map((item, idx) => ({
+                ...item,
+                role: 'user',
+                sessionIndex: Number.isInteger(Number(item?.sessionIndex)) ? Number(item.sessionIndex) : idx,
+                element: null
+            }));
+            rebindDeepSeekNodesToDom(fromApi, true);
+            fromApi.forEach((item) => list.push(item));
         }
 
         return list;
@@ -1368,10 +1723,12 @@
     }
 
     function getDeepSeekSessionIdFromLinks() {
-        const linkCandidates = Array.from(document.querySelectorAll('a[href*="/a/chat/s/"]'));
+        const linkCandidates = Array.from(document.querySelectorAll('a[href*="/a/chat/s/"], a[href*="/chat/"], a[href*="chat_session_id="], a[href*="session_id="]'));
         for (const a of linkCandidates) {
             const href = String(a.getAttribute('href') || '');
-            const m = href.match(/\/a\/chat\/s\/([0-9a-f-]{36})/i);
+            const m = href.match(/\/a\/chat\/s\/([0-9a-f-]{36})/i)
+                || href.match(/\/chat\/([0-9a-f-]{36})/i)
+                || href.match(/[?&#](?:chat_session_id|session_id|id)=([0-9a-f-]{36})/i);
             if (m && isLikelyUuid(m[1])) return m[1];
         }
         return '';
@@ -1837,6 +2194,22 @@
         return d.toLocaleString();
     }
 
+    function parseDeepSeekTsValue(raw) {
+        if (raw == null || raw === '') return { value: 0, text: '-' };
+        const str = String(raw).trim();
+        if (!str) return { value: 0, text: '-' };
+        if (/^\d+(?:\.\d+)?$/.test(str)) {
+            const num = Number(str);
+            const intPart = str.split('.')[0] || '';
+            const ms = intPart.length <= 10 ? num * 1000 : num;
+            const dt = new Date(ms);
+            return { value: ms, text: Number.isFinite(dt.getTime()) ? dt.toLocaleString() : str };
+        }
+        const parsed = Date.parse(str);
+        if (Number.isFinite(parsed)) return { value: parsed, text: new Date(parsed).toLocaleString() };
+        return { value: 0, text: str };
+    }
+
     function collectDeepSeekMessageStats(chatMessages) {
         const out = {
             totalMessages: 0,
@@ -1886,6 +2259,9 @@
         const chatMessages = Array.isArray(bizData?.chat_messages) ? bizData.chat_messages : [];
         if (!chatSession && !chatMessages.length) return null;
 
+        const updatedNorm = parseDeepSeekTsValue(chatSession?.updated_at);
+        const insertedNorm = parseDeepSeekTsValue(chatSession?.inserted_at);
+
         return {
             chatSession: chatSession
                 ? {
@@ -1893,12 +2269,16 @@
                     title: String(chatSession.title || ''),
                     titleType: String(chatSession.title_type || ''),
                     pinned: Boolean(chatSession.pinned),
-                    updatedAt: formatDeepSeekTs(chatSession.updated_at),
+                    updatedAt: updatedNorm.text,
+                    updatedAtValue: updatedNorm.value,
+                    updatedAtRaw: chatSession.updated_at == null ? '' : String(chatSession.updated_at),
                     seqId: chatSession.seq_id == null ? '' : String(chatSession.seq_id),
                     agent: String(chatSession.agent || ''),
                     version: chatSession.version == null ? '' : String(chatSession.version),
                     currentMessageId: chatSession.current_message_id == null ? '' : String(chatSession.current_message_id),
-                    insertedAt: formatDeepSeekTs(chatSession.inserted_at)
+                    insertedAt: insertedNorm.text,
+                    insertedAtValue: insertedNorm.value,
+                    insertedAtRaw: chatSession.inserted_at == null ? '' : String(chatSession.inserted_at)
                 }
                 : null,
             messageStats: collectDeepSeekMessageStats(chatMessages)
@@ -1954,157 +2334,317 @@
             .trim();
     }
 
-    function getDeepSeekUserDomCandidates() {
-        const visibleArea = document.querySelector('.ds-virtual-list-visible-items') || document.body;
-        const rows = Array.from(visibleArea.querySelectorAll('._81e7b5e, .ds-message'));
+    function getDeepSeekDomRows() {
+        const area = document.querySelector('.ds-virtual-list-visible-items') || document.body;
+        return Array.from(area.querySelectorAll('._81e7b5e, .ds-message'));
+    }
+
+    function isDeepSeekUserRow(row) {
+        return !!(row && (row.classList.contains('_19d617c') || (!row.querySelector('.ds-markdown') && !row.querySelector('.ds-think-content') && !row.querySelector('.ds-thought-content'))));
+    }
+
+    function scoreDeepSeekTextMatch(a, b) {
+        const x = normalizeDeepSeekTextForMatch(a || '');
+        const y = normalizeDeepSeekTextForMatch(b || '');
+        if (!x || !y) return 0;
+        if (x === y) return 100;
+        let s = 0;
+        const px = x.slice(0, Math.min(48, x.length));
+        const py = y.slice(0, Math.min(48, y.length));
+        if (px && y.includes(px)) s += 20;
+        if (py && x.includes(py)) s += 20;
+        const mx = x.slice(Math.max(0, Math.floor(x.length / 2) - 20), Math.floor(x.length / 2) + 20);
+        if (mx && y.includes(mx)) s += 12;
+        return s;
+    }
+
+    function scanDeepSeekDomNodes() {
         const out = [];
         const seen = new Set();
-
-        rows.forEach((el) => {
-            const isUser = el.classList.contains('_19d617c') || (!el.querySelector('.ds-markdown') && !el.querySelector('.ds-think-content') && !el.querySelector('.ds-thought-content'));
-            if (!isUser) return;
-
-            const bubble = el.querySelector('._72b6158') || el.querySelector('.ds-message-item--content') || el;
-            const text = normalizeDeepSeekTextForMatch(bubble.innerText || '');
+        const rows = getDeepSeekDomRows();
+        rows.forEach((row, idx) => {
+            if (!isDeepSeekUserRow(row)) return;
+            const bubble = row.querySelector('._72b6158') || row.querySelector('.ds-message-item--content') || row;
+            const text = normalizeDeepSeekTextForMatch(bubble?.innerText || row.innerText || '');
             if (!text || text === '深度思考' || text === '联网搜索') return;
-
-            const rowId = String(el.closest?.('[data-virtual-list-item-key]')?.getAttribute?.('data-virtual-list-item-key') || '').trim();
-            const key = `${rowId}::${text.slice(0, 80)}`;
+            const rowId = String(row.closest?.('[data-virtual-list-item-key]')?.getAttribute?.('data-virtual-list-item-key') || row.getAttribute('data-virtual-list-item-key') || '').trim();
+            const key = `${rowId}|${text.slice(0, 80)}`;
             if (seen.has(key)) return;
             seen.add(key);
-            out.push({ id: rowId, element: bubble, text });
+            const assistantRows = [];
+            for (let j = idx + 1; j < rows.length; j += 1) {
+                if (isDeepSeekUserRow(rows[j])) break;
+                assistantRows.push(rows[j]);
+            }
+            out.push({
+                rowId,
+                text,
+                element: bubble || row,
+                row,
+                assistantRows,
+                nodeId: '',
+                apiIndex: -1
+            });
         });
-
+        deepseekDomNodesSnapshot = out;
         return out;
     }
 
-    function isDeepSeekElementMatchNode(element, node) {
-        if (!element || !node) return false;
-        if (!element.isConnected) return false;
+    function rebindDeepSeekNodesToDom(nodeList, force = false) {
+        if (!Array.isArray(nodeList) || !nodeList.length) {
+            deepseekDomNodesSnapshot = [];
+            return;
+        }
+        const domList = scanDeepSeekDomNodes();
+        if (!domList.length) {
+            nodeList.forEach((node) => {
+                node.element = null;
+                node.rowId = '';
+                node._dsRow = null;
+                node._dsAssistantRows = [];
+            });
+            return;
+        }
 
-        const elText = normalizeDeepSeekTextForMatch(element.innerText || '');
-        const nodeText = normalizeDeepSeekTextForMatch(node.text || '');
-        if (!elText || !nodeText) return false;
+        if (force) {
+            domList.forEach((item) => {
+                item.apiIndex = -1;
+                item.nodeId = '';
+            });
+        }
 
-        const prefix = nodeText.slice(0, Math.min(28, nodeText.length));
-        if (prefix && elText.includes(prefix)) return true;
-        if (nodeText.length <= 24) return elText === nodeText;
-        return false;
+        const used = new Set();
+        domList.forEach((domNode) => {
+            let best = -1;
+            let score = 0;
+            nodeList.forEach((node, idx) => {
+                if (used.has(idx)) return;
+                const s = scoreDeepSeekTextMatch(domNode.text, node.text);
+                if (s > score) {
+                    score = s;
+                    best = idx;
+                }
+            });
+            if (best !== -1 && score >= 20) {
+                domNode.apiIndex = best;
+                domNode.nodeId = String(nodeList[best]?.id || '');
+                used.add(best);
+            }
+        });
+
+        nodeList.forEach((node, idx) => {
+            const hit = domList.find((item) => item.apiIndex === idx) || null;
+            node.element = hit?.element || null;
+            node.rowId = String(hit?.rowId || '');
+            node._dsRow = hit?.row || null;
+            node._dsAssistantRows = Array.isArray(hit?.assistantRows) ? hit.assistantRows : [];
+        });
+    }
+
+    function getDeepSeekNodeGroupRange(node) {
+        const user = node?._dsRow || node?.element;
+        if (!user || !document.body.contains(user)) return null;
+        const ur = user.getBoundingClientRect();
+        let top = ur.top;
+        let bottom = ur.bottom;
+        const assistants = Array.isArray(node?._dsAssistantRows) ? node._dsAssistantRows : [];
+        for (let i = assistants.length - 1; i >= 0; i -= 1) {
+            const a = assistants[i];
+            if (!a || !document.body.contains(a)) continue;
+            const ar = a.getBoundingClientRect();
+            bottom = Math.max(bottom, ar.bottom);
+            break;
+        }
+        return { top, bottom, mid: (top + bottom) / 2 };
+    }
+
+    function getDeepSeekReadingY(scrollEl) {
+        const offset = Math.max(10, Math.min(500, CONFIG.readingLineOffset || 150));
+        return offset;
+    }
+
+    function getDeepSeekNodeAlignY(node, scrollEl) {
+        const range = getDeepSeekNodeGroupRange(node);
+        if (range) return range.top + 8;
+        const el = node?.element;
+        if (!el || !document.body.contains(el)) return getDeepSeekReadingY(scrollEl);
+        const rect = el.getBoundingClientRect();
+        return rect.top + Math.min(Math.max(rect.height * 0.2, 10), 48);
     }
 
     function findDeepSeekDomElementByNode(node) {
-        if (!node || !node.text) return null;
-        const candidates = getDeepSeekUserDomCandidates();
-        const targetText = normalizeDeepSeekTextForMatch(node.text);
-        const targetPrefix = targetText.slice(0, Math.min(52, targetText.length));
-        const targetMiddle = targetText.slice(Math.max(0, Math.floor(targetText.length / 2) - 18), Math.floor(targetText.length / 2) + 18);
+        if (!node) return null;
+        const list = Array.isArray(nodes) && nodes.length ? nodes : [];
+        if (list.length) rebindDeepSeekNodesToDom(list, true);
+        const direct = list.find((n) => String(n?.id || '') === String(node?.id || '')) || null;
+        if (direct?.element && document.body.contains(direct.element)) return direct.element;
 
-        let bestEl = null;
-        let bestScore = -1;
+        const candidates = deepseekDomNodesSnapshot.length ? deepseekDomNodesSnapshot : scanDeepSeekDomNodes();
+        if (!candidates.length) return null;
 
+        const targetText = normalizeDeepSeekTextForMatch(node?.text || '');
+        const targetId = String(node?.sourceMessageId || '').trim();
+        let best = null;
+        let bestScore = 0;
         candidates.forEach((c) => {
-            const txt = c.text;
             let score = 0;
-            if (txt === targetText) score += 8;
-            if (targetPrefix && txt.includes(targetPrefix)) score += 5;
-            if (targetMiddle && txt.includes(targetMiddle)) score += 3;
-            if (targetPrefix && targetText.includes(txt.slice(0, Math.min(24, txt.length)))) score += 2;
-
+            if (targetId && String(c?.rowId || '').trim() === targetId) score += 70;
+            score += scoreDeepSeekTextMatch(targetText, c?.text || '');
             if (score > bestScore) {
                 bestScore = score;
-                bestEl = c.element;
+                best = c;
             }
         });
-
-        return bestScore >= 5 ? bestEl : null;
-    }
-
-    function getDeepSeekConversationRows() {
-        const list = document.querySelector('.ds-virtual-list-visible-items');
-        if (!list) return [];
-        // 抓取 virtual item key 容器，这些通常是对话的最小物理块 (用户提问 or AI 整段回复)
-        return Array.from(list.querySelectorAll('[data-virtual-list-item-key]'));
-    }
-
-    function getDeepSeekRowType(row) {
-        if (!row) return 'unknown';
-        // 检查内部是否包含 AI 特有的组件标识
-        const hasAiMarkers = row.querySelector('.ds-markdown') || row.querySelector('.ds-think-content') || row.querySelector('.ds-thought-content');
-        return hasAiMarkers ? 'assistant' : 'user';
-    }
-
-    function getDeepSeekRowId(row) {
-        return row?.getAttribute('data-virtual-list-item-key') || '';
-    }
-
-    function getDeepSeekRowText(row) {
-        const bubble = row.querySelector('._72b6158') || row.querySelector('.ds-message-item--content') || row;
-        return normalizeDeepSeekTextForMatch(bubble.innerText || '');
-    }
-
-    function findDeepSeekNodeBySignature(id, text) {
-        if (!text) return null;
-        const targetText = normalizeDeepSeekTextForMatch(text);
-        // 优先文本匹配，因为虚拟 ID 可能与 DOM Key 体系不同
-        return nodes.find(n => normalizeDeepSeekTextForMatch(n.text) === targetText) || null;
-    }
-
-    function resolveDeepSeekNodeFromRow(row, rows) {
-        if (!row) return null;
-        const type = getDeepSeekRowType(row);
-        const idx = rows.indexOf(row);
-
-        // 如果视口落在了 AI 回复区 (含思考过程、搜索块)，向上寻找对应的提问节点
-        if (type !== 'user' && idx > 0) {
-            for (let i = idx - 1; i >= 0; i--) {
-                if (getDeepSeekRowType(rows[i]) === 'user') {
-                    return resolveDeepSeekNodeFromRow(rows[i], rows);
-                }
-            }
-        }
-
-        return findDeepSeekNodeBySignature(getDeepSeekRowId(row), getDeepSeekRowText(row));
+        return bestScore >= 20 ? (best?.element || null) : null;
     }
 
     function getDeepSeekActiveNodeByConversationState(scrollEl) {
-        const rows = getDeepSeekConversationRows();
-        if (!rows.length) return null;
-
-        const viewportHeight = window.innerHeight;
-        // 只要底部靠近视口，激活最后一个
-        const isNearBottom = (scrollEl.scrollHeight - scrollEl.scrollTop - scrollEl.clientHeight) < 120;
-        if (isNearBottom) return nodes[nodes.length - 1];
-
-        // 视口中部的“阅读基准线”
-        const readingAnchor = CONFIG.readingLineOffset;
-        
-        const visibleRows = rows.filter(r => {
-            const rect = r.getBoundingClientRect();
-            return rect.bottom > 0 && rect.top < viewportHeight;
-        });
-        if (!visibleRows.length) return null;
-
-        // 寻找跨越阅读基准线的行
-        let crossingRow = visibleRows.find(r => {
-            const rect = r.getBoundingClientRect();
-            return rect.top <= readingAnchor && rect.bottom >= readingAnchor;
-        });
-
-        if (crossingRow) return resolveDeepSeekNodeFromRow(crossingRow, rows);
-        
-        // 如果没有正跨线的，取离阅读点最近的一行
-        let bestRow = null;
-        let minDist = Infinity;
-        visibleRows.forEach(r => {
-            const rect = r.getBoundingClientRect();
-            const dist = Math.abs(rect.top - readingAnchor);
-            if (dist < minDist) {
-                minDist = dist;
-                bestRow = r;
+        if (!Array.isArray(nodes) || !nodes.length) return null;
+        rebindDeepSeekNodesToDom(nodes, true);
+        const ry = getDeepSeekReadingY(scrollEl);
+        let hit = null;
+        let bestTop = -Infinity;
+        nodes.forEach((node) => {
+            const range = getDeepSeekNodeGroupRange(node);
+            if (!range) return;
+            if (range.bottom < 0 || range.top > window.innerHeight) return;
+            if (range.top <= ry && range.bottom >= ry && range.top > bestTop) {
+                bestTop = range.top;
+                hit = node;
             }
         });
+        return hit;
+    }
 
-        return bestRow ? resolveDeepSeekNodeFromRow(bestRow, rows) : null;
+    function getDeepSeekLiveDomNodes() {
+        const usable = (Array.isArray(deepseekDomNodesSnapshot) ? deepseekDomNodesSnapshot : [])
+            .filter((n) => n?.element && document.body.contains(n.element));
+        return usable.length ? usable : scanDeepSeekDomNodes();
+    }
+
+    function getDeepSeekDomProgressSignature(scrollEl) {
+        const list = scanDeepSeekDomNodes();
+        const top = (scrollEl && scrollEl !== window && scrollEl !== document.documentElement && scrollEl !== document.scrollingElement)
+            ? Number(scrollEl.scrollTop || 0)
+            : Number(window.scrollY || 0);
+        return `${list.length}|${list[0]?.rowId || ''}|${list[list.length - 1]?.rowId || ''}|${Math.round(top)}`;
+    }
+
+    function scrollDeepSeekBy(scrollEl, delta) {
+        if (scrollEl && scrollEl !== window && scrollEl !== document.documentElement && scrollEl !== document.scrollingElement) {
+            const before = Number(scrollEl.scrollTop || 0);
+            scrollEl.scrollTop = before + delta;
+            const after = Number(scrollEl.scrollTop || 0);
+            return after - before;
+        }
+        const before = Number(window.scrollY || document.documentElement.scrollTop || 0);
+        window.scrollBy(0, delta);
+        const after = Number(window.scrollY || document.documentElement.scrollTop || 0);
+        return after - before;
+    }
+
+    function getDeepSeekScrollMetrics(scrollEl) {
+        const isWindowScroll = !scrollEl || scrollEl === window || scrollEl === document.documentElement || scrollEl === document.scrollingElement;
+        if (isWindowScroll) {
+            const root = document.scrollingElement || document.documentElement || document.body;
+            const top = Number(window.scrollY || root?.scrollTop || 0);
+            const maxTop = Math.max(0, Number((root?.scrollHeight || 0) - (window.innerHeight || 0)));
+            return { top, maxTop };
+        }
+        const top = Number(scrollEl.scrollTop || 0);
+        const maxTop = Math.max(0, Number((scrollEl.scrollHeight || 0) - (scrollEl.clientHeight || 0)));
+        return { top, maxTop };
+    }
+
+    async function findDeepSeekTargetWithDirectionalScroll(targetNode, targetApiIndex, token = 0) {
+        rebindDeepSeekNodesToDom(nodes, true);
+        let target = getDeepSeekLiveDomNodes().find((n) => String(n?.nodeId || '') === String(targetNode?.id || '')) || null;
+        if (target?.element && target.element.isConnected) return target.element;
+
+        const scrollEl = getScrollContainer();
+        const viewportH = (scrollEl && scrollEl !== window && scrollEl !== document.documentElement && scrollEl !== document.scrollingElement)
+            ? Number(scrollEl.clientHeight || window.innerHeight || 700)
+            : Number(window.innerHeight || 700);
+        const step = Math.max(220, Math.round(viewportH * 0.72));
+        const activeIdx = nodes.findIndex((n) => String(n?.id || '') === String(activeNodeId || ''));
+        const down = activeIdx >= 0 ? targetApiIndex >= activeIdx : true;
+
+        let stale = 0;
+        let lastSig = '';
+        const startedAt = Date.now();
+        while (Date.now() - startedAt < 45000) {
+            if (token !== deepseekNavJumpSeq) return null;
+            scrollDeepSeekBy(scrollEl, down ? step : -step);
+            await new Promise((resolve) => setTimeout(resolve, 180));
+            if (token !== deepseekNavJumpSeq) return null;
+
+            rebindDeepSeekNodesToDom(nodes, true);
+            target = getDeepSeekLiveDomNodes().find((n) => String(n?.nodeId || '') === String(targetNode?.id || '')) || null;
+            if (target?.element && target.element.isConnected) return target.element;
+
+            const nowSig = getDeepSeekDomProgressSignature(scrollEl);
+            stale = nowSig === lastSig ? stale + 1 : 0;
+            lastSig = nowSig;
+            if (stale >= 4) break;
+        }
+        return null;
+    }
+
+    async function alignDeepSeekNodeToReadingLine(targetNode, token = 0) {
+        const scrollEl = getScrollContainer();
+        for (let i = 0; i < 6; i += 1) {
+            if (token !== deepseekNavJumpSeq) return false;
+            rebindDeepSeekNodesToDom(nodes, true);
+            const liveNode = (nodesMap.get(String(targetNode?.id || '')) || targetNode || null);
+            if (!liveNode) return false;
+            const alignY = getDeepSeekNodeAlignY(liveNode, scrollEl);
+            const readingY = getDeepSeekReadingY(scrollEl);
+            const delta = alignY - readingY;
+            if (Math.abs(delta) <= 8) return true;
+            const metricsBefore = getDeepSeekScrollMetrics(scrollEl);
+            const moved = Number(scrollDeepSeekBy(scrollEl, Math.max(-520, Math.min(520, delta))) || 0);
+            await new Promise((resolve) => setTimeout(resolve, i < 2 ? 180 : 100));
+            const metricsAfter = getDeepSeekScrollMetrics(scrollEl);
+
+            const noMove = Math.abs(moved) < 1 || Math.abs(metricsAfter.top - metricsBefore.top) < 1;
+            if (noMove) {
+                const atTop = metricsAfter.top <= 1;
+                const atBottom = metricsAfter.top >= metricsAfter.maxTop - 1;
+                const blockedByTop = delta < 0 && atTop;
+                const blockedByBottom = delta > 0 && atBottom;
+                if (blockedByTop || blockedByBottom) {
+                    // 边界可达性限制：已尽可能贴近阅读线，允许结束。
+                    return true;
+                }
+            }
+        }
+        return true;
+    }
+
+    async function jumpToDeepSeekNodeById(nodeId) {
+        const token = ++deepseekNavJumpSeq;
+        const targetIndex = nodes.findIndex((n) => String(n?.id || '') === String(nodeId || ''));
+        const targetNode = targetIndex >= 0 ? nodes[targetIndex] : (nodesMap.get(String(nodeId || '')) || null);
+        if (!targetNode) return false;
+
+        const targetEl = await findDeepSeekTargetWithDirectionalScroll(targetNode, targetIndex, token);
+        if (token !== deepseekNavJumpSeq) return false;
+        if (!targetEl || !targetEl.isConnected) return false;
+
+        targetNode.element = targetEl;
+        targetEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        await new Promise((resolve) => setTimeout(resolve, 220));
+        if (token !== deepseekNavJumpSeq) return false;
+        await alignDeepSeekNodeToReadingLine(targetNode, token);
+        if (token !== deepseekNavJumpSeq) return false;
+        await new Promise((resolve) => setTimeout(resolve, 120));
+        if (token !== deepseekNavJumpSeq) return false;
+        await alignDeepSeekNodeToReadingLine(targetNode, token);
+        if (token !== deepseekNavJumpSeq) return false;
+
+        highlightMessage(targetEl);
+        scheduleActiveNodeUpdate();
+        return true;
     }
 
     function scheduleDeepSeekVirtualNodesRefresh(force = false) {
@@ -2133,13 +2673,16 @@
                 // 采用聚合后的 ID 来源，确保一轮对话仅有一个节点
                 const rawId = m.sourceMessageId || (typeof m.id === 'string' && m.id.includes('export-') ? m.id.split('export-')[1] : m.id) || String(idx + 1);
                 const id = `deepseek-user-${rawId}`;
-                
-                const element = findDeepSeekDomElementByNode({ text });
                 return {
                     id,
+                    sourceMessageId: String(rawId || ''),
                     role: 'user',
                     text,
-                    element: element || null
+                    sessionIndex: idx,
+                    rowId: '',
+                    element: null,
+                    _dsRow: null,
+                    _dsAssistantRows: []
                 };
             }).filter((m) => m.text);
 
@@ -2215,6 +2758,7 @@
             doubaoVirtualNodesCache = built;
             doubaoVirtualNodesLoaded = true;
             doubaoVirtualNodesDirty = false;
+            reconcileDoubaoPendingDomNodesWithApi();
             requestAnimationFrame(() => {
                 update();
                 kickstartActiveNodeAutoSync();
@@ -2228,6 +2772,43 @@
     }
 
     function jumpToMessage(el, nodeId) {
+        if (isQwen && nodeId) {
+            jumpToQwenNodeById(nodeId).then((ok) => {
+                if (!ok) {
+                    console.warn(`AI-Chat-Helper: 千问跳转未命中目标节点 ${nodeId}`);
+                    hideJumpToast();
+                }
+            }).catch((e) => {
+                console.warn('AI-Chat-Helper: 千问跳转异常', e);
+                hideJumpToast();
+            });
+            return true;
+        }
+        if (isDoubao && nodeId) {
+            jumpToDoubaoNodeById(nodeId).then((ok) => {
+                if (!ok) {
+                    console.warn(`AI-Chat-Helper: 豆包跳转未命中目标节点 ${nodeId}`);
+                    hideJumpToast();
+                }
+            }).catch((e) => {
+                console.warn('AI-Chat-Helper: 豆包跳转异常', e);
+                hideJumpToast();
+            });
+            return true;
+        }
+        if (isDeepSeek && nodeId) {
+            jumpToDeepSeekNodeById(nodeId).then((ok) => {
+                if (!ok) {
+                    console.warn(`AI-Chat-Helper: DeepSeek 跳转未命中目标节点 ${nodeId}`);
+                    hideJumpToast();
+                }
+            }).catch((e) => {
+                console.warn('AI-Chat-Helper: DeepSeek 跳转异常', e);
+                hideJumpToast();
+            });
+            return true;
+        }
+
         if (searchIntervalId) {
             clearInterval(searchIntervalId);
             searchIntervalId = null;
@@ -2238,18 +2819,6 @@
 
         if (isQwen && (!targetEl || !targetEl.isConnected) && node) {
             targetEl = findQwenDomElementByNode(node);
-            if (targetEl) {
-                node.element = targetEl;
-            }
-        }
-        if (isDeepSeek && (!targetEl || !targetEl.isConnected) && node) {
-            targetEl = findDeepSeekDomElementByNode(node);
-            if (targetEl) {
-                node.element = targetEl;
-            }
-        }
-        if (isDoubao && (!targetEl || !targetEl.isConnected) && node) {
-            targetEl = findDoubaoDomElementByNode(node);
             if (targetEl) {
                 node.element = targetEl;
             }
@@ -2267,12 +2836,7 @@
                 }
                 return false;
             }
-            if (isDeepSeek) {
-                return isDeepSeekElementMatchNode(element, expectedNode);
-            }
-            if (isDoubao) {
-                return isDoubaoElementMatchNode(element, expectedNode);
-            }
+            if (isDeepSeek) return false;
             // 验证内容摘要，防止跳到已被回收复用的错误位置
             const currentText = element.innerText || '';
             const expectedText = expectedNode.text || '';
@@ -2288,12 +2852,6 @@
             if (!targetEl && isQwen) {
                 targetEl = findQwenDomElementByNode(node);
             }
-            if (!targetEl && isDeepSeek) {
-                targetEl = findDeepSeekDomElementByNode(node);
-            }
-            if (!targetEl && isDoubao) {
-                targetEl = findDoubaoDomElementByNode(node);
-            }
             if (targetEl && !isElementValid(targetEl, node)) {
                 targetEl = null;
             }
@@ -2307,13 +2865,22 @@
         }
         
         const scrollEl = getScrollContainer();
-        const executeJump = () => { 
+        const executeJump = () => {
             const containerRect = (scrollEl === window || scrollEl === document.documentElement) 
                 ? { top: 0 } 
                 : scrollEl.getBoundingClientRect();
             const readingLineOffset = Math.max(10, Math.min(500, CONFIG.readingLineOffset || 150));
-            const rect = targetEl.getBoundingClientRect();
-            const targetTop = scrollEl.scrollTop + rect.top - containerRect.top - readingLineOffset;
+            const currentTop = (scrollEl === window || scrollEl === document.documentElement || scrollEl === document.scrollingElement)
+                ? (window.scrollY || document.documentElement.scrollTop || 0)
+                : (scrollEl.scrollTop || 0);
+            let alignY = null;
+            if (isDeepSeek && node) {
+                alignY = getDeepSeekNodeAlignY(node, scrollEl);
+            } else {
+                const rect = targetEl.getBoundingClientRect();
+                alignY = rect.top;
+            }
+            const targetTop = currentTop + alignY - containerRect.top - readingLineOffset;
             
             if (typeof scrollEl.scrollTo === 'function') {
                 scrollEl.scrollTo({ top: targetTop, behavior: 'smooth' });
@@ -2325,9 +2892,7 @@
         if (scrollEl) {
             executeJump();
             // DeepSeek 保留二次校正；Qwen 关闭，避免点击后被页面自动带回旧位置。
-            if (isDeepSeek && !isNodeSearching) {
-                setTimeout(() => { if(isElementValid(targetEl, node)) executeJump(); }, 300);
-            }
+            // DeepSeek 已走独立跳转链路，不在通用路径做二次校正。
         } else {
             targetEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
         }
@@ -2589,6 +3154,125 @@
         return out;
     }
 
+    function hasQwenApiNodeForDom(sourceMessageId, text) {
+        const sid = normalizeQwenMessageId(sourceMessageId || '');
+        const t = normalizeQwenTextForMatch(text || '');
+        return qwenVirtualNodesCache.some((n) => {
+            const nid = normalizeQwenMessageId(n?.sourceMessageId || n?.id || '');
+            const nt = normalizeQwenTextForMatch(n?.text || '');
+            if (sid && nid && (sid === nid || sid.includes(nid) || nid.includes(sid))) return true;
+            if (!t || !nt) return false;
+            if (nt === t) return true;
+            const p = t.slice(0, Math.min(24, t.length));
+            return Boolean(p && nt.includes(p));
+        });
+    }
+
+    function reconcileQwenPendingDomNodesWithApi() {
+        if (!Array.isArray(qwenPendingDomNodes) || !qwenPendingDomNodes.length) return;
+        const next = [];
+        const seen = new Set();
+        qwenPendingDomNodes.forEach((n) => {
+            if (!n) return;
+            const id = String(n.id || '').trim();
+            const sid = normalizeQwenMessageId(n.sourceMessageId || '');
+            const txt = normalizeQwenTextForMatch(n.text || '');
+            if (hasQwenApiNodeForDom(sid, txt)) return;
+            const key = `${sid || id}::${txt.slice(0, 64)}`;
+            if (seen.has(key)) return;
+            seen.add(key);
+            next.push(n);
+        });
+        qwenPendingDomNodes = next;
+    }
+
+    function upsertQwenPendingNodeFromDom() {
+        const rows = getQwenConversationRows();
+        let added = 0;
+        let questionIndex = -1;
+        rows.forEach((row, idx) => {
+            if (getQwenRowType(row) !== 'question') return;
+            questionIndex += 1;
+            const baseId = getQwenRowId(row);
+            const text = getQwenQuestionTextFromRow(row);
+            if (!text) return;
+            if (hasQwenApiNodeForDom(baseId, text)) return;
+            const id = `dom-pending-qwen-${baseId || idx + 1}-${hashStr(text).slice(0, 8)}`;
+            if (qwenPendingDomNodes.some((n) => String(n?.id || '') === id)) return;
+            qwenPendingDomNodes.push({
+                id,
+                sourceMessageId: baseId || '',
+                role: 'user',
+                text: normalizeQwenTextForMatch(text),
+                sessionIndex: questionIndex >= 0 ? questionIndex : idx,
+                element: null,
+                pendingDomOnly: true
+            });
+            added += 1;
+        });
+        if (added > 0) requestAnimationFrame(() => update());
+    }
+
+    function hasQwenCompletedAnswerForQuestion(baseId) {
+        if (!baseId) return false;
+        const rows = getQwenConversationRows();
+        const answerRows = rows.filter((row) => getQwenRowType(row) === 'answer' && getQwenRowId(row) === baseId);
+        if (!answerRows.length) return false;
+        return answerRows.some((row) => {
+            if (!row || !row.isConnected) return false;
+            if (row.querySelector('[aria-busy="true"], [class*="typing"], [class*="loading"], [class*="stream"], [class*="generating"]')) return false;
+            const txt = normalizeQwenTextForMatch(row.innerText || '');
+            if (!txt) return false;
+            if (/^(思考中|生成中|回答中|typing|loading)\b/i.test(txt)) return false;
+            return txt.length >= 2;
+        });
+    }
+
+    async function runQwenAutoApiRefreshFromDom() {
+        if (!isQwen || qwenAutoApiRefreshInFlight) return;
+        const now = Date.now();
+        if (now - qwenLastAutoApiRefreshAt < 1200) return;
+        const pending = qwenPendingDomNodes.filter((n) => n && n.pendingDomOnly);
+        if (!pending.length) return;
+        const ready = pending.some((n) => hasQwenCompletedAnswerForQuestion(normalizeQwenMessageId(n.sourceMessageId || '')));
+        if (!ready) return;
+
+        qwenAutoApiRefreshInFlight = true;
+        qwenLastAutoApiRefreshAt = now;
+        try {
+            const list = await getQwenMessagesByApi();
+            if (Array.isArray(list) && list.length) {
+                applyQwenApiMessagesToCache(list, 'dom-auto-refresh', getQwenSessionIdFromUrl());
+            } else {
+                scheduleQwenVirtualNodesRefresh(true);
+            }
+            reconcileQwenPendingDomNodesWithApi();
+            requestAnimationFrame(() => update());
+        } catch (e) {
+            console.warn('AI-Chat-Helper: 千问 DOM 驱动自动刷新失败', e);
+        } finally {
+            qwenAutoApiRefreshInFlight = false;
+        }
+    }
+
+    function scheduleQwenDomDrivenSync() {
+        if (!isQwen) return;
+        if (qwenDomMutationDebounceTimer) clearTimeout(qwenDomMutationDebounceTimer);
+        qwenDomMutationDebounceTimer = setTimeout(() => {
+            qwenDomMutationDebounceTimer = null;
+            try {
+                upsertQwenPendingNodeFromDom();
+                if (qwenAutoApiRefreshTimer) clearTimeout(qwenAutoApiRefreshTimer);
+                qwenAutoApiRefreshTimer = setTimeout(() => {
+                    qwenAutoApiRefreshTimer = null;
+                    runQwenAutoApiRefreshFromDom();
+                }, 900);
+            } catch (_) {
+                // ignore
+            }
+        }, 220);
+    }
+
     function getQwenConversationRows() {
         const selector = [
             '[class*="questionItem"]',
@@ -2656,11 +3340,14 @@
     function findQwenNodeBySignature(id, text, sessionIndex = -1) {
         const normalizedId = normalizeQwenMessageId(id);
         const normalizedSessionIndex = getQwenSessionIndexValue(sessionIndex);
-        if (normalizedId && nodesMap.has(normalizedId)) {
-            const byId = nodesMap.get(normalizedId);
-            if (normalizedSessionIndex === -1 || getQwenSessionIndexValue(byId?.sessionIndex) === normalizedSessionIndex) {
-                return byId;
-            }
+        if (normalizedId) {
+            const bySource = nodes.find((n) => {
+                const nid = normalizeQwenMessageId(String(n?.sourceMessageId || n?.id || ''));
+                if (nid !== normalizedId) return false;
+                if (normalizedSessionIndex === -1) return true;
+                return getQwenSessionIndexValue(n?.sessionIndex) === normalizedSessionIndex;
+            });
+            if (bySource) return bySource;
         }
 
         const normalized = normalizeQwenTextForMatch(text || '');
@@ -2673,7 +3360,7 @@
             if (!t) return;
 
             let score = 0;
-            if (normalizedId && normalizeQwenMessageId(String(n.id || '')) === normalizedId) score += 18;
+            if (normalizedId && normalizeQwenMessageId(String(n?.sourceMessageId || n?.id || '')) === normalizedId) score += 18;
             if (normalized && t === normalized) score += 14;
             if (prefix && t.includes(prefix)) score += 8;
             if (normalized && t && normalized.includes(t.slice(0, Math.min(24, t.length)))) score += 3;
@@ -2707,87 +3394,6 @@
             }
         }
         return -1;
-    }
-
-    function isLikelySameQwenNodeText(a, b) {
-        const ta = normalizeQwenTextForMatch(a || '');
-        const tb = normalizeQwenTextForMatch(b || '');
-        if (!ta || !tb) return false;
-        if (ta === tb) return true;
-        const short = ta.length <= tb.length ? ta : tb;
-        const long = ta.length > tb.length ? ta : tb;
-        if (short.length >= 12 && long.includes(short.slice(0, Math.min(24, short.length)))) return true;
-        const prefixA = ta.slice(0, Math.min(24, ta.length));
-        const prefixB = tb.slice(0, Math.min(24, tb.length));
-        return Boolean(prefixA && prefixB && prefixA === prefixB);
-    }
-
-    function normalizeQwenNodeOrder(list) {
-        if (!Array.isArray(list) || !list.length) return [];
-
-        let ordered = list.slice();
-        const rows = getQwenConversationRows().filter((row) => getQwenRowType(row) === 'question');
-        if (rows.length >= 2 && ordered.length >= 2) {
-            const firstDomText = getQwenRowText(rows[0]);
-            const lastDomText = getQwenRowText(rows[rows.length - 1]);
-            const firstNodeText = ordered[0]?.text || '';
-            const lastNodeText = ordered[ordered.length - 1]?.text || '';
-
-            const directScore =
-                (isLikelySameQwenNodeText(firstNodeText, firstDomText) ? 1 : 0) +
-                (isLikelySameQwenNodeText(lastNodeText, lastDomText) ? 1 : 0);
-            const reverseScore =
-                (isLikelySameQwenNodeText(firstNodeText, lastDomText) ? 1 : 0) +
-                (isLikelySameQwenNodeText(lastNodeText, firstDomText) ? 1 : 0);
-
-            if (reverseScore > directScore) {
-                ordered = ordered.slice().reverse();
-            }
-        }
-
-        if (rows.length && ordered.length && rows.length === ordered.length) {
-            const remaining = ordered.slice();
-            const arranged = [];
-
-            rows.forEach((row) => {
-                const rowId = getQwenRowId(row);
-                const rowText = getQwenRowText(row);
-                const rowSessionIndex = getQwenQuestionSessionIndexFromRows(rows, row);
-
-                let bestIndex = -1;
-                let bestScore = -1;
-
-                remaining.forEach((node, idx) => {
-                    let score = 0;
-                    if (rowId && String(node?.id || '') === rowId) score += 20;
-                    if (isLikelySameQwenNodeText(node?.text || '', rowText)) score += 12;
-                    const nodeSessionIndex = getQwenSessionIndexValue(node?.sessionIndex);
-                    if (rowSessionIndex !== -1 && nodeSessionIndex !== -1) {
-                        const distance = Math.abs(rowSessionIndex - nodeSessionIndex);
-                        if (distance === 0) score += 10;
-                        else if (distance === 1) score += 6;
-                        else if (distance === 2) score += 3;
-                    }
-                    if (score > bestScore) {
-                        bestScore = score;
-                        bestIndex = idx;
-                    }
-                });
-
-                if (bestIndex !== -1 && bestScore >= 8) {
-                    arranged.push(remaining.splice(bestIndex, 1)[0]);
-                }
-            });
-
-            if (arranged.length) {
-                ordered = arranged.concat(remaining);
-            }
-        }
-
-        return ordered.map((item, idx) => ({
-            ...item,
-            sessionIndex: idx
-        }));
     }
 
     function resolveQwenNodeFromRow(row, rows) {
@@ -2887,6 +3493,15 @@
         return String(text || '')
             .replace(/\s+/g, ' ')
             .replace(/[\u200B-\u200D\uFEFF]/g, '')
+            .trim();
+    }
+
+    function normalizeDoubaoMessageId(rawId) {
+        const id = String(rawId || '').trim();
+        if (!id) return '';
+        return id
+            .replace(/[-_:]?(question|answer|assistant|receive|send)$/i, '')
+            .replace(/-(u|a)-\d+$/i, '')
             .trim();
     }
 
@@ -3087,6 +3702,133 @@
         });
 
         return out;
+    }
+
+    function hasDoubaoApiNodeForDom(sourceMessageId, text) {
+        const sid = normalizeDoubaoMessageId(sourceMessageId || '');
+        const t = normalizeDoubaoTextForMatch(text || '');
+        return doubaoVirtualNodesCache.some((n) => {
+            const nid = normalizeDoubaoMessageId(n?.sourceMessageId || n?.id || '');
+            const nt = normalizeDoubaoTextForMatch(n?.text || '');
+            if (sid && nid && (sid === nid || sid.includes(nid) || nid.includes(sid))) return true;
+            if (!t || !nt) return false;
+            if (nt === t) return true;
+            const p = t.slice(0, Math.min(24, t.length));
+            return Boolean(p && nt.includes(p));
+        });
+    }
+
+    function reconcileDoubaoPendingDomNodesWithApi() {
+        if (!Array.isArray(doubaoPendingDomNodes) || !doubaoPendingDomNodes.length) return;
+        const next = [];
+        const seen = new Set();
+        doubaoPendingDomNodes.forEach((n) => {
+            if (!n) return;
+            const id = String(n.id || '').trim();
+            const sid = normalizeDoubaoMessageId(n.sourceMessageId || '');
+            const txt = normalizeDoubaoTextForMatch(n.text || '');
+            if (hasDoubaoApiNodeForDom(sid, txt)) return;
+            const key = `${sid || id}::${txt.slice(0, 64)}`;
+            if (seen.has(key)) return;
+            seen.add(key);
+            next.push(n);
+        });
+        doubaoPendingDomNodes = next;
+    }
+
+    function upsertDoubaoPendingNodeFromDom() {
+        const rows = getDoubaoConversationRows();
+        let added = 0;
+        let questionIndex = -1;
+        rows.forEach((row, idx) => {
+            if (getDoubaoRowType(row) !== 'user') return;
+            questionIndex += 1;
+            const text = getDoubaoUserTextFromRow(row);
+            if (!text) return;
+            const rowId = String(getDoubaoRowId(row) || '').trim();
+            const baseId = normalizeDoubaoMessageId(rowId);
+            if (hasDoubaoApiNodeForDom(baseId || rowId, text)) return;
+            const id = `dom-pending-doubao-${baseId || idx + 1}-${hashStr(text).slice(0, 8)}`;
+            if (doubaoPendingDomNodes.some((n) => String(n?.id || '') === id)) return;
+            doubaoPendingDomNodes.push({
+                id,
+                sourceMessageId: baseId || rowId || '',
+                role: 'user',
+                text: normalizeDoubaoTextForMatch(text),
+                sessionIndex: questionIndex >= 0 ? questionIndex : idx,
+                element: null,
+                pendingDomOnly: true
+            });
+            added += 1;
+        });
+        if (added > 0) requestAnimationFrame(() => update());
+    }
+
+    function hasDoubaoCompletedAnswerForQuestion(baseId) {
+        if (!baseId) return false;
+        const rows = getDoubaoConversationRows();
+        return rows.some((row) => {
+            if (getDoubaoRowType(row) !== 'assistant') return false;
+            const rowId = normalizeDoubaoMessageId(getDoubaoRowId(row));
+            if (!rowId || rowId !== baseId) return false;
+            if (row.querySelector('[aria-busy="true"], [class*="typing"], [class*="loading"], [class*="stream"], [class*="generating"]')) return false;
+            const txt = normalizeDoubaoTextForMatch(
+                row.querySelector('[data-testid="message_text_content"]')?.innerText
+                || row.querySelector('[data-testid="message_content"]')?.innerText
+                || row.innerText
+            );
+            if (!txt) return false;
+            if (/^(思考中|生成中|回答中|typing|loading)\b/i.test(txt)) return false;
+            return txt.length >= 2;
+        });
+    }
+
+    async function runDoubaoAutoApiRefreshFromDom() {
+        if (!isDoubao || doubaoAutoApiRefreshInFlight) return;
+        const now = Date.now();
+        if (now - doubaoLastAutoApiRefreshAt < 1200) return;
+        const pending = doubaoPendingDomNodes.filter((n) => n && n.pendingDomOnly);
+        if (!pending.length) return;
+        const ready = pending.some((n) => hasDoubaoCompletedAnswerForQuestion(normalizeDoubaoMessageId(n.sourceMessageId || '')));
+        if (!ready) return;
+
+        doubaoAutoApiRefreshInFlight = true;
+        doubaoLastAutoApiRefreshAt = now;
+        try {
+            const list = await getDoubaoMessagesByApi();
+            const built = buildDoubaoVirtualNodesFromApi(list);
+            if (Array.isArray(built) && built.length) {
+                doubaoVirtualNodesCache = built;
+                doubaoVirtualNodesLoaded = true;
+                doubaoVirtualNodesDirty = false;
+            } else {
+                scheduleDoubaoVirtualNodesRefresh(true);
+            }
+            reconcileDoubaoPendingDomNodesWithApi();
+            requestAnimationFrame(() => update());
+        } catch (e) {
+            console.warn('AI-Chat-Helper: 豆包 DOM 驱动自动刷新失败', e);
+        } finally {
+            doubaoAutoApiRefreshInFlight = false;
+        }
+    }
+
+    function scheduleDoubaoDomDrivenSync() {
+        if (!isDoubao) return;
+        if (doubaoDomMutationDebounceTimer) clearTimeout(doubaoDomMutationDebounceTimer);
+        doubaoDomMutationDebounceTimer = setTimeout(() => {
+            doubaoDomMutationDebounceTimer = null;
+            try {
+                upsertDoubaoPendingNodeFromDom();
+                if (doubaoAutoApiRefreshTimer) clearTimeout(doubaoAutoApiRefreshTimer);
+                doubaoAutoApiRefreshTimer = setTimeout(() => {
+                    doubaoAutoApiRefreshTimer = null;
+                    runDoubaoAutoApiRefreshFromDom();
+                }, 900);
+            } catch (_) {
+                // ignore
+            }
+        }, 220);
     }
 
     function isDoubaoElementMatchNode(element, node) {
@@ -3304,11 +4046,301 @@
         return resolveDoubaoNodeFromRow(bestRow, rows);
     }
 
+    function getDoubaoReadingAnchorY() {
+        const raw = Number(CONFIG?.readingLineOffset || 150);
+        return Math.max(24, Math.min(window.innerHeight - 24, Number.isFinite(raw) ? raw : 150));
+    }
+
+    function getDoubaoNodeIndexByIdOrText(id, text) {
+        const targetId = String(id || '').trim();
+        if (targetId) {
+            const byId = nodes.findIndex((n) => String(n?.id || '').trim() === targetId);
+            if (byId !== -1) return byId;
+            const bySourceId = nodes.findIndex((n) => String(n?.sourceMessageId || '').trim() === targetId);
+            if (bySourceId !== -1) return bySourceId;
+        }
+
+        const targetText = normalizeDoubaoTextForMatch(text || '');
+        if (!targetText) return -1;
+        const prefix = targetText.slice(0, Math.min(28, targetText.length));
+        let bestIdx = -1;
+        let bestScore = -1;
+        nodes.forEach((n, idx) => {
+            const t = normalizeDoubaoTextForMatch(n?.text || '');
+            if (!t) return;
+            let score = 0;
+            if (t === targetText) score += 12;
+            if (prefix && (t.includes(prefix) || targetText.includes(t.slice(0, Math.min(24, t.length))))) score += 6;
+            if (score > bestScore) {
+                bestScore = score;
+                bestIdx = idx;
+            }
+        });
+        return bestScore >= 6 ? bestIdx : -1;
+    }
+
+    function getDoubaoDomNavList() {
+        const rows = getDoubaoConversationRows();
+        const out = [];
+        rows.forEach((row) => {
+            const rowType = getDoubaoRowType(row);
+            if (rowType !== 'user') return;
+            const rowId = String(getDoubaoRowId(row) || '').trim();
+            const text = getDoubaoRowText(row);
+            const element = getDoubaoMessageBubble(row) || row;
+            const nodeIndex = getDoubaoNodeIndexByIdOrText(rowId, text);
+            out.push({
+                row,
+                rowType,
+                rowId,
+                text,
+                element,
+                nodeIndex
+            });
+        });
+        return out;
+    }
+
+    function locateDoubaoDomElementByApiNode(apiNode) {
+        if (!apiNode) return null;
+        const targetId = String(apiNode?.sourceMessageId || apiNode?.id || '').trim();
+        if (targetId) {
+            const rows = getDoubaoConversationRows();
+            for (const row of rows) {
+                const rowId = String(getDoubaoRowId(row) || '').trim();
+                if (rowId && rowId === targetId) {
+                    const bubble = getDoubaoMessageBubble(row) || row;
+                    if (bubble && bubble.isConnected) return bubble;
+                }
+            }
+        }
+        return findDoubaoDomElementByNode(apiNode);
+    }
+
+    function getDoubaoDomBoundsByApiOrder(domList = null) {
+        const source = Array.isArray(domList) ? domList : getDoubaoDomNavList();
+        const indices = source
+            .map((item) => Number(item?.nodeIndex))
+            .filter((v) => Number.isInteger(v) && v >= 0);
+        if (!indices.length) return { min: -1, max: -1 };
+        return { min: Math.min(...indices), max: Math.max(...indices) };
+    }
+
+    function getDoubaoDomProgressSignature(scrollEl) {
+        const list = getDoubaoDomNavList();
+        const firstId = list.length ? String(list[0]?.rowId || '') : '';
+        const lastId = list.length ? String(list[list.length - 1]?.rowId || '') : '';
+        const top = scrollEl && scrollEl !== window && scrollEl !== document.documentElement
+            ? Number(scrollEl.scrollTop || 0)
+            : Number(window.scrollY || 0);
+        const h = scrollEl && scrollEl !== window && scrollEl !== document.documentElement
+            ? Number(scrollEl.scrollHeight || 0)
+            : Math.max(Number(document.body?.scrollHeight || 0), Number(document.documentElement?.scrollHeight || 0));
+        return `${list.length}|${firstId}|${lastId}|${Math.round(top)}|${h}`;
+    }
+
+    function scrollDoubaoBy(scrollEl, delta) {
+        if (scrollEl && scrollEl !== window && scrollEl !== document.documentElement && typeof scrollEl.scrollBy === 'function') {
+            scrollEl.scrollBy({ top: delta, behavior: 'auto' });
+            return;
+        }
+        window.scrollBy({ top: delta, behavior: 'auto' });
+    }
+
+    async function triggerDoubaoOlderHistoryLoad(scrollEl, step, beforeSig = '', token = 0) {
+        if (token !== doubaoNavJumpSeq) return false;
+        const kick = Math.max(150, Math.round(step * 0.34));
+        scrollDoubaoBy(scrollEl, -kick);
+        await new Promise((resolve) => setTimeout(resolve, 140));
+        if (token !== doubaoNavJumpSeq) return false;
+        scrollDoubaoBy(scrollEl, -kick);
+        await new Promise((resolve) => setTimeout(resolve, 180));
+
+        const startSig = beforeSig || getDoubaoDomProgressSignature(scrollEl);
+        const startedAt = Date.now();
+        while (Date.now() - startedAt < 2400) {
+            await new Promise((resolve) => setTimeout(resolve, 140));
+            if (token !== doubaoNavJumpSeq) return false;
+            const nowSig = getDoubaoDomProgressSignature(scrollEl);
+            if (nowSig !== startSig) return true;
+        }
+        return false;
+    }
+
+    function computeDoubaoActiveIndexFromViewport() {
+        const list = getDoubaoDomNavList();
+        if (!list.length) return -1;
+        const anchor = getDoubaoReadingAnchorY();
+        let bestIndex = -1;
+        let bestDist = Infinity;
+        list.forEach((item) => {
+            const idx = Number(item?.nodeIndex);
+            if (!Number.isInteger(idx) || idx < 0) return;
+            const el = item?.element;
+            if (!el || !el.isConnected || !el.getBoundingClientRect) return;
+            const rect = el.getBoundingClientRect();
+            if (rect.bottom <= 0 || rect.top >= window.innerHeight) return;
+            const center = rect.top + rect.height / 2;
+            const dist = Math.abs(center - anchor);
+            if (dist < bestDist) {
+                bestDist = dist;
+                bestIndex = idx;
+            }
+        });
+        return bestIndex;
+    }
+
+    function getDoubaoActiveNodeByNavState() {
+        const idx = computeDoubaoActiveIndexFromViewport();
+        if (idx < 0 || idx >= nodes.length) return null;
+        return nodes[idx] || null;
+    }
+
+    async function alignDoubaoElementToReadingLine(targetEl, token = 0) {
+        const scrollEl = getScrollContainer();
+        for (let i = 0; i < 8; i += 1) {
+            if (token !== doubaoNavJumpSeq) return false;
+            if (!targetEl || !targetEl.isConnected) return false;
+            const rect = targetEl.getBoundingClientRect();
+            const anchorY = rect.top + Math.min(Math.max(rect.height * 0.35, 16), 80);
+            const delta = anchorY - getDoubaoReadingAnchorY();
+            if (Math.abs(delta) <= 8) return true;
+            scrollDoubaoBy(scrollEl, delta);
+            await new Promise((resolve) => setTimeout(resolve, i < 2 ? 180 : 95));
+        }
+        return true;
+    }
+
+    async function findDoubaoTargetWithDirectionalScroll(apiNode, targetApiIndex, token = 0) {
+        let target = locateDoubaoDomElementByApiNode(apiNode);
+        if (target) return target;
+
+        const scrollEl = getScrollContainer();
+        const viewportH = (scrollEl && scrollEl !== window && scrollEl !== document.documentElement ? scrollEl.clientHeight : window.innerHeight) || window.innerHeight;
+        const step = Math.max(220, Math.round(viewportH * 0.72));
+        const initialBounds = getDoubaoDomBoundsByApiOrder();
+        const activeIdx = nodes.findIndex((n) => String(n?.id || '') === String(activeNodeId || ''));
+        const fallbackDirection = targetApiIndex >= 0 && activeIdx >= 0 && targetApiIndex < activeIdx ? 'up' : 'down';
+        const primaryDirection = initialBounds.min !== -1
+            ? (targetApiIndex < initialBounds.min ? 'up' : (targetApiIndex > initialBounds.max ? 'down' : fallbackDirection))
+            : fallbackDirection;
+        const goingDown = primaryDirection === 'down';
+
+        let staleCount = 0;
+        let noProgressRounds = 0;
+        let lastSig = getDoubaoDomProgressSignature(scrollEl);
+        const startedAt = Date.now();
+        const maxDurationMs = 65000;
+        let rounds = 0;
+
+        while (Date.now() - startedAt < maxDurationMs) {
+            rounds += 1;
+            if (token !== doubaoNavJumpSeq) return null;
+            scrollDoubaoBy(scrollEl, goingDown ? step : -step);
+            await new Promise((resolve) => setTimeout(resolve, 185));
+            if (token !== doubaoNavJumpSeq) return null;
+
+            target = locateDoubaoDomElementByApiNode(apiNode);
+            if (target) return target;
+
+            const liveIdx = computeDoubaoActiveIndexFromViewport();
+            if (liveIdx >= 0 && liveIdx < nodes.length) {
+                const activeNode = nodes[liveIdx];
+                if (activeNode?.id && activeNode.id !== activeNodeId) {
+                    setActiveDot(activeNode.dot, activeNode.id);
+                }
+            }
+
+            const reachedOrPassed = liveIdx !== -1 && (
+                (goingDown && liveIdx >= targetApiIndex) ||
+                (!goingDown && liveIdx <= targetApiIndex)
+            );
+
+            const bounds = getDoubaoDomBoundsByApiOrder();
+            const targetOlderThanDomTop = bounds.min !== -1 && targetApiIndex < bounds.min;
+            const targetNewerThanDomBottom = bounds.max !== -1 && targetApiIndex > bounds.max;
+
+            const sigNow = getDoubaoDomProgressSignature(scrollEl);
+            staleCount = (sigNow === lastSig) ? (staleCount + 1) : 0;
+            lastSig = sigNow;
+
+            if (!goingDown && targetOlderThanDomTop) {
+                if (staleCount >= 1) {
+                    const changed = await triggerDoubaoOlderHistoryLoad(scrollEl, step, sigNow, token);
+                    if (token !== doubaoNavJumpSeq) return null;
+                    target = locateDoubaoDomElementByApiNode(apiNode);
+                    if (target) return target;
+                    if (changed) {
+                        staleCount = 0;
+                        noProgressRounds = 0;
+                    } else {
+                        noProgressRounds += 1;
+                        await new Promise((resolve) => setTimeout(resolve, 260 + Math.min(1200, noProgressRounds * 140)));
+                    }
+                }
+                continue;
+            }
+
+            if (goingDown && targetNewerThanDomBottom) {
+                if (rounds % 8 === 0) await new Promise((resolve) => setTimeout(resolve, 90));
+                continue;
+            }
+            if (!reachedOrPassed && staleCount < 3) {
+                if (rounds % 8 === 0) await new Promise((resolve) => setTimeout(resolve, 90));
+                continue;
+            }
+
+            const fineStep = Math.max(70, Math.round(step * 0.28));
+            const sign = goingDown ? 1 : -1;
+            for (let j = 0; j < 7; j += 1) {
+                if (token !== doubaoNavJumpSeq) return null;
+                scrollDoubaoBy(scrollEl, sign * fineStep);
+                await new Promise((resolve) => setTimeout(resolve, 120));
+                if (token !== doubaoNavJumpSeq) return null;
+                target = locateDoubaoDomElementByApiNode(apiNode);
+                if (target) return target;
+            }
+
+            if (!goingDown) {
+                const freshBounds = getDoubaoDomBoundsByApiOrder();
+                const stillAboveTop = freshBounds.min !== -1 && targetApiIndex < freshBounds.min;
+                if (stillAboveTop) continue;
+            }
+            if (reachedOrPassed && staleCount >= 4) break;
+        }
+        return null;
+    }
+
+    async function jumpToDoubaoNodeById(nodeId) {
+        const token = ++doubaoNavJumpSeq;
+        const targetIndex = nodes.findIndex((n) => String(n?.id || '') === String(nodeId || ''));
+        const targetNode = targetIndex >= 0 ? nodes[targetIndex] : (nodesMap.get(String(nodeId || '')) || null);
+        if (!targetNode) return false;
+
+        const targetEl = await findDoubaoTargetWithDirectionalScroll(targetNode, targetIndex, token);
+        if (token !== doubaoNavJumpSeq) return false;
+        if (!targetEl || !targetEl.isConnected) {
+            console.warn(`AI-Chat-Helper: 豆包未定位到目标 DOM 节点 [${targetIndex + 1}] ${targetNode?.sourceMessageId || targetNode?.id || ''}`);
+            return false;
+        }
+
+        targetNode.element = targetEl;
+        targetEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        await new Promise((resolve) => setTimeout(resolve, 220));
+        if (token !== doubaoNavJumpSeq) return false;
+        await alignDoubaoElementToReadingLine(targetEl, token);
+        if (token !== doubaoNavJumpSeq) return false;
+
+        highlightMessage(targetEl);
+        scheduleActiveNodeUpdate();
+        return true;
+    }
+
     function findQwenDomElementByNode(node) {
         if (!node || !node.text) return null;
 
         const candidates = getQwenUserDomCandidates();
-        const targetId = normalizeQwenMessageId(node.id);
+        const targetId = normalizeQwenMessageId(node.sourceMessageId || node.id);
         if (targetId) {
             const byId = candidates.find((c) => normalizeQwenMessageId(c.id) === targetId);
             if (byId?.element) return byId.element;
@@ -3321,7 +4353,6 @@
         const targetText = normalizeQwenTextForMatch(node.text);
         const targetPrefix = targetText.slice(0, Math.min(48, targetText.length));
         const targetMiddle = targetText.slice(Math.max(0, Math.floor(targetText.length / 2) - 18), Math.floor(targetText.length / 2) + 18);
-        const targetSessionIndex = getQwenSessionIndexValue(node.sessionIndex);
 
         let bestEl = null;
         let bestScore = -1;
@@ -3344,21 +4375,286 @@
                 if (a && b && a === b) score += 2;
             }
 
-            const candidateSessionIndex = getQwenSessionIndexValue(c.sessionIndex);
-            if (targetSessionIndex !== -1 && candidateSessionIndex !== -1) {
-                const distance = Math.abs(candidateSessionIndex - targetSessionIndex);
-                if (distance === 0) score += 18;
-                else if (distance === 1) score += 10;
-                else if (distance === 2) score += 5;
-            }
-
             if (score > bestScore) {
                 bestScore = score;
                 bestEl = bubble;
             }
         });
 
-        return bestScore >= 10 ? bestEl : null;
+        return bestScore >= 8 ? bestEl : null;
+    }
+
+    function getQwenReadingAnchorY() {
+        const raw = Number(CONFIG?.readingLineOffset || 150);
+        return Math.max(24, Math.min(window.innerHeight - 24, Number.isFinite(raw) ? raw : 150));
+    }
+
+    function getQwenNodeIndexByIdOrText(id, text) {
+        const targetId = normalizeQwenMessageId(id || '');
+        if (targetId) {
+            const byId = nodes.findIndex((n) => normalizeQwenMessageId(n?.id || '') === targetId);
+            if (byId !== -1) return byId;
+            const bySourceId = nodes.findIndex((n) => normalizeQwenMessageId(n?.sourceMessageId || '') === targetId);
+            if (bySourceId !== -1) return bySourceId;
+        }
+        const targetText = normalizeQwenTextForMatch(text || '');
+        if (!targetText) return -1;
+        const prefix = targetText.slice(0, Math.min(28, targetText.length));
+        let bestIdx = -1;
+        let bestScore = -1;
+        nodes.forEach((n, idx) => {
+            const t = normalizeQwenTextForMatch(n?.text || '');
+            if (!t) return;
+            let score = 0;
+            if (t === targetText) score += 12;
+            if (prefix && (t.includes(prefix) || targetText.includes(t.slice(0, Math.min(24, t.length))))) score += 6;
+            if (score > bestScore) {
+                bestScore = score;
+                bestIdx = idx;
+            }
+        });
+        return bestScore >= 6 ? bestIdx : -1;
+    }
+
+    function getQwenDomBoundsByApiOrder() {
+        const candidates = getQwenUserDomCandidates();
+        if (!candidates.length) return { min: -1, max: -1 };
+        const indices = candidates
+            .map((c) => getQwenNodeIndexByIdOrText(c?.id || '', c?.text || ''))
+            .filter((v) => Number.isInteger(v) && v >= 0);
+        if (!indices.length) return { min: -1, max: -1 };
+        return { min: Math.min(...indices), max: Math.max(...indices) };
+    }
+
+    function getQwenDomProgressSignature(scrollEl) {
+        const rows = getQwenConversationRows();
+        const firstId = rows.length ? getQwenRowId(rows[0]) : '';
+        const lastId = rows.length ? getQwenRowId(rows[rows.length - 1]) : '';
+        const top = scrollEl && scrollEl !== window ? Number(scrollEl.scrollTop || 0) : Number(window.scrollY || 0);
+        const h = scrollEl && scrollEl !== window
+            ? Number(scrollEl.scrollHeight || 0)
+            : Math.max(Number(document.body?.scrollHeight || 0), Number(document.documentElement?.scrollHeight || 0));
+        return `${rows.length}|${firstId}|${lastId}|${Math.round(top)}|${h}`;
+    }
+
+    function scrollQwenBy(scrollEl, delta) {
+        if (scrollEl && scrollEl !== window && typeof scrollEl.scrollBy === 'function') {
+            scrollEl.scrollBy({ top: delta, behavior: 'auto' });
+            return;
+        }
+        window.scrollBy({ top: delta, behavior: 'auto' });
+    }
+
+    async function alignQwenElementToReadingLine(targetEl, token) {
+        const scrollEl = getScrollContainer();
+        for (let i = 0; i < 8; i += 1) {
+            if (token !== qwenNavJumpSeq) return false;
+            if (!targetEl || !targetEl.isConnected) return false;
+            const rect = targetEl.getBoundingClientRect();
+            const anchorY = rect.top + Math.min(Math.max(rect.height * 0.35, 16), 80);
+            const delta = anchorY - getQwenReadingAnchorY();
+            if (Math.abs(delta) <= 8) return true;
+            scrollQwenBy(scrollEl, delta);
+            await new Promise((resolve) => setTimeout(resolve, i < 2 ? 180 : 90));
+        }
+        return true;
+    }
+
+    function computeQwenActiveApiIndexFromViewport() {
+        const scrollEl = getScrollContainer();
+        const activeNode = getQwenActiveNodeByConversationState(scrollEl);
+        if (activeNode?.id) {
+            const idx = nodes.findIndex((n) => String(n?.id || '') === String(activeNode.id));
+            if (idx >= 0) return idx;
+        }
+        if (activeNodeId) {
+            const idx = nodes.findIndex((n) => String(n?.id || '') === String(activeNodeId));
+            if (idx >= 0) return idx;
+        }
+        return -1;
+    }
+
+    function inferQwenSearchDirection(targetApiIndex) {
+        const liveIdx = computeQwenActiveApiIndexFromViewport();
+        if (liveIdx !== -1) return targetApiIndex >= liveIdx ? 'down' : 'up';
+        return 'down';
+    }
+
+    async function triggerQwenOlderHistoryLoad(scrollEl, step, beforeSig = '', token = 0) {
+        if (token !== qwenNavJumpSeq) return false;
+        const kick = Math.max(150, Math.round(step * 0.34));
+        scrollQwenBy(scrollEl, -kick);
+        await new Promise((resolve) => setTimeout(resolve, 140));
+        if (token !== qwenNavJumpSeq) return false;
+        scrollQwenBy(scrollEl, -kick);
+        await new Promise((resolve) => setTimeout(resolve, 180));
+
+        const startSig = beforeSig || getQwenDomProgressSignature(scrollEl);
+        const startedAt = Date.now();
+        while (Date.now() - startedAt < 2300) {
+            await new Promise((resolve) => requestAnimationFrame(() => resolve()));
+            await new Promise((resolve) => setTimeout(resolve, 130));
+            if (token !== qwenNavJumpSeq) return false;
+            const nowSig = getQwenDomProgressSignature(scrollEl);
+            if (nowSig !== startSig) return true;
+        }
+        return false;
+    }
+
+    async function findQwenTargetWithDirectionalScroll(targetNode, targetApiIndex, token = 0) {
+        let targetEl = findQwenDomElementByNode(targetNode);
+        if (targetEl && targetEl.isConnected) return targetEl;
+
+        const scrollEl = getScrollContainer();
+        const viewportH = ((scrollEl && scrollEl !== window ? scrollEl.clientHeight : window.innerHeight) || window.innerHeight);
+        const step = Math.max(220, Math.round(viewportH * 0.72));
+        const initialBounds = getQwenDomBoundsByApiOrder();
+        const primaryDirection = initialBounds.min !== -1
+            ? (targetApiIndex < initialBounds.min ? 'up' : (targetApiIndex > initialBounds.max ? 'down' : inferQwenSearchDirection(targetApiIndex)))
+            : inferQwenSearchDirection(targetApiIndex);
+        const goingDown = primaryDirection === 'down';
+
+        let staleCount = 0;
+        let noProgressRounds = 0;
+        let lastSig = getQwenDomProgressSignature(scrollEl);
+        const startedAt = Date.now();
+        const maxDurationMs = 600000;
+        let rounds = 0;
+
+        while (Date.now() - startedAt < maxDurationMs) {
+            rounds += 1;
+            if (token !== qwenNavJumpSeq) return null;
+            scrollQwenBy(scrollEl, goingDown ? step : -step);
+            await new Promise((resolve) => setTimeout(resolve, 180));
+            await new Promise((resolve) => requestAnimationFrame(() => resolve()));
+            if (token !== qwenNavJumpSeq) return null;
+
+            targetEl = findQwenDomElementByNode(targetNode);
+            if (targetEl && targetEl.isConnected) return targetEl;
+
+            const liveIdx = computeQwenActiveApiIndexFromViewport();
+            if (liveIdx !== -1 && liveIdx < nodes.length) {
+                const liveNode = nodes[liveIdx];
+                if (liveNode?.id && liveNode.id !== activeNodeId) {
+                    setActiveDot(liveNode.dot, liveNode.id);
+                }
+            }
+            const activeDistance = liveIdx !== -1 ? Math.abs(liveIdx - targetApiIndex) : Number.POSITIVE_INFINITY;
+            const reachedOrPassed = liveIdx !== -1 && (
+                (goingDown && liveIdx >= targetApiIndex) ||
+                (!goingDown && liveIdx <= targetApiIndex)
+            );
+
+            const bounds = getQwenDomBoundsByApiOrder();
+            const targetOlderThanDomTop = bounds.min !== -1 && targetApiIndex < bounds.min;
+            const targetNewerThanDomBottom = bounds.max !== -1 && targetApiIndex > bounds.max;
+
+            const sigNow = getQwenDomProgressSignature(scrollEl);
+            staleCount = (sigNow === lastSig) ? (staleCount + 1) : 0;
+            lastSig = sigNow;
+
+            if (liveIdx === targetApiIndex) {
+                const probeStep = Math.max(48, Math.round(step * 0.16));
+                for (let p = 0; p < 8; p += 1) {
+                    if (token !== qwenNavJumpSeq) return null;
+                    targetEl = findQwenDomElementByNode(targetNode);
+                    if (targetEl && targetEl.isConnected) return targetEl;
+                    scrollQwenBy(scrollEl, goingDown ? probeStep : -probeStep);
+                    await new Promise((resolve) => setTimeout(resolve, 110));
+                    await new Promise((resolve) => requestAnimationFrame(() => resolve()));
+                }
+                if (token !== qwenNavJumpSeq) return null;
+                targetEl = findQwenDomElementByNode(targetNode);
+                if (targetEl && targetEl.isConnected) return targetEl;
+            }
+
+            if (!goingDown && targetOlderThanDomTop) {
+                if (staleCount >= 1) {
+                    const changed = await triggerQwenOlderHistoryLoad(scrollEl, step, sigNow, token);
+                    await new Promise((resolve) => requestAnimationFrame(() => resolve()));
+                    if (token !== qwenNavJumpSeq) return null;
+                    targetEl = findQwenDomElementByNode(targetNode);
+                    if (targetEl && targetEl.isConnected) return targetEl;
+                    if (changed) {
+                        staleCount = 0;
+                        noProgressRounds = 0;
+                    } else {
+                        noProgressRounds += 1;
+                        await new Promise((resolve) => setTimeout(resolve, 260 + Math.min(1400, noProgressRounds * 140)));
+                    }
+                }
+                continue;
+            }
+
+            if (goingDown && targetNewerThanDomBottom) {
+                if (rounds % 8 === 0) await new Promise((resolve) => setTimeout(resolve, 90));
+                continue;
+            }
+            if (!reachedOrPassed && activeDistance > 2 && staleCount < 3) {
+                if (rounds % 8 === 0) await new Promise((resolve) => setTimeout(resolve, 90));
+                continue;
+            }
+
+            const fineStep = Math.max(70, Math.round(step * 0.28));
+            const sign = goingDown ? 1 : -1;
+            for (let j = 0; j < 7; j += 1) {
+                if (token !== qwenNavJumpSeq) return null;
+                scrollQwenBy(scrollEl, sign * fineStep);
+                await new Promise((resolve) => setTimeout(resolve, 120));
+                await new Promise((resolve) => requestAnimationFrame(() => resolve()));
+                if (token !== qwenNavJumpSeq) return null;
+                targetEl = findQwenDomElementByNode(targetNode);
+                if (targetEl && targetEl.isConnected) return targetEl;
+            }
+
+            if (!goingDown) {
+                const beforeLoadSig = getQwenDomProgressSignature(scrollEl);
+                const changed = await triggerQwenOlderHistoryLoad(scrollEl, Math.max(step, fineStep), beforeLoadSig, token);
+                await new Promise((resolve) => requestAnimationFrame(() => resolve()));
+                if (token !== qwenNavJumpSeq) return null;
+                targetEl = findQwenDomElementByNode(targetNode);
+                if (targetEl && targetEl.isConnected) return targetEl;
+                if (changed) {
+                    staleCount = 0;
+                    noProgressRounds = 0;
+                    continue;
+                }
+                noProgressRounds += 1;
+                const finalBounds = getQwenDomBoundsByApiOrder();
+                if (finalBounds.min !== -1 && targetApiIndex < finalBounds.min) {
+                    await new Promise((resolve) => setTimeout(resolve, 260 + Math.min(1400, noProgressRounds * 140)));
+                    continue;
+                }
+            }
+
+            if (!goingDown) {
+                const finalBounds = getQwenDomBoundsByApiOrder();
+                const stillAboveTop = finalBounds.min !== -1 && targetApiIndex < finalBounds.min;
+                if (stillAboveTop) continue;
+            }
+
+            if (reachedOrPassed && staleCount >= 4) break;
+        }
+        return null;
+    }
+
+    async function jumpToQwenNodeById(nodeId) {
+        const token = ++qwenNavJumpSeq;
+        const targetIndex = nodes.findIndex((n) => String(n?.id || '') === String(nodeId || ''));
+        const targetNode = targetIndex >= 0 ? nodes[targetIndex] : (nodesMap.get(String(nodeId)) || null);
+        if (!targetNode) return false;
+        const el = await findQwenTargetWithDirectionalScroll(targetNode, targetIndex, token);
+        if (token !== qwenNavJumpSeq) return false;
+        if (!el || !el.isConnected) return false;
+        targetNode.element = el;
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        await new Promise((resolve) => setTimeout(resolve, 220));
+        if (token !== qwenNavJumpSeq) return false;
+        await alignQwenElementToReadingLine(el, token);
+        if (token !== qwenNavJumpSeq) return false;
+        highlightMessage(el);
+        scheduleActiveNodeUpdate();
+        return true;
     }
 
     function scheduleQwenVirtualNodesRefresh(force = false) {
@@ -3430,9 +4726,11 @@
 
         const built = userMsgs.map((m, idx) => {
             const id = normalizeQwenMessageId(String(m.id || `qwen-user-${idx + 1}`));
+            const sourceMessageId = normalizeQwenMessageId(String(m?.sourceMessageId || m?.id || id || ''));
             const text = String(m.text || '').trim();
             return {
                 id,
+                sourceMessageId,
                 role: 'user',
                 text,
                 sessionIndex: getQwenSessionIndexValue(m.sessionIndex) !== -1 ? getQwenSessionIndexValue(m.sessionIndex) : idx,
@@ -3445,18 +4743,18 @@
             return false;
         }
 
-        const normalizedBuilt = normalizeQwenNodeOrder(built);
-        qwenVirtualNodesCache = normalizedBuilt;
+        qwenVirtualNodesCache = built.slice();
         qwenVirtualNodesSessionId = normalizedSourceSessionId || currentSessionId || '';
         qwenVirtualNodesLoaded = true;
         qwenVirtualNodesDirty = false;
+        reconcileQwenPendingDomNodesWithApi();
 
-        const changed = syncQwenNodesFromApi(normalizedBuilt);
+        const changed = syncQwenNodesFromApi(built);
         qwenNodeLog('apply:cache-updated', {
             source,
             apiCount: apiMsgs.length,
             userCount: userMsgs.length,
-            builtCount: normalizedBuilt.length,
+            builtCount: built.length,
             changed
         });
 
@@ -3505,12 +4803,33 @@
     function getScrollContainer() {
         // 自动探测当前 AI 平台的主聊天滚动容器
         const host = window.location.hostname;
+        if (host.includes('deepseek.com')) {
+            const dsCandidates = [
+                document.querySelector('.ds-virtual-list-scroll-view'),
+                document.querySelector('.ds-virtual-list')
+            ].filter(Boolean);
+            for (const el of dsCandidates) {
+                const oy = getComputedStyle(el).overflowY || '';
+                if ((oy === 'auto' || oy === 'scroll') && el.scrollHeight > el.clientHeight + 4) {
+                    return el;
+                }
+            }
+            return document.scrollingElement || document.documentElement || document.body || window;
+        }
         if (host.includes('qianwen.com') || host.includes('aliyun.com')) {
-            const qwenInner = document.querySelector('[class*="chatContent"]') || document.querySelector('[class*="messageList"]');
-            if (qwenInner) {
-                const realScroll = findNearestScrollableAncestor(qwenInner);
-                if (realScroll) return realScroll;
-                return qwenInner;
+            const row = document.querySelector('[data-msgid$="-question"], [data-msg-id$="-question"], [class*="questionItem"], [class*="message-item"]');
+            if (row) {
+                const byRow = findNearestScrollableAncestor(row);
+                if (byRow) return byRow;
+            }
+            const qwenCandidates = [
+                document.querySelector('[class*="chatContent"]'),
+                document.querySelector('[class*="messageList"]'),
+                document.querySelector('main')
+            ].filter(Boolean);
+            for (const base of qwenCandidates) {
+                const sc = findNearestScrollableAncestor(base);
+                if (sc) return sc;
             }
         }
         if (host.includes('doubao.com')) {
@@ -3536,10 +4855,8 @@
                 }
             }
         }
-        // 备选方案
-        return document.querySelector('main')?.parentElement || 
-               document.querySelector('[class*="message-list"]') || 
-               window;
+        // 备选方案：使用文档滚动根，避免误滚到页面容器外层。
+        return document.scrollingElement || document.documentElement || document.body || window;
     }
 
     function triggerInitialScrollJump() {
@@ -3608,6 +4925,9 @@
                 || null;
             applyDotActiveVisual(dot, currentNode);
         }
+        if (jumpToastPendingNodeId && String(jumpToastPendingNodeId) === String(nodeId) && isJumpTargetArrived(nodeId)) {
+            scheduleJumpToastHideAfterArrived(nodeId);
+        }
     }
 
     function buildDot(node, topPx) {
@@ -3644,6 +4964,25 @@
      * 命中目标节点后立即停止并执行精确跳转
      */
     function startNodeSearch(targetId) {
+        if (isQwen) {
+            jumpToQwenNodeById(targetId).catch((e) => {
+                console.warn('AI-Chat-Helper: 千问深度跳转异常', e);
+            });
+            return;
+        }
+        if (isDoubao) {
+            jumpToDoubaoNodeById(targetId).catch((e) => {
+                console.warn('AI-Chat-Helper: 豆包深度跳转异常', e);
+            });
+            return;
+        }
+        if (isDeepSeek) {
+            jumpToDeepSeekNodeById(targetId).catch((e) => {
+                console.warn('AI-Chat-Helper: DeepSeek 深度跳转异常', e);
+            });
+            return;
+        }
+
         // 先清理可能存在的旧计时器
         if (searchIntervalId) {
             clearInterval(searchIntervalId);
@@ -3656,8 +4995,7 @@
         const targetIdx = nodes.findIndex(n => n.id === targetId);
         const activeIdx = nodes.findIndex(n => n.id === activeNodeId);
         const searchDirection = (targetIdx !== -1 && activeIdx !== -1 && targetIdx > activeIdx) ? 'down' : 'up';
-        const isDoubaoDownSearch = isDoubao && searchDirection === 'down';
-        const TICK_MS = isQwen ? 110 : (isDoubaoDownSearch ? 90 : (isDoubao ? 140 : 160));
+        const TICK_MS = isQwen ? 110 : 160;
         const MAX_ATTEMPTS = 260;
         const stopSearch = () => {
             if (searchIntervalId) {
@@ -3685,6 +5023,7 @@
         const onUserInterrupt = () => {
             console.log('AI-Chat-Helper: 用户手动交互，中止自动搜寻。');
             stopSearch();
+            hideJumpToast();
         };
 
         window.addEventListener('wheel', onUserInterrupt, true);
@@ -3711,28 +5050,13 @@
                     targetNode.element = rematched;
                 }
             }
-            if (isDeepSeek && targetNode && (!targetNode.element || !document.body.contains(targetNode.element))) {
-                const rematched = findDeepSeekDomElementByNode(targetNode);
-                if (rematched && isDirectionMatched(rematched)) {
-                    targetNode.element = rematched;
-                }
-            }
-            const shouldAttemptDoubaoRematch = isDoubaoDownSearch ? (attempts <= 2 || attempts % 2 === 0) : true;
-            if (shouldAttemptDoubaoRematch && isDoubao && targetNode && (!targetNode.element || !document.body.contains(targetNode.element) || !isDoubaoElementMatchNode(targetNode.element, targetNode))) {
-                const rematched = findDoubaoDomElementByNode(targetNode);
-                if (rematched && isDirectionMatched(rematched)) {
-                    targetNode.element = rematched;
-                }
-            }
-
             // 检查是否已经找到节点
             const found = targetNode
                 && targetNode.element
                 && document.body.contains(targetNode.element)
-                && ((!isQwen && !isDeepSeek && !isDoubao)
+                && ((!isQwen)
                     || (isQwen && isQwenElementMatchNode(targetNode.element, targetNode) && isDirectionMatched(targetNode.element))
-                    || (isDeepSeek && isDeepSeekElementMatchNode(targetNode.element, targetNode) && isDirectionMatched(targetNode.element))
-                    || (isDoubao && isDoubaoElementMatchNode(targetNode.element, targetNode) && isDirectionMatched(targetNode.element)));
+                );
 
             if (found) {
                 stopSearch();
@@ -3753,23 +5077,20 @@
             if (attempts > MAX_ATTEMPTS) {
                 stopSearch();
                 console.warn(` AI-Chat-Helper: ✗ 搜寻超时 (${MAX_ATTEMPTS} 次)，未找到节点 ${targetId}`);
+                hideJumpToast();
                 return;
             }
 
-            if (!isDoubaoDownSearch && (attempts === 1 || attempts % 6 === 0)) {
+            if (attempts === 1 || attempts % 6 === 0) {
                 console.log(` AI-Chat-Helper: 搜寻中 (${attempts}/${MAX_ATTEMPTS}, dir=${searchDirection})...`);
             }
 
             // 重新探测滚动容器（容器可能在 SPA 路由后变化）
             const scrollEl = getScrollContainer();
             if (scrollEl && scrollEl !== window && typeof scrollEl.scrollTo === 'function') {
-                const ratio = isQwen
-                    ? 0.42
-                    : (isDoubaoDownSearch ? 0.46 : 0.55);
+                const ratio = isQwen ? 0.42 : 0.55;
                 const baseStep = Math.floor((scrollEl.clientHeight || 700) * ratio);
-                const step = isDoubaoDownSearch
-                    ? Math.min(380, Math.max(140, baseStep))
-                    : Math.min(460, Math.max(160, baseStep));
+                const step = Math.min(460, Math.max(160, baseStep));
                 const delta = searchDirection === 'down' ? step : -step;
                 // 搜寻阶段强调“连续快速推进”，使用 auto 避免 smooth 缓动叠加导致拖尾。
                 scrollEl.scrollBy({
@@ -3778,13 +5099,9 @@
                 });
             } else {
                 const viewportH = window.innerHeight || 800;
-                const ratio = isQwen
-                    ? 0.42
-                    : (isDoubaoDownSearch ? 0.46 : 0.55);
+                const ratio = isQwen ? 0.42 : 0.55;
                 const baseStep = Math.floor(viewportH * ratio);
-                const step = isDoubaoDownSearch
-                    ? Math.min(380, Math.max(140, baseStep))
-                    : Math.min(460, Math.max(160, baseStep));
+                const step = Math.min(460, Math.max(160, baseStep));
                 const delta = searchDirection === 'down' ? step : -step;
                 window.scrollBy({
                     top: delta,
@@ -3793,8 +5110,7 @@
             }
 
             // 自动搜寻期间强制同步一次激活节点，提升过程反馈
-            const shouldSyncActiveEveryTick = !isDoubaoDownSearch;
-            if (shouldSyncActiveEveryTick || attempts % 4 === 0) {
+            if (attempts % 4 === 0) {
                 requestAnimationFrame(() => {
                     scheduleActiveNodeUpdate();
                 });
@@ -3920,9 +5236,15 @@
             }
 
             const toast = document.createElement('div');
-            toast.style.cssText = `position:fixed;bottom:80px;left:50%;transform:translateX(-50%);background:rgba(30, 30, 40, 0.92);color:#fff;font-size:13px;padding:14px 28px;border-radius:30px;z-index:20000;display:flex;align-items:center;gap:12px;backdrop-filter:blur(10px);box-shadow:0 10px 40px rgba(0,0,0,0.5);border:1px solid rgba(255,255,255,0.1);transition:opacity 0.3s;`;
-            toast.innerHTML = `<div style="width:18px;height:18px;flex:none;border-radius:999px;border:2px solid rgba(116,192,252,.35);border-top-color:#4dabf7;animation:ai-nodes-spin .9s linear infinite;"></div><div style="min-width:340px;"><div id="load-all-toast-msg">准备导出：正在回溯历史记录...</div><div style="margin-top:8px;height:6px;background:rgba(255,255,255,0.18);border-radius:99px;overflow:hidden;"><div id="load-all-toast-bar" style="height:100%;width:0%;background:linear-gradient(90deg,#4dabf7,#74c0fc);transition:width .25s ease;"></div></div><div id="load-all-toast-sub" style="margin-top:6px;font-size:12px;color:rgba(255,255,255,.75);">轮次: 0 / ${MAX_TICKS} · 已识别消息: 0 · 到顶确认: 0/${STABLE_ZERO_TARGET}</div></div>`;
+            const toastThemeBlueRgb = { r: 37, g: 99, b: 235 };
+            toast.style.cssText = `position:fixed;bottom:80px;left:50%;transform:translateX(-50%) translateY(-10px);opacity:0;background:rgba(255,255,255,0.5);color:rgba(0,0,0,0.92);font-size:13px;padding:14px 24px;border-radius:20px;border:none;z-index:20000;display:flex;align-items:center;gap:12px;backdrop-filter:blur(14px) saturate(1.12);-webkit-backdrop-filter:blur(14px) saturate(1.12);box-shadow:0 14px 38px rgba(15,23,42,0.12);transition:opacity .28s ease, transform .28s ease;`;
+            toast.innerHTML = `<div style="width:18px;height:18px;flex:none;border-radius:999px;background:conic-gradient(from 0deg,${rgbToRgbaText(toastThemeBlueRgb, .2)} 0deg,${rgbToRgbaText(toastThemeBlueRgb, .95)} 320deg,${rgbToRgbaText(toastThemeBlueRgb, .2)} 360deg);mask:radial-gradient(farthest-side,transparent calc(100% - 2px),#000 calc(100% - 1px));-webkit-mask:radial-gradient(farthest-side,transparent calc(100% - 2px),#000 calc(100% - 1px));animation:ai-nodes-spin .9s linear infinite;"></div><div style="min-width:340px;"><div id="load-all-toast-msg" style="color:rgba(0,0,0,0.9);">准备导出：正在回溯历史记录...</div><div style="margin-top:8px;height:6px;background:${rgbToRgbaText(toastThemeBlueRgb, 0.14)};border-radius:99px;overflow:hidden;"><div id="load-all-toast-bar" style="height:100%;width:0%;background:${rgbToRgbaText(toastThemeBlueRgb, .86)};transition:width .25s ease;"></div></div><div id="load-all-toast-sub" style="margin-top:6px;font-size:12px;color:rgba(0,0,0,0.85);">轮次: 0 / ${MAX_TICKS} · 已识别消息: 0 · 到顶确认: 0/${STABLE_ZERO_TARGET}</div></div>`;
             document.body.appendChild(toast);
+            requestAnimationFrame(() => {
+                if (!toast.isConnected) return;
+                toast.style.opacity = '1';
+                toast.style.transform = 'translateX(-50%) translateY(0)';
+            });
 
             const toastMsg = toast.querySelector('#load-all-toast-msg');
             const toastBar = toast.querySelector('#load-all-toast-bar');
@@ -3968,15 +5290,15 @@
                 clearInterval(intervalId);
                 isHistoryFullyLoaded = true; // 标记历史已全量加载
                 if (toastMsg) {
-                    toastMsg.style.color = '#51cf66';
+                    toastMsg.style.color = 'rgba(0,0,0,0.9)';
                     toastMsg.textContent = '对话数据准备就绪';
                 }
                 if (toastBar) {
                     toastBar.style.width = '100%';
-                    toastBar.style.background = 'linear-gradient(90deg,#51cf66,#69db7c)';
+                    toastBar.style.background = `linear-gradient(90deg,${rgbToRgbaText(toastThemeBlueRgb, 0.94)},${rgbToRgbaText(mixRgb(toastThemeBlueRgb, { r: 255, g: 255, b: 255 }, 0.28), 0.97)})`;
                 }
                 if (toastSub) {
-                    toastSub.style.color = 'rgba(166, 255, 189, 0.9)';
+                    toastSub.style.color = 'rgba(0,0,0,0.85)';
                     toastSub.innerText = `完成：累计识别消息 ${maxSeenMessageCount} 条`;
                 }
                 if (triggerBtn) {
@@ -3998,6 +5320,7 @@
                             triggerBtn.textContent = originalBtnText || '加载全部历史';
                         }
                         toast.style.opacity = '0';
+                        toast.style.transform = 'translateX(-50%) translateY(-10px)';
                         setTimeout(() => {
                             if (toast.isConnected) toast.remove();
                             resolve(); 
@@ -4011,14 +5334,6 @@
 
     function render() {
         if (!ensureNavigatorMounted()) return;
-        if (isQwen && Array.isArray(nodes) && nodes.length) {
-            const normalizedNodes = normalizeQwenNodeOrder(nodes);
-            const orderChanged = normalizedNodes.length === nodes.length && normalizedNodes.some((item, idx) => item?.id !== nodes[idx]?.id);
-            if (orderChanged) {
-                nodes = normalizedNodes;
-                nodesMap = new Map(normalizedNodes.map((item) => [String(item.id), item]));
-            }
-        }
         if (isQwen) {
             qwenNodeLog('render:start', {
                 nodes: nodes.length,
@@ -4282,7 +5597,14 @@
     }
 
     function syncDeepSeekNodesFromApi(currentBatch) {
-        if (!Array.isArray(currentBatch) || !deepseekVirtualNodesLoaded) return false;
+        if (!Array.isArray(currentBatch)) return false;
+        if (!currentBatch.length) {
+            if (!nodes.length && nodesMap.size === 0) return false;
+            nodes = [];
+            nodesMap = new Map();
+            if (activeNodeId) activeNodeId = null;
+            return true;
+        }
         
         let hasAnyChange = false;
         if (nodes.length !== currentBatch.length) {
@@ -4300,12 +5622,14 @@
             nodes = [...currentBatch];
             nodesMap = new Map(nodes.map(n => [String(n.id), n]));
         } else {
-            // 更新元素引用以保持激活状态同步
+            // 更新元素与分组引用以保持激活状态同步
             currentBatch.forEach(msg => {
                 const node = nodesMap.get(String(msg.id));
-                if (node && msg.element) {
-                    node.element = msg.element;
-                }
+                if (!node) return;
+                node.element = msg.element || null;
+                node.rowId = String(msg.rowId || '');
+                node._dsRow = msg._dsRow || null;
+                node._dsAssistantRows = Array.isArray(msg._dsAssistantRows) ? msg._dsAssistantRows : [];
             });
         }
         
@@ -4349,7 +5673,7 @@
 
     function syncQwenNodesFromApi(currentBatch) {
         if (!Array.isArray(currentBatch) || !currentBatch.length) return false;
-        const normalizedBatch = normalizeQwenNodeOrder(currentBatch);
+        const normalizedBatch = currentBatch.slice();
         const qRows = getQwenConversationRows().filter((row) => getQwenRowType(row) === 'question');
 
         // 节点显示兜底：若 API 文本缺少附件信息，使用 DOM 问题行文本（含附件名）回填。
@@ -4391,6 +5715,7 @@
                 ...(prev || {}),
                 ...msg,
                 id,
+                sourceMessageId: normalizeQwenMessageId(String(msg?.sourceMessageId || prev?.sourceMessageId || id)),
                 role: 'user',
                 text,
                 // 千问轨道数据只依赖 API，element 不参与节点生成/排序
@@ -4530,6 +5855,7 @@
             setTimeout(() => scheduleQwenVirtualNodesRefresh(true), 120);
             setTimeout(() => scheduleQwenVirtualNodesRefresh(), 600);
             setTimeout(() => scheduleQwenVirtualNodesRefresh(), 1200);
+            setTimeout(() => scheduleQwenDomDrivenSync(), 420);
             setTimeout(() => maybeRunQwenInitialScrollUnlock(), 1200);
         }
         if (isDeepSeek) {
@@ -4547,6 +5873,7 @@
                 setTimeout(() => scheduleDoubaoVirtualNodesRefresh(true), 300);
                 setTimeout(() => scheduleDoubaoVirtualNodesRefresh(), 1200);
             }
+            setTimeout(() => scheduleDoubaoDomDrivenSync(), 420);
             setTimeout(() => kickstartActiveNodeAutoSync(12, 180), 320);
         }
         setTimeout(bindConversationScrollListener, 160);
@@ -4556,6 +5883,8 @@
     }
 
     const observer = new MutationObserver(() => {
+        if (isQwen) scheduleQwenDomDrivenSync();
+        if (isDoubao) scheduleDoubaoDomDrivenSync();
         if (ticking) return;
         ticking = true;
 
@@ -4727,7 +6056,7 @@
         if (isQwen || isDeepSeek || isDoubao) {
             const node = isQwen
                 ? getQwenActiveNodeByConversationState(scrollEl)
-                : (isDeepSeek ? getDeepSeekActiveNodeByConversationState(scrollEl) : getDoubaoActiveNodeByConversationState(scrollEl));
+                : (isDeepSeek ? getDeepSeekActiveNodeByConversationState(scrollEl) : getDoubaoActiveNodeByNavState());
             const resolvedNode = node || (nodes.length === 1 ? nodes[0] : null);
             if (resolvedNode && resolvedNode.id !== activeNodeId) {
                 setActiveDot(resolvedNode.dot, resolvedNode.id);
@@ -4935,12 +6264,12 @@
             
             <div style="margin-top: 12px; padding-top: 8px; border-top: 1px dashed #eee; display: flex; flex-direction: column; gap: 8px;">
                 <button id="ai-nodes-node-settings-trigger" style="width:100%; padding:7px 10px; background:#ffffff; border:1px solid #bfdbfe; border-radius:8px; cursor:pointer; font-size:11px; font-weight:700; color:#1d4ed8; display:flex; align-items:center; justify-content:space-between; gap:6px; transition:all 0.2s;">
-                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.5 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.5-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.01a1.65 1.65 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.5h.01a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.01a1.65 1.65 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.5 1V15Z"/></svg>
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 7h-9"></path><path d="M14 17H5"></path><circle cx="17" cy="17" r="3"></circle><circle cx="7" cy="7" r="3"></circle></svg>
                     <span style="flex:1; text-align:left;">节点设置</span>
                     <span id="ai-nodes-node-settings-trigger-val">${CONFIG.dotGap} px | ${CONFIG.maxVisibleDotsBeforeScroll}</span>
                 </button>
                 <button id="ai-nodes-reading-line-trigger" style="margin-top:2px; width:100%; padding:7px 10px; background:#ffffff; border:1px solid #bfdbfe; border-radius:8px; cursor:pointer; font-size:11px; font-weight:700; color:#1d4ed8; display:flex; align-items:center; justify-content:space-between; gap:6px; transition:all 0.2s;">
-                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M7 7h10M7 12h10M7 17h10"/></svg>
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="12" x2="21" y2="12"></line><polyline points="8 8 12 4 16 8"></polyline><polyline points="16 16 12 20 8 16"></polyline></svg>
                     <span style="flex:1; text-align:left;">调整阅读线</span>
                     <span id="ai-nodes-reading-line-trigger-val">${CONFIG.readingLineOffset} px</span>
                 </button>
@@ -4995,11 +6324,11 @@
 
             <div style="margin-top: 12px; padding-top: 12px; border-top: 1px dashed #eee; display: flex; flex-direction: column; gap: 8px;">
                 <button id="ai-nodes-clear-refresh" style="width: 100%; border: 1px solid #ff4d4f; background: #fff; color: #ff4d4f; padding: 6px; border-radius: 8px; cursor: pointer; font-size: 12px; font-weight: 500; transition: all 0.2s;">
-                    <span style="margin-right: 4px;">↻</span> 重新获取节点
+                    <span style="margin-right: 4px; display:inline-flex; vertical-align:middle;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 2v6h-6"></path><path d="M3 12a9 9 0 0115-6.7L21 8"></path><path d="M3 22v-6h6"></path><path d="M21 12a9 9 0 01-15 6.7L3 16"></path></svg></span> 重新获取节点
                 </button>
                 
                 <button id="ai-nodes-export-trigger" style="width: 100%; padding: 10px; background: #1E88E5; color: white; border: none; border-radius: 10px; cursor: pointer; font-size: 13px; font-weight: 600; display: flex; align-items: center; justify-content: center; gap: 8px; transition: all 0.2s; box-shadow: 0 4px 10px rgba(30, 136, 229, 0.2);">
-                    <svg width="16" height="16" fill="currentColor" viewBox="0 0 16 16"><path d="M.5 9.9a.5.5 0 0 1 .5.5v2.5a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-2.5a.5.5 0 0 1 1 0v2.5a2 2 0 0 1-2 2H2a2 2 0 0 1-2-2v-2.5a.5.5 0 0 1 .5-.5z"/><path d="M7.646 11.854a.5.5 0 0 0 .708 0l3-3a.5.5 0 0 0-.708-.708L8.5 10.293V1.5a.5.5 0 0 0-1 0v8.793L5.354 8.146a.5.5 0 1 0-.708.708l3 3z"/></svg>
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
                     <span>导出对话记录</span>
                 </button>
             </div>
@@ -5481,6 +6810,17 @@
                     qwenVirtualNodesLoading = false;
                     qwenVirtualNodesLoaded = false;
                     qwenVirtualNodesLastFetchAt = 0;
+                    qwenPendingDomNodes = [];
+                    if (qwenDomMutationDebounceTimer) {
+                        clearTimeout(qwenDomMutationDebounceTimer);
+                        qwenDomMutationDebounceTimer = null;
+                    }
+                    if (qwenAutoApiRefreshTimer) {
+                        clearTimeout(qwenAutoApiRefreshTimer);
+                        qwenAutoApiRefreshTimer = null;
+                    }
+                    qwenAutoApiRefreshInFlight = false;
+                    qwenLastAutoApiRefreshAt = 0;
                     qwenVirtualNodesDirty = true;
                     qwenLastUpdateDebugSig = '';
                     qwenHistoryHydrationInFlight = false;
@@ -5497,6 +6837,17 @@
                     doubaoVirtualNodesLoaded = false;
                     doubaoVirtualNodesLastFetchAt = 0;
                     doubaoVirtualNodesDirty = true;
+                    doubaoPendingDomNodes = [];
+                    if (doubaoDomMutationDebounceTimer) {
+                        clearTimeout(doubaoDomMutationDebounceTimer);
+                        doubaoDomMutationDebounceTimer = null;
+                    }
+                    if (doubaoAutoApiRefreshTimer) {
+                        clearTimeout(doubaoAutoApiRefreshTimer);
+                        doubaoAutoApiRefreshTimer = null;
+                    }
+                    doubaoAutoApiRefreshInFlight = false;
+                    doubaoLastAutoApiRefreshAt = 0;
                     doubaoLastDomUserSignature = '';
                     doubaoInitialFetchConvId = '';
                     doubaoBootClickedConvId = '';
@@ -7398,6 +8749,122 @@
             };
         };
 
+        async function fetchQwenUserNodesByTemplate() {
+            const sessionId = getQwenSessionIdFromUrl();
+            if (!sessionId) {
+                qwenNodeLog('node-api:no-session-id', { href: window.location.href });
+                return [];
+            }
+
+            const baseUrl = qwenCapturedTemplate?.url || QWEN_DEFAULT_MSG_LIST_URL;
+            let requestMethod = normalizeQwenHttpMethod(qwenCapturedTemplate?.method, 'GET');
+            const bodyObj = buildQwenRequestBodyFromTemplate();
+            const seen = new Set();
+            const merged = [];
+            let pos = '';
+            let page = 0;
+            const maxPages = 30;
+
+            try {
+                qwenSuppressCapturedPayloads += 1;
+                while (page < maxPages) {
+                    page += 1;
+                    const currentUrl = ensureQwenRequestUrl(baseUrl, sessionId, pos ? { pos } : null);
+                    markQwenInternalRequest(currentUrl);
+
+                    let resp = null;
+                    for (let attempt = 0; attempt < 2; attempt += 1) {
+                        const headers = buildQwenRequestHeaders();
+                        if (requestMethod === 'GET' && headers['content-type']) delete headers['content-type'];
+                        const fetchInit = {
+                            method: requestMethod,
+                            credentials: 'include',
+                            headers
+                        };
+                        if (requestMethod !== 'GET') fetchInit.body = JSON.stringify(bodyObj || {});
+
+                        qwenInternalFetchDepth += 1;
+                        try {
+                            resp = await fetch(currentUrl, fetchInit);
+                        } finally {
+                            qwenInternalFetchDepth = Math.max(0, qwenInternalFetchDepth - 1);
+                        }
+                        if (resp.status !== 405) break;
+
+                        const fallback = getQwenAlternateHttpMethod(requestMethod);
+                        qwenNodeLog('node-api:method-fallback', { page, from: requestMethod, to: fallback, status: resp.status });
+                        requestMethod = fallback;
+                    }
+
+                    if (!resp || !resp.ok) {
+                        const raw = resp ? await resp.text().catch(() => '') : '';
+                        qwenNodeLog('node-api:request-failed', { page, status: resp?.status || 0, sample: String(raw || '').slice(0, 180) });
+                        break;
+                    }
+
+                    const rawText = await resp.text();
+                    const json = safeParseJson(rawText);
+                    if (!json) {
+                        qwenNodeLog('node-api:non-json', { page });
+                        break;
+                    }
+
+                    captureQwenTemplateFromResponse(json, currentUrl, buildQwenRequestHeaders());
+
+                    const parsedUsers = parseQwenMessagesFromResponse(json)
+                        .filter((m) => m && m.role === 'user' && m.text)
+                        .map((m) => ({
+                            id: `api-user-${normalizeQwenMessageId(m?.id || '') || String(m?.id || '')}`,
+                            sourceMessageId: normalizeQwenMessageId(m?.id || ''),
+                            role: 'user',
+                            text: normalizeQwenTextForMatch(m?.text || ''),
+                            order: Number(m?.order || 0)
+                        }))
+                        .filter((m) => m.text);
+
+                    const pageAdded = [];
+                    parsedUsers.forEach((item) => {
+                        const key = `${item.sourceMessageId || item.id}::${item.text.slice(0, 64)}`;
+                        if (seen.has(key)) return;
+                        seen.add(key);
+                        pageAdded.push(item);
+                    });
+
+                    if (pageAdded.length) {
+                        if (page === 1) merged.push(...pageAdded);
+                        else merged.unshift(...pageAdded);
+                    }
+
+                    const hasNext = Boolean(json?.data?.have_next_page);
+                    const nextPos = String(getQwenNextPagePos(json) || '').trim();
+                    qwenNodeLog('node-api:page', {
+                        page,
+                        added: pageAdded.length,
+                        total: merged.length,
+                        hasNext,
+                        pos: nextPos || '-'
+                    });
+                    if (!hasNext || !nextPos || nextPos === pos) break;
+                    pos = nextPos;
+                }
+
+                const finalList = merged.map((item, idx) => ({
+                    id: item.id || `api-user-qwen-${idx + 1}`,
+                    sourceMessageId: item.sourceMessageId || '',
+                    role: 'user',
+                    text: item.text,
+                    order: idx + 1,
+                    sessionIndex: idx
+                }));
+                return finalList;
+            } catch (e) {
+                qwenNodeLog('node-api:error', { message: String(e?.message || e) });
+                return [];
+            } finally {
+                qwenSuppressCapturedPayloads = Math.max(0, qwenSuppressCapturedPayloads - 1);
+            }
+        }
+
         async function fetchQwenMessagesByTemplate() {
             const sessionId = getQwenSessionIdFromUrl();
             if (!sessionId) {
@@ -7564,7 +9031,7 @@
                 });
             }
 
-            return fetchQwenMessagesByTemplate();
+            return fetchQwenUserNodesByTemplate();
         };
 
         async function getQwenMessagesForExport() {
@@ -9386,12 +10853,13 @@
                     .db-batch-loading { display:flex; align-items:center; justify-content:center; flex-direction:column; gap:10px; padding:28px 12px; color:#64748b; font-size:12px; }
                     .db-batch-spinner { width:22px; height:22px; border-radius:999px; border:2px solid #cbd5e1; border-top-color:#2563eb; animation: db-batch-spin 0.9s linear infinite; }
                     @keyframes db-batch-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
-                    .db-batch-item { position:relative; display:grid; grid-template-columns:auto minmax(0, 1fr) auto; column-gap:10px; align-items:start; padding:10px 12px; border-bottom:1px solid #f1f5f9; background:#fff; overflow:hidden; }
-                    .db-batch-content { position:relative; z-index:1; display:grid; grid-template-columns:auto minmax(0, 1fr) auto; column-gap:10px; align-items:start; width:100%; pointer-events:none; }
+                    .db-batch-item { position:relative; display:block; padding:10px 12px; border-bottom:1px solid #f1f5f9; background:#fff; overflow:hidden; }
+                    .db-batch-content { position:relative; z-index:1; display:grid; grid-template-columns:auto minmax(0, 1fr) 56px 38px; column-gap:10px; align-items:start; width:100%; pointer-events:none; }
                     .db-batch-left-slot { display:grid; place-items:start center; align-content:start; padding-top:2px; }
                     .db-batch-hit-layer { position:absolute; inset:0; z-index:2; display:grid; grid-template-columns:minmax(0, 1fr) minmax(0, 1fr); }
                     .db-batch-hit-left,
                     .db-batch-hit-right { border:none; background:transparent; padding:0; margin:0; cursor:pointer; transition:background .18s ease, box-shadow .18s ease; }
+                    .db-batch-hit-right { position:relative; display:flex; align-items:center; justify-content:flex-end; padding-right:10px; }
                     .db-batch-hit-left:hover { background:linear-gradient(90deg, rgba(16,185,129,.10), rgba(16,185,129,.03)); }
                     .db-batch-hit-right:hover { background:linear-gradient(90deg, rgba(37,99,235,.03), rgba(37,99,235,.10)); }
                     .db-batch-hit-left:focus-visible,
@@ -9403,15 +10871,25 @@
                     .db-batch-title { font-size:12px; color:#0f172a; line-height:1.5; font-weight:600; margin:0; }
                     .db-batch-meta { display:grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap:6px; margin-top:5px; }
                     .db-batch-tag { font-size:11px; color:#475569; background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; padding:4px 8px; line-height:1.4; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-                    .db-batch-index { justify-self:end; align-self:center; min-width:34px; text-align:center; font-size:11px; font-weight:700; color:#1d4ed8; background:#eff6ff; border:1px solid #bfdbfe; border-radius:999px; padding:4px 8px; line-height:1.2; white-space:nowrap; }
+                    .db-batch-right { width:56px; justify-self:center; align-self:center; display:flex; align-items:center; justify-content:center; }
+                    .db-batch-preview-slot { width:32px; height:32px; }
+                    .db-batch-index { width:48px; min-width:48px; text-align:center; font-size:11px; font-weight:700; color:#1d4ed8; background:#eff6ff; border:1px solid #bfdbfe; border-radius:999px; padding:4px 0; line-height:1.2; white-space:nowrap; box-sizing:border-box; }
+                    .db-batch-hit-preview-icon { width:32px; height:32px; border-radius:8px; display:grid; place-items:center; background:transparent; border:1.5px solid rgba(37,99,235,.6); color:#2563eb; transition:transform .18s ease, filter .18s ease, border-color .18s ease; pointer-events:none; }
+                    .db-batch-hit-preview-icon svg { width:16px; height:16px; display:block; fill:none; stroke:currentColor; stroke-width:2; stroke-linecap:round; stroke-linejoin:round; opacity:.96; }
+                    .db-batch-hit-right:hover .db-batch-hit-preview-icon,
+                    .db-batch-hit-right:focus-visible .db-batch-hit-preview-icon { transform:scale(1.08); filter:saturate(1.03); border-color:rgba(37,99,235,1); }
                     .gpt-batch-export-item:hover,
                     .ds-batch-export-item:hover,
                     .db-batch-export-item:hover,
-                    .qw-batch-export-item:hover { background:#f8fbff !important; }
+                    .qw-batch-export-item:hover { background:rgba(37,99,235,0.16) !important; box-shadow:inset 0 0 0 1px rgba(37,99,235,0.28); }
                     .gpt-batch-export-item:focus-visible,
                     .ds-batch-export-item:focus-visible,
                     .db-batch-export-item:focus-visible,
                     .qw-batch-export-item:focus-visible { outline:none; box-shadow:inset 0 0 0 2px rgba(37,99,235,0.18); }
+                    #gpt-batch-export-menu-trigger:hover,
+                    #ds-batch-export-menu-trigger:hover,
+                    #db-batch-export-menu-trigger:hover,
+                    #qw-batch-export-menu-trigger:hover { background:rgba(37,99,235,0.12) !important; box-shadow:inset 0 0 0 1px rgba(37,99,235,0.26); }
                     .gpt-batch-export-item:first-child, .ds-batch-export-item:first-child, .db-batch-export-item:first-child, .qw-batch-export-item:first-child { border-top-left-radius:8px !important; border-top-right-radius:8px !important; }
                     .gpt-batch-export-item:last-child, .ds-batch-export-item:last-child, .db-batch-export-item:last-child, .qw-batch-export-item:last-child { border-bottom-left-radius:8px !important; border-bottom-right-radius:8px !important; }
                     .gpt-batch-export-item + .gpt-batch-export-item,
@@ -9444,15 +10922,97 @@
                                 <p class="db-batch-title">${escapeHtml(conversation.title || `会话 ${conversation.id}`)}</p>
                                 <div class="db-batch-meta">${metaTags}</div>
                             </div>
-                            <span class="db-batch-index">#${idx + 1}</span>
+                            <div class="db-batch-right">
+                                <span class="db-batch-index">#${idx + 1}</span>
+                            </div>
+                            <div class="db-batch-preview-slot" aria-hidden="true"></div>
                         </div>
                         <div class="db-batch-hit-layer">
                             <button type="button" class="db-batch-hit-left" data-key="${rowKey}" title="选中/取消选中"></button>
-                            <button type="button" class="db-batch-hit-right" data-key="${rowKey}" title="查看该对话消息"></button>
+                            <button type="button" class="db-batch-hit-right" data-key="${rowKey}" title="查看该对话消息">
+                                <span class="db-batch-hit-preview-icon" aria-hidden="true">
+                                    <svg viewBox="0 0 24 24" focusable="false" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>
+                                </span>
+                            </button>
                         </div>
                     </div>
                 `;
             }).join('');
+        }
+
+        function buildUnifiedBatchMetaTags(conversation, options = {}) {
+            const conv = conversation || {};
+            const idLabel = String(options.idLabel || '会话ID');
+            const idValue = String(conv.id || conv.conversationId || '-');
+            const messageCountRaw = conv.badgeCount != null ? conv.badgeCount : conv.messageCount;
+            const messageCount = Number(messageCountRaw);
+            const messageCountText = Number.isFinite(messageCount) ? String(messageCount) : '-';
+            const updatedAtText = String(conv.updatedAtText || '-');
+            const createdAtText = String(conv.createdAtText || '-');
+
+            return [
+                `${idLabel}: ${idValue || '-'}`,
+                `消息数: ${messageCountText}`,
+                `更新时间: ${updatedAtText || '-'}`,
+                `创建时间: ${createdAtText || '-'}`
+            ];
+        }
+
+        async function hydrateConversationMessageCounts(conversations, options = {}) {
+            const list = Array.isArray(conversations) ? conversations : [];
+            const getCount = typeof options.getCount === 'function' ? options.getCount : null;
+            const onProgress = typeof options.onProgress === 'function' ? options.onProgress : null;
+            const isCancelled = typeof options.isCancelled === 'function' ? options.isCancelled : null;
+            const shouldHydrate = typeof options.shouldHydrate === 'function'
+                ? options.shouldHydrate
+                : ((item) => {
+                    const n = Number(item?.badgeCount ?? item?.messageCount);
+                    return !Number.isFinite(n) || n < 0;
+                });
+            const concurrency = Math.max(1, Math.min(6, Number(options.concurrency) || 2));
+            if (!getCount || !list.length) return { total: 0, completed: 0, resolved: 0 };
+
+            const targets = list.filter((item) => {
+                try {
+                    return Boolean(shouldHydrate(item));
+                } catch (e) {
+                    return false;
+                }
+            });
+            const total = targets.length;
+            if (!total) return { total: 0, completed: 0, resolved: 0 };
+
+            let cursor = 0;
+            let completed = 0;
+            let resolved = 0;
+
+            const worker = async () => {
+                while (cursor < total) {
+                    if (isCancelled && isCancelled()) break;
+                    const idx = cursor;
+                    cursor += 1;
+                    const conv = targets[idx];
+                    try {
+                        const countRaw = await getCount(conv);
+                        const count = Number(countRaw);
+                        if (Number.isFinite(count) && count >= 0) {
+                            conv.badgeCount = count;
+                            conv.messageCount = count;
+                            resolved += 1;
+                        }
+                    } catch (e) {
+                        // ignore single-conversation count failure
+                    } finally {
+                        completed += 1;
+                        if (onProgress) {
+                            onProgress({ total, completed, resolved, conversation: conv });
+                        }
+                    }
+                }
+            };
+
+            await Promise.all(Array.from({ length: Math.min(concurrency, total) }, () => worker()));
+            return { total, completed, resolved };
         }
 
         function normalizeExportSourceLabel(raw) {
@@ -9493,6 +11053,95 @@
             `;
         }
 
+        function getUnifiedModalMotion() {
+            const reduceMotion = Boolean(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+            return {
+                reduceMotion,
+                overlayTransition: reduceMotion ? 'opacity 0.01s linear' : 'opacity 0.24s cubic-bezier(0.22,0.61,0.36,1)',
+                modalTransition: reduceMotion
+                    ? 'opacity 0.01s linear, transform 0.01s linear'
+                    : 'opacity 0.26s cubic-bezier(0.22,0.61,0.36,1), transform 0.26s cubic-bezier(0.22,0.61,0.36,1)',
+                enterTransform: 'translateY(14px) scale(0.98)',
+                exitTransform: 'translateY(10px) scale(0.985)',
+                exitDurationMs: reduceMotion ? 20 : 230
+            };
+        }
+
+        const activeModalCloseStack = [];
+
+        function setupUnifiedModalLifecycle(overlay, modal, options = {}) {
+            if (!overlay || !modal) return { close: () => {}, isClosing: () => true, motion: getUnifiedModalMotion() };
+            const motion = getUnifiedModalMotion();
+            const onBeforeClose = typeof options.onBeforeClose === 'function' ? options.onBeforeClose : null;
+            const closeOnOverlay = options.closeOnOverlay !== false;
+            const enableEsc = options.enableEsc !== false;
+
+            overlay.style.opacity = '0';
+            overlay.style.transition = motion.overlayTransition;
+            modal.style.opacity = '0';
+            modal.style.transform = motion.enterTransform;
+            modal.style.transition = motion.modalTransition;
+
+            let closing = false;
+            let cleanupTimer = 0;
+
+            const onKeydown = (e) => {
+                if (e.key !== 'Escape') return;
+                if (activeModalCloseStack[activeModalCloseStack.length - 1] !== close) return;
+                e.preventDefault();
+                close();
+            };
+
+            const cleanup = () => {
+                if (cleanupTimer) {
+                    clearTimeout(cleanupTimer);
+                    cleanupTimer = 0;
+                }
+                const stackIdx = activeModalCloseStack.lastIndexOf(close);
+                if (stackIdx >= 0) activeModalCloseStack.splice(stackIdx, 1);
+                if (enableEsc) document.removeEventListener('keydown', onKeydown, true);
+                if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
+            };
+
+            const close = () => {
+                if (closing) return;
+                closing = true;
+                if (onBeforeClose) {
+                    try {
+                        onBeforeClose();
+                    } catch (e) {
+                        console.warn('AI-Chat-Helper: 模态框关闭前回调失败', e);
+                    }
+                }
+                overlay.style.pointerEvents = 'none';
+                overlay.style.opacity = '0';
+                modal.style.opacity = '0';
+                modal.style.transform = motion.exitTransform;
+                cleanupTimer = setTimeout(cleanup, motion.exitDurationMs);
+            };
+
+            if (closeOnOverlay) {
+                overlay.addEventListener('click', (e) => {
+                    if (e.target === overlay) close();
+                });
+            }
+            if (enableEsc) document.addEventListener('keydown', onKeydown, true);
+            activeModalCloseStack.push(close);
+
+            requestAnimationFrame(() => {
+                if (closing || !overlay.parentNode) return;
+                overlay.style.opacity = '1';
+                modal.style.opacity = '1';
+                modal.style.transform = 'translateY(0) scale(1)';
+            });
+
+            return {
+                close,
+                isClosing: () => closing,
+                motion
+            };
+        }
+
         async function openMessagePreviewExportModal(options = {}) {
             const headerTitle = String(options.headerTitle || '导出当前对话');
             const loadingTitle = String(options.loadingTitle || '正在加载对话内容...');
@@ -9510,24 +11159,17 @@
                         <h3 style="margin:0;font-size:18px;white-space:nowrap;">${escapeHtml(headerTitle)}</h3>
                         ${headerMetaText ? `<span style="font-size:12px;padding:4px 8px;border-radius:999px;background:#eff6ff;color:#1d4ed8;border:1px solid #bfdbfe;max-width:320px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(headerMetaText)}</span>` : ''}
                     </div>
-                    <button id="modal-x" aria-label="关闭" title="关闭" style="cursor:pointer;border:none;background:#e5e7eb;color:#1f2937;width:32px;height:32px;border-radius:999px;font-size:20px;line-height:1;display:flex;align-items:center;justify-content:center;padding:0;transition:background .2s ease;">&times;</button>
+                    <button id="modal-x" aria-label="关闭" title="关闭" style="cursor:pointer;border:none;background:#e5e7eb;color:#1f2937;width:32px;height:32px;border-radius:999px;line-height:1;display:flex;align-items:center;justify-content:center;padding:0;transition:background .2s ease;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg></button>
                 </div>
             `;
 
             const overlay = document.createElement('div');
-            overlay.style.cssText = `position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.6);z-index:1000003;display:flex;align-items:center;justify-content:center;backdrop-filter:blur(4px);padding:40px;`;
+            overlay.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.6);z-index:1000003;display:flex;align-items:center;justify-content:center;backdrop-filter:blur(4px);padding:40px;';
 
             const modal = document.createElement('div');
-            modal.style.cssText = `background:#fff;width:100%;max-width:850px;height:85vh;border-radius:20px;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 15px 45px rgba(0,0,0,0.3);`;
+            modal.style.cssText = 'background:#fff;width:100%;max-width:850px;height:85vh;border-radius:20px;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 15px 45px rgba(0,0,0,0.3);';
 
             let persistSelection = () => {};
-
-            const closeModal = () => {
-                persistSelection();
-                if (overlay.parentNode) document.body.removeChild(overlay);
-            };
-
-            overlay.onclick = (e) => { if (e.target === overlay) closeModal(); };
 
             modal.innerHTML = `
                 ${renderHeader('检测中...')}
@@ -9543,6 +11185,10 @@
 
             document.body.appendChild(overlay);
             overlay.appendChild(modal);
+            const modalLifecycle = setupUnifiedModalLifecycle(overlay, modal, {
+                onBeforeClose: () => persistSelection()
+            });
+            const closeModal = modalLifecycle.close;
             modal.querySelector('#modal-x').onclick = closeModal;
 
             let allMsgs = [];
@@ -9558,7 +11204,7 @@
                 console.warn('AI-Chat-Helper: 获取导出消息失败', e);
             }
 
-            if (!overlay.parentNode) return;
+            if (modalLifecycle.isClosing() || !overlay.parentNode) return;
 
             if (!allMsgs.length) {
                 modal.innerHTML = `
@@ -9584,7 +11230,7 @@
                     <span style="font-size:12px;color:#666;">已选 <b id="m-count-view">${selectedIndexSet.size}</b> 条</span>
                     <div style="position:relative;display:flex;align-items:center;">
                         <button id="m-export-menu-trigger" style="border:1px solid #2563eb;background:#fff;color:#2563eb;border-radius:8px;font-size:12px;padding:7px 12px;cursor:pointer;font-weight:700;display:flex;align-items:center;gap:6px;">
-                            <span>导出</span><span id="m-export-menu-icon" style="font-size:10px;opacity:.9;display:inline-block;transition:transform .2s ease;transform:rotate(0deg);">▼</span>
+                            <span>导出</span><span id="m-export-menu-icon" style="opacity:.9;display:inline-flex;transition:transform .2s ease;transform:rotate(0deg);"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg></span>
                         </button>
                         <div id="m-export-menu" style="position:absolute;right:0;top:36px;width:100px;background:rgba(255, 255, 255, 0.2);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);border:1px solid rgba(255,255,255,0.35);border-radius:10px;box-shadow:0 10px 30px rgba(15,23,42,.15);padding:0;z-index:7;opacity:0;pointer-events:none;transform:translateY(-8px) scale(0.96);transition:opacity .22s cubic-bezier(0.22,0.61,0.36,1), transform .22s cubic-bezier(0.22,0.61,0.36,1);">
                             <button class="m-export-item" data-f="md" style="display:block;width:100%;margin:0;text-align:center;background:transparent;color:#2563eb;border-radius:0;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;transition:border-color .18s ease, box-shadow .18s ease, background-color .18s ease;border:none;">Markdown</button>
@@ -9701,18 +11347,18 @@
 
             function showFullText(txt, title) {
                 const subOverlay = document.createElement('div');
-                subOverlay.style.cssText = `position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.4);z-index:1000004;display:flex;align-items:center;justify-content:center;`;
+                subOverlay.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.4);z-index:1000004;display:flex;align-items:center;justify-content:center;';
                 const subModal = document.createElement('div');
-                subModal.style.cssText = `background:#fff;width:80%;max-width:600px;max-height:80vh;border-radius:12px;padding:24px;display:flex;flex-direction:column;box-shadow:0 10px 30px rgba(0,0,0,0.2);`;
+                subModal.style.cssText = 'background:#fff;width:80%;max-width:600px;max-height:80vh;border-radius:12px;padding:24px;display:flex;flex-direction:column;box-shadow:0 10px 30px rgba(0,0,0,0.2);';
                 subModal.innerHTML = `
-                    <div style="display:flex;justify-content:space-between;margin-bottom:15px;align-items:center;"><h4 style="margin:0">${escapeHtml(title)}</h4><button id="sub-x" aria-label="关闭" title="关闭" style="cursor:pointer;border:none;background:#e5e7eb;color:#1f2937;width:32px;height:32px;border-radius:999px;font-size:20px;line-height:1;display:flex;align-items:center;justify-content:center;padding:0;transition:background .2s ease;">&times;</button></div>
+                    <div style="display:flex;justify-content:space-between;margin-bottom:15px;align-items:center;"><h4 style="margin:0">${escapeHtml(title)}</h4><button id="sub-x" aria-label="关闭" title="关闭" style="cursor:pointer;border:none;background:#e5e7eb;color:#1f2937;width:32px;height:32px;border-radius:999px;line-height:1;display:flex;align-items:center;justify-content:center;padding:0;transition:background .2s ease;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg></button></div>
                     <div id="sub-body" style="flex:1;overflow-y:auto;font-size:14px;line-height:1.6;color:#333;white-space:pre-wrap;padding-top:10px;border-top:1px solid #eee;"></div>
                 `;
                 subModal.querySelector('#sub-body').textContent = txt;
-                subOverlay.onclick = (e) => { if (e.target === subOverlay) document.body.removeChild(subOverlay); };
-                subModal.querySelector('#sub-x').onclick = () => document.body.removeChild(subOverlay);
                 subOverlay.appendChild(subModal);
                 document.body.appendChild(subOverlay);
+                const subLifecycle = setupUnifiedModalLifecycle(subOverlay, subModal);
+                subModal.querySelector('#sub-x').onclick = subLifecycle.close;
             }
 
             const updateToggleAllButton = () => {
@@ -9910,7 +11556,7 @@
                     <div>
                         <div style="font-size:16px;font-weight:700;color:#0f172a;">ChatGPT 批量导出</div>
                     </div>
-                    <button id="gpt-batch-close" aria-label="关闭" title="关闭" style="cursor:pointer;border:none;background:#e5e7eb;color:#1f2937;width:32px;height:32px;border-radius:999px;font-size:20px;line-height:1;display:flex;align-items:center;justify-content:center;padding:0;transition:background .2s ease;">&times;</button>
+                    <button id="gpt-batch-close" aria-label="关闭" title="关闭" style="cursor:pointer;border:none;background:#e5e7eb;color:#1f2937;width:32px;height:32px;border-radius:999px;line-height:1;display:flex;align-items:center;justify-content:center;padding:0;transition:background .2s ease;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg></button>
                 </div>
                 <div class="db-batch-scroll" style="padding:16px 20px;overflow:auto;background:#f8fafc;">
                     <div style="border:1px solid #e2e8f0;border-radius:12px;padding:14px;background:#fff;">
@@ -9927,15 +11573,15 @@
                                 <button id="gpt-batch-toggle-select" style="border:1px solid #93c5fd;background:#eff6ff;border-radius:8px;font-size:12px;padding:8px 12px;cursor:pointer;color:#1d4ed8;font-weight:600;">全选</button>
                             </div>
                             <div style="position:relative;display:flex;justify-content:flex-end;align-items:center;">
-                                <button id="gpt-batch-export-menu-trigger" style="border:1px solid #2563eb;background:#2563eb;color:#fff;border-radius:8px;font-size:12px;padding:8px 14px;cursor:pointer;font-weight:600;display:flex;align-items:center;gap:6px;">
-                                    <span>导出</span><span id="gpt-batch-export-menu-icon" style="font-size:10px;opacity:.9;display:inline-block;transition:transform .2s ease;transform:rotate(0deg);">▼</span>
+                                <button id="gpt-batch-export-menu-trigger" style="border:1px solid #2563eb;background:#fff;color:#2563eb;border-radius:8px;font-size:12px;padding:7px 12px;cursor:pointer;font-weight:700;display:flex;align-items:center;gap:6px;">
+                                    <span>导出</span><span id="gpt-batch-export-menu-icon" style="opacity:.9;display:inline-flex;transition:transform .2s ease;transform:rotate(0deg);"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg></span>
                                 </button>
-                                <div id="gpt-batch-export-menu" style="position:absolute;right:0;top:40px;width:140px;background:#fff;border:1px solid #dbe3ee;border-radius:10px;box-shadow:0 10px 30px rgba(15,23,42,.15);padding:8px;z-index:5;opacity:0;pointer-events:none;transform:translateY(-8px) scale(0.96);transition:opacity .22s cubic-bezier(0.22, 0.61, 0.36, 1), transform .22s cubic-bezier(0.22, 0.61, 0.36, 1);">
-                                    <button class="gpt-batch-export-item" data-format="json" style="display:block;width:100%;margin:0;text-align:center;background:#ffffff;color:#2563eb;border-radius:0;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;transition:border-color .18s ease, box-shadow .18s ease, background-color .18s ease;border:none;">JSON</button>
-                                    <button class="gpt-batch-export-item" data-format="md" style="display:block;width:100%;margin:0;text-align:center;background:#ffffff;color:#2563eb;border-radius:0;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;transition:border-color .18s ease, box-shadow .18s ease, background-color .18s ease;border:none;">Markdown</button>
-                                    <button class="gpt-batch-export-item" data-format="txt" style="display:block;width:100%;margin:0;text-align:center;background:#ffffff;color:#2563eb;border-radius:0;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;transition:border-color .18s ease, box-shadow .18s ease, background-color .18s ease;border:none;">TXT</button>
-                                    <button class="gpt-batch-export-item" data-format="csv" style="display:block;width:100%;margin:0;text-align:center;background:#ffffff;color:#2563eb;border-radius:0;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;transition:border-color .18s ease, box-shadow .18s ease, background-color .18s ease;border:none;">CSV</button>
-                                    <button class="gpt-batch-export-item" data-format="pdf" style="display:block;width:100%;margin:0;text-align:center;background:#ffffff;color:#2563eb;border-radius:0;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;transition:border-color .18s ease, box-shadow .18s ease, background-color .18s ease;border:none;">PDF</button>
+                                <div id="gpt-batch-export-menu" style="position:absolute;right:0;top:36px;width:100px;background:rgba(255, 255, 255, 0.2);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);border:1px solid rgba(255,255,255,0.35);border-radius:10px;box-shadow:0 10px 30px rgba(15,23,42,.15);padding:0;z-index:7;opacity:0;pointer-events:none;transform:translateY(-8px) scale(0.96);transition:opacity .22s cubic-bezier(0.22,0.61,0.36,1), transform .22s cubic-bezier(0.22,0.61,0.36,1);">
+                                    <button class="gpt-batch-export-item" data-format="json" style="display:block;width:100%;margin:0;text-align:center;background:transparent;color:#2563eb;border-radius:0;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;transition:border-color .18s ease, box-shadow .18s ease, background-color .18s ease;border:none;">JSON</button>
+                                    <button class="gpt-batch-export-item" data-format="md" style="display:block;width:100%;margin:0;text-align:center;background:transparent;color:#2563eb;border-radius:0;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;transition:border-color .18s ease, box-shadow .18s ease, background-color .18s ease;border:none;">Markdown</button>
+                                    <button class="gpt-batch-export-item" data-format="txt" style="display:block;width:100%;margin:0;text-align:center;background:transparent;color:#2563eb;border-radius:0;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;transition:border-color .18s ease, box-shadow .18s ease, background-color .18s ease;border:none;">TXT</button>
+                                    <button class="gpt-batch-export-item" data-format="csv" style="display:block;width:100%;margin:0;text-align:center;background:transparent;color:#2563eb;border-radius:0;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;transition:border-color .18s ease, box-shadow .18s ease, background-color .18s ease;border:none;">CSV</button>
+                                    <button class="gpt-batch-export-item" data-format="pdf" style="display:block;width:100%;margin:0;text-align:center;background:transparent;color:#2563eb;border-radius:0;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;transition:border-color .18s ease, box-shadow .18s ease, background-color .18s ease;border:none;">PDF</button>
                                 </div>
                             </div>
                         </div>
@@ -9949,6 +11595,7 @@
 
             overlay.appendChild(modal);
             document.body.appendChild(overlay);
+            const modalLifecycle = setupUnifiedModalLifecycle(overlay, modal);
 
             let recentConversations = [];
             const messageSelectionByConversation = new Map();
@@ -9961,9 +11608,7 @@
             const exportMenu = modal.querySelector('#gpt-batch-export-menu');
             const exportMenuIcon = modal.querySelector('#gpt-batch-export-menu-icon');
 
-            const close = () => {
-                if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
-            };
+            const close = modalLifecycle.close;
             const hideExportMenu = () => {
                 exportMenu.style.opacity = '0';
                 exportMenu.style.pointerEvents = 'none';
@@ -10006,15 +11651,7 @@
                 renderBatchConversationList(
                     listEl,
                     recentConversations,
-                    (c) => [
-                        `会话ID: ${c.id || '-'}`,
-                        `空间: ${c.workspaceLabel || '个人空间'}`,
-                        c.projectTitle ? `项目: ${c.projectTitle}` : '',
-                        c.archived ? '归档: 是' : '',
-                        `更新时间: ${c.updatedAtText || '-'}`,
-                        `创建时间: ${c.createdAtText || '-'}`,
-                        Number.isFinite(c.badgeCount) ? `消息数: ${String(c.badgeCount)}` : ''
-                    ],
+                    (c) => buildUnifiedBatchMetaTags(c, { idLabel: '会话ID' }),
                     '未获取到历史会话，请稍后重试。'
                 );
                 updateSelectToggleButton();
@@ -10123,9 +11760,6 @@
             };
 
             modal.querySelector('#gpt-batch-close').addEventListener('click', close);
-            overlay.addEventListener('click', (e) => {
-                if (e.target === overlay) close();
-            });
             exportMenuTrigger.addEventListener('click', (e) => {
                 e.stopPropagation();
                 if (exportMenu.style.opacity === '1') hideExportMenu();
@@ -10388,7 +12022,7 @@
                     <div>
                         <div style="font-size:16px;font-weight:700;color:#0f172a;">DeepSeek 批量导出</div>
                     </div>
-                    <button id="ds-batch-close" aria-label="关闭" title="关闭" style="cursor:pointer;border:none;background:#e5e7eb;color:#1f2937;width:32px;height:32px;border-radius:999px;font-size:20px;line-height:1;display:flex;align-items:center;justify-content:center;padding:0;transition:background .2s ease;">&times;</button>
+                    <button id="ds-batch-close" aria-label="关闭" title="关闭" style="cursor:pointer;border:none;background:#e5e7eb;color:#1f2937;width:32px;height:32px;border-radius:999px;line-height:1;display:flex;align-items:center;justify-content:center;padding:0;transition:background .2s ease;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg></button>
                 </div>
                 <div class="db-batch-scroll" style="padding:16px 20px;overflow:auto;background:#f8fafc;">
                     <div style="border:1px solid #e2e8f0;border-radius:12px;padding:14px;background:#fff;">
@@ -10405,15 +12039,15 @@
                                 <button id="ds-batch-toggle-select" style="border:1px solid #93c5fd;background:#eff6ff;border-radius:8px;font-size:12px;padding:8px 12px;cursor:pointer;color:#1d4ed8;font-weight:600;">全选</button>
                             </div>
                             <div style="position:relative;display:flex;justify-content:flex-end;align-items:center;">
-                                <button id="ds-batch-export-menu-trigger" style="border:1px solid #2563eb;background:#2563eb;color:#fff;border-radius:8px;font-size:12px;padding:8px 14px;cursor:pointer;font-weight:600;display:flex;align-items:center;gap:6px;">
-                                    <span>导出</span><span id="ds-batch-export-menu-icon" style="font-size:10px;opacity:.9;display:inline-block;transition:transform .2s ease;transform:rotate(0deg);">▼</span>
+                                <button id="ds-batch-export-menu-trigger" style="border:1px solid #2563eb;background:#fff;color:#2563eb;border-radius:8px;font-size:12px;padding:7px 12px;cursor:pointer;font-weight:700;display:flex;align-items:center;gap:6px;">
+                                    <span>导出</span><span id="ds-batch-export-menu-icon" style="opacity:.9;display:inline-flex;transition:transform .2s ease;transform:rotate(0deg);"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg></span>
                                 </button>
-                                <div id="ds-batch-export-menu" style="position:absolute;right:0;top:40px;width:140px;background:#fff;border:1px solid #dbe3ee;border-radius:10px;box-shadow:0 10px 30px rgba(15,23,42,.15);padding:8px;z-index:5;opacity:0;pointer-events:none;transform:translateY(-8px) scale(0.96);transition:opacity .22s cubic-bezier(0.22, 0.61, 0.36, 1), transform .22s cubic-bezier(0.22, 0.61, 0.36, 1);">
-                                    <button class="ds-batch-export-item" data-format="json" style="display:block;width:100%;margin:0;text-align:center;background:#ffffff;color:#2563eb;border-radius:0;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;transition:border-color .18s ease, box-shadow .18s ease, background-color .18s ease;border:none;">JSON</button>
-                                    <button class="ds-batch-export-item" data-format="md" style="display:block;width:100%;margin:0;text-align:center;background:#ffffff;color:#2563eb;border-radius:0;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;transition:border-color .18s ease, box-shadow .18s ease, background-color .18s ease;border:none;">Markdown</button>
-                                    <button class="ds-batch-export-item" data-format="txt" style="display:block;width:100%;margin:0;text-align:center;background:#ffffff;color:#2563eb;border-radius:0;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;transition:border-color .18s ease, box-shadow .18s ease, background-color .18s ease;border:none;">TXT</button>
-                                    <button class="ds-batch-export-item" data-format="csv" style="display:block;width:100%;margin:0;text-align:center;background:#ffffff;color:#2563eb;border-radius:0;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;transition:border-color .18s ease, box-shadow .18s ease, background-color .18s ease;border:none;">CSV</button>
-                                    <button class="ds-batch-export-item" data-format="pdf" style="display:block;width:100%;margin:0;text-align:center;background:#ffffff;color:#2563eb;border-radius:0;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;transition:border-color .18s ease, box-shadow .18s ease, background-color .18s ease;border:none;">PDF</button>
+                                <div id="ds-batch-export-menu" style="position:absolute;right:0;top:36px;width:100px;background:rgba(255, 255, 255, 0.2);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);border:1px solid rgba(255,255,255,0.35);border-radius:10px;box-shadow:0 10px 30px rgba(15,23,42,.15);padding:0;z-index:7;opacity:0;pointer-events:none;transform:translateY(-8px) scale(0.96);transition:opacity .22s cubic-bezier(0.22,0.61,0.36,1), transform .22s cubic-bezier(0.22,0.61,0.36,1);">
+                                    <button class="ds-batch-export-item" data-format="json" style="display:block;width:100%;margin:0;text-align:center;background:transparent;color:#2563eb;border-radius:0;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;transition:border-color .18s ease, box-shadow .18s ease, background-color .18s ease;border:none;">JSON</button>
+                                    <button class="ds-batch-export-item" data-format="md" style="display:block;width:100%;margin:0;text-align:center;background:transparent;color:#2563eb;border-radius:0;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;transition:border-color .18s ease, box-shadow .18s ease, background-color .18s ease;border:none;">Markdown</button>
+                                    <button class="ds-batch-export-item" data-format="txt" style="display:block;width:100%;margin:0;text-align:center;background:transparent;color:#2563eb;border-radius:0;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;transition:border-color .18s ease, box-shadow .18s ease, background-color .18s ease;border:none;">TXT</button>
+                                    <button class="ds-batch-export-item" data-format="csv" style="display:block;width:100%;margin:0;text-align:center;background:transparent;color:#2563eb;border-radius:0;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;transition:border-color .18s ease, box-shadow .18s ease, background-color .18s ease;border:none;">CSV</button>
+                                    <button class="ds-batch-export-item" data-format="pdf" style="display:block;width:100%;margin:0;text-align:center;background:transparent;color:#2563eb;border-radius:0;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;transition:border-color .18s ease, box-shadow .18s ease, background-color .18s ease;border:none;">PDF</button>
                                 </div>
                             </div>
                         </div>
@@ -10427,10 +12061,12 @@
 
             overlay.appendChild(modal);
             document.body.appendChild(overlay);
+            const modalLifecycle = setupUnifiedModalLifecycle(overlay, modal);
 
             let recentConversations = [];
             const messageSelectionByConversation = new Map();
             let loading = false;
+            let countHydrationSeq = 0;
             const listEl = modal.querySelector('#ds-batch-list');
             const statusEl = modal.querySelector('#ds-batch-status');
             const limitInput = modal.querySelector('#ds-batch-limit');
@@ -10439,9 +12075,7 @@
             const exportMenu = modal.querySelector('#ds-batch-export-menu');
             const exportMenuIcon = modal.querySelector('#ds-batch-export-menu-icon');
 
-            const close = () => {
-                if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
-            };
+            const close = modalLifecycle.close;
 
             const hideExportMenu = () => {
                 exportMenu.style.opacity = '0';
@@ -10490,21 +12124,21 @@
                 renderBatchConversationList(
                     listEl,
                     recentConversations,
-                    (c) => [
-                        c.id ? `会话ID: ${c.id}` : '',
-                        c.updatedAtText && c.updatedAtText !== '-' ? `更新时间: ${c.updatedAtText}` : '',
-                        c.createdAtText && c.createdAtText !== '-' ? `创建时间: ${c.createdAtText}` : '',
-                        c.pinned ? '置顶: 是' : '',
-                        c.messageCount != null && Number.isFinite(Number(c.messageCount)) ? `消息数: ${String(c.messageCount)}` : ''
-                    ],
+                    (c) => buildUnifiedBatchMetaTags(c, { idLabel: '会话ID' }),
                     '未获取到历史会话，请稍后重试或调整获取数量。'
                 );
                 updateSelectToggleButton();
             };
+            const getMissingCountTotal = () => recentConversations.filter((c) => {
+                const n = Number(c?.badgeCount ?? c?.messageCount);
+                const createdText = String(c?.createdAtText || '').trim();
+                return !Number.isFinite(n) || n <= 0 || !createdText || createdText === '-';
+            }).length;
 
             const loadRecentConversations = async () => {
                 if (loading) return;
                 loading = true;
+                countHydrationSeq += 1;
                 const limit = getRecentLimit();
                 hideExportMenu();
                 listEl.innerHTML = '<div class="db-batch-loading"><div class="db-batch-spinner"></div><div>正在加载历史会话...</div></div>';
@@ -10512,8 +12146,53 @@
                 try {
                     const result = await fetchDeepSeekRecentConversations(limit, 8);
                     recentConversations = result.conversations;
-                    statusEl.textContent = `已加载 ${Number(result?.obtained || recentConversations.length)}/${Number(result?.requested || limit)} 个历史会话`;
+                    const requested = Number(result?.requested || limit);
+                    const obtained = Number(result?.obtained || recentConversations.length);
+                    statusEl.textContent = `已加载 ${obtained}/${requested} 个历史会话`;
                     renderRecentList();
+
+                    const runSeq = countHydrationSeq;
+                    const missingTotal = getMissingCountTotal();
+                    if (missingTotal > 0) {
+                        statusEl.textContent = `已加载 ${obtained}/${requested} 个历史会话 · 正在补齐消息数（0/${missingTotal}）...`;
+                        hydrateConversationMessageCounts(recentConversations, {
+                            concurrency: 2,
+                            isCancelled: () => runSeq !== countHydrationSeq || !modal.isConnected,
+                            shouldHydrate: (conv) => {
+                                const n = Number(conv?.badgeCount ?? conv?.messageCount);
+                                const createdText = String(conv?.createdAtText || '').trim();
+                                return !Number.isFinite(n) || n <= 0 || !createdText || createdText === '-';
+                            },
+                            getCount: async (conv) => {
+                                const allRes = await fetchDeepSeekConversationMessages(conv.id);
+                                const apiSession = allRes?.meta?.chatSession || {};
+                                const apiCreatedAtValue = Number(apiSession?.insertedAtValue || 0);
+                                const apiUpdatedAtValue = Number(apiSession?.updatedAtValue || 0);
+                                const apiCreatedAtText = String(apiSession?.insertedAt || '').trim();
+                                const apiUpdatedAtText = String(apiSession?.updatedAt || '').trim();
+
+                                if (Number.isFinite(apiCreatedAtValue) && apiCreatedAtValue > 0) conv.createdAt = apiCreatedAtValue;
+                                if (apiCreatedAtText) conv.createdAtText = apiCreatedAtText;
+                                if (Number.isFinite(apiUpdatedAtValue) && apiUpdatedAtValue > 0) conv.updatedAt = apiUpdatedAtValue;
+                                if (apiUpdatedAtText) conv.updatedAtText = apiUpdatedAtText;
+
+                                return Array.isArray(allRes?.messages) ? allRes.messages.length : null;
+                            },
+                            onProgress: ({ total, completed }) => {
+                                if (runSeq !== countHydrationSeq || !modal.isConnected) return;
+                                renderRecentList();
+                                statusEl.textContent = `已加载 ${obtained}/${requested} 个历史会话 · 正在补齐消息数（${completed}/${total}）...`;
+                            }
+                        }).then(({ total, completed, resolved }) => {
+                            if (runSeq !== countHydrationSeq || !modal.isConnected) return;
+                            if (total > 0 && completed > 0) {
+                                statusEl.textContent = `已加载 ${obtained}/${requested} 个历史会话 · 已补齐消息数 ${resolved}/${total}`;
+                            }
+                        }).catch(() => {
+                            if (runSeq !== countHydrationSeq || !modal.isConnected) return;
+                            statusEl.textContent = `已加载 ${obtained}/${requested} 个历史会话 · 消息数补齐失败`;
+                        });
+                    }
                 } catch (e) {
                     recentConversations = [];
                     statusEl.textContent = '加载历史会话失败';
@@ -10574,6 +12253,11 @@
                     statusEl.textContent = `正在导出第 ${i + 1}/${selected.length} 个会话: ${conv.title || conv.id}`;
                     try {
                         const allRes = await fetchDeepSeekConversationMessages(conv.id);
+                        const apiSession = allRes?.meta?.chatSession || {};
+                        const apiCreatedAtValue = Number(apiSession?.insertedAtValue || 0);
+                        const apiUpdatedAtValue = Number(apiSession?.updatedAtValue || 0);
+                        const apiCreatedAtText = String(apiSession?.insertedAt || '').trim();
+                        const apiUpdatedAtText = String(apiSession?.updatedAt || '').trim();
                         const messages = allRes.messages.map((m) => ({
                             role: m.role,
                             text: String(m.text || ''),
@@ -10584,10 +12268,10 @@
                         out.push({
                             conversationId: conv.id,
                             title: conv.title,
-                            updatedAt: conv.updatedAt || 0,
-                            updatedAtText: conv.updatedAtText || '',
-                            createdAt: conv.createdAt || 0,
-                            createdAtText: conv.createdAtText || '',
+                            updatedAt: Number.isFinite(apiUpdatedAtValue) && apiUpdatedAtValue > 0 ? apiUpdatedAtValue : (conv.updatedAt || 0),
+                            updatedAtText: apiUpdatedAtText || conv.updatedAtText || '',
+                            createdAt: Number.isFinite(apiCreatedAtValue) && apiCreatedAtValue > 0 ? apiCreatedAtValue : (conv.createdAt || 0),
+                            createdAtText: apiCreatedAtText || conv.createdAtText || '',
                             pinned: Boolean(conv.pinned),
                             messageCount: pickedMessages.length,
                             messages: pickedMessages
@@ -10609,9 +12293,6 @@
             };
 
             modal.querySelector('#ds-batch-close').addEventListener('click', close);
-            overlay.addEventListener('click', (e) => {
-                if (e.target === overlay) close();
-            });
             exportMenuTrigger.addEventListener('click', (e) => {
                 e.stopPropagation();
                 if (exportMenu.style.opacity === '1') hideExportMenu();
@@ -10661,7 +12342,7 @@
                     <div>
                         <div style="font-size:16px;font-weight:700;color:#0f172a;">豆包批量导出</div>
                     </div>
-                    <button id="db-batch-close" aria-label="关闭" title="关闭" style="cursor:pointer;border:none;background:#e5e7eb;color:#1f2937;width:32px;height:32px;border-radius:999px;font-size:20px;line-height:1;display:flex;align-items:center;justify-content:center;padding:0;transition:background .2s ease;">&times;</button>
+                    <button id="db-batch-close" aria-label="关闭" title="关闭" style="cursor:pointer;border:none;background:#e5e7eb;color:#1f2937;width:32px;height:32px;border-radius:999px;line-height:1;display:flex;align-items:center;justify-content:center;padding:0;transition:background .2s ease;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg></button>
                 </div>
                 <div class="db-batch-scroll" style="padding:16px 20px;overflow:auto;background:#f8fafc;">
                     <div style="border:1px solid #e2e8f0;border-radius:12px;padding:14px;background:#fff;">
@@ -10678,15 +12359,15 @@
                                 <button id="db-batch-toggle-select" style="border:1px solid #93c5fd;background:#eff6ff;border-radius:8px;font-size:12px;padding:8px 12px;cursor:pointer;color:#1d4ed8;font-weight:600;">全选</button>
                             </div>
                             <div style="position:relative;display:flex;justify-content:flex-end;align-items:center;">
-                                <button id="db-batch-export-menu-trigger" style="border:1px solid #2563eb;background:#2563eb;color:#fff;border-radius:8px;font-size:12px;padding:8px 14px;cursor:pointer;font-weight:600;display:flex;align-items:center;gap:6px;">
-                                    <span>导出</span><span id="db-batch-export-menu-icon" style="font-size:10px;opacity:.9;display:inline-block;transition:transform .2s ease;transform:rotate(0deg);">▼</span>
+                                <button id="db-batch-export-menu-trigger" style="border:1px solid #2563eb;background:#fff;color:#2563eb;border-radius:8px;font-size:12px;padding:7px 12px;cursor:pointer;font-weight:700;display:flex;align-items:center;gap:6px;">
+                                    <span>导出</span><span id="db-batch-export-menu-icon" style="opacity:.9;display:inline-flex;transition:transform .2s ease;transform:rotate(0deg);"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg></span>
                                 </button>
-                                <div id="db-batch-export-menu" style="position:absolute;right:0;top:40px;width:140px;background:#fff;border:1px solid #dbe3ee;border-radius:10px;box-shadow:0 10px 30px rgba(15,23,42,.15);padding:8px;z-index:5;opacity:0;pointer-events:none;transform:translateY(-8px) scale(0.96);transition:opacity .22s cubic-bezier(0.22, 0.61, 0.36, 1), transform .22s cubic-bezier(0.22, 0.61, 0.36, 1);">
-                                    <button class="db-batch-export-item" data-format="json" style="display:block;width:100%;margin:0;text-align:center;background:#ffffff;color:#2563eb;border-radius:0;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;transition:border-color .18s ease, box-shadow .18s ease, background-color .18s ease;border:none;">JSON</button>
-                                    <button class="db-batch-export-item" data-format="md" style="display:block;width:100%;margin:0;text-align:center;background:#ffffff;color:#2563eb;border-radius:0;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;transition:border-color .18s ease, box-shadow .18s ease, background-color .18s ease;border:none;">Markdown</button>
-                                    <button class="db-batch-export-item" data-format="txt" style="display:block;width:100%;margin:0;text-align:center;background:#ffffff;color:#2563eb;border-radius:0;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;transition:border-color .18s ease, box-shadow .18s ease, background-color .18s ease;border:none;">TXT</button>
-                                    <button class="db-batch-export-item" data-format="csv" style="display:block;width:100%;margin:0;text-align:center;background:#ffffff;color:#2563eb;border-radius:0;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;transition:border-color .18s ease, box-shadow .18s ease, background-color .18s ease;border:none;">CSV</button>
-                                    <button class="db-batch-export-item" data-format="pdf" style="display:block;width:100%;margin:0;text-align:center;background:#ffffff;color:#2563eb;border-radius:0;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;transition:border-color .18s ease, box-shadow .18s ease, background-color .18s ease;border:none;">PDF</button>
+                                <div id="db-batch-export-menu" style="position:absolute;right:0;top:36px;width:100px;background:rgba(255, 255, 255, 0.2);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);border:1px solid rgba(255,255,255,0.35);border-radius:10px;box-shadow:0 10px 30px rgba(15,23,42,.15);padding:0;z-index:7;opacity:0;pointer-events:none;transform:translateY(-8px) scale(0.96);transition:opacity .22s cubic-bezier(0.22,0.61,0.36,1), transform .22s cubic-bezier(0.22,0.61,0.36,1);">
+                                    <button class="db-batch-export-item" data-format="json" style="display:block;width:100%;margin:0;text-align:center;background:transparent;color:#2563eb;border-radius:0;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;transition:border-color .18s ease, box-shadow .18s ease, background-color .18s ease;border:none;">JSON</button>
+                                    <button class="db-batch-export-item" data-format="md" style="display:block;width:100%;margin:0;text-align:center;background:transparent;color:#2563eb;border-radius:0;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;transition:border-color .18s ease, box-shadow .18s ease, background-color .18s ease;border:none;">Markdown</button>
+                                    <button class="db-batch-export-item" data-format="txt" style="display:block;width:100%;margin:0;text-align:center;background:transparent;color:#2563eb;border-radius:0;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;transition:border-color .18s ease, box-shadow .18s ease, background-color .18s ease;border:none;">TXT</button>
+                                    <button class="db-batch-export-item" data-format="csv" style="display:block;width:100%;margin:0;text-align:center;background:transparent;color:#2563eb;border-radius:0;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;transition:border-color .18s ease, box-shadow .18s ease, background-color .18s ease;border:none;">CSV</button>
+                                    <button class="db-batch-export-item" data-format="pdf" style="display:block;width:100%;margin:0;text-align:center;background:transparent;color:#2563eb;border-radius:0;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;transition:border-color .18s ease, box-shadow .18s ease, background-color .18s ease;border:none;">PDF</button>
                                 </div>
                             </div>
                         </div>
@@ -10700,6 +12381,7 @@
 
             overlay.appendChild(modal);
             document.body.appendChild(overlay);
+            const modalLifecycle = setupUnifiedModalLifecycle(overlay, modal);
 
             let recentConversations = [];
             const messageSelectionByConversation = new Map();
@@ -10712,9 +12394,7 @@
             const exportMenu = modal.querySelector('#db-batch-export-menu');
             const exportMenuIcon = modal.querySelector('#db-batch-export-menu-icon');
 
-            const close = () => {
-                if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
-            };
+            const close = modalLifecycle.close;
 
             const setLoading = (isLoading) => {
                 loading = Boolean(isLoading);
@@ -10754,12 +12434,7 @@
                 renderBatchConversationList(
                     listEl,
                     recentConversations,
-                    (c) => [
-                        `会话编号: ${c.id || '-'}`,
-                        `消息数: ${Number.isFinite(c.badgeCount) ? String(c.badgeCount) : '-'}`,
-                        `更新时间: ${c.updatedAtText || '-'}`,
-                        `创建时间: ${c.createdAtText || '-'}`
-                    ],
+                    (c) => buildUnifiedBatchMetaTags(c, { idLabel: '会话ID' }),
                     '未获取到历史会话，请稍后重试或调整获取数量。'
                 );
                 updateSelectToggleButton();
@@ -10888,9 +12563,6 @@
             };
 
             modal.querySelector('#db-batch-close').addEventListener('click', close);
-            overlay.addEventListener('click', (e) => {
-                if (e.target === overlay) close();
-            });
 
             exportMenuTrigger.addEventListener('click', (e) => {
                 e.stopPropagation();
@@ -10952,7 +12624,7 @@
                     <div>
                         <div style="font-size:16px;font-weight:700;color:#0f172a;">千问批量导出</div>
                     </div>
-                    <button id="qw-batch-close" aria-label="关闭" title="关闭" style="cursor:pointer;border:none;background:#e5e7eb;color:#1f2937;width:32px;height:32px;border-radius:999px;font-size:20px;line-height:1;display:flex;align-items:center;justify-content:center;padding:0;transition:background .2s ease;">&times;</button>
+                    <button id="qw-batch-close" aria-label="关闭" title="关闭" style="cursor:pointer;border:none;background:#e5e7eb;color:#1f2937;width:32px;height:32px;border-radius:999px;line-height:1;display:flex;align-items:center;justify-content:center;padding:0;transition:background .2s ease;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg></button>
                 </div>
                 <div class="db-batch-scroll" style="padding:16px 20px;overflow:auto;background:#f8fafc;">
                     <div style="border:1px solid #e2e8f0;border-radius:12px;padding:14px;background:#fff;">
@@ -10970,7 +12642,7 @@
                             </div>
                             <div style="position:relative;display:flex;justify-content:flex-end;align-items:center;">
                                 <button id="qw-batch-export-menu-trigger" style="border:1px solid #2563eb;background:#2563eb;color:#fff;border-radius:8px;font-size:12px;padding:8px 14px;cursor:pointer;font-weight:600;display:flex;align-items:center;gap:6px;">
-                                    <span>导出</span><span id="qw-batch-export-menu-icon" style="font-size:10px;opacity:.9;display:inline-block;transition:transform .2s ease;transform:rotate(0deg);">▼</span>
+                                    <span>导出</span><span id="qw-batch-export-menu-icon" style="opacity:.9;display:inline-flex;transition:transform .2s ease;transform:rotate(0deg);"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg></span>
                                 </button>
                                 <div id="qw-batch-export-menu" style="position:absolute;right:0;top:40px;width:140px;background:#fff;border:1px solid #dbe3ee;border-radius:10px;box-shadow:0 10px 30px rgba(15,23,42,.15);padding:8px;z-index:5;opacity:0;pointer-events:none;transform:translateY(-8px) scale(0.96);transition:opacity .22s cubic-bezier(0.22, 0.61, 0.36, 1), transform .22s cubic-bezier(0.22, 0.61, 0.36, 1);">
                                     <button class="qw-batch-export-item" data-format="json" style="display:block;width:100%;margin:0;text-align:center;background:#ffffff;color:#2563eb;border-radius:0;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;transition:border-color .18s ease, box-shadow .18s ease, background-color .18s ease;border:none;">JSON</button>
@@ -10991,10 +12663,12 @@
 
             overlay.appendChild(modal);
             document.body.appendChild(overlay);
+            const modalLifecycle = setupUnifiedModalLifecycle(overlay, modal);
 
             let recentConversations = [];
             const messageSelectionByConversation = new Map();
             let loading = false;
+            let countHydrationSeq = 0;
             const listEl = modal.querySelector('#qw-batch-list');
             const statusEl = modal.querySelector('#qw-batch-status');
             const limitInput = modal.querySelector('#qw-batch-limit');
@@ -11003,9 +12677,7 @@
             const exportMenu = modal.querySelector('#qw-batch-export-menu');
             const exportMenuIcon = modal.querySelector('#qw-batch-export-menu-icon');
 
-            const close = () => {
-                if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
-            };
+            const close = modalLifecycle.close;
             const hideExportMenu = () => {
                 exportMenu.style.opacity = '0';
                 exportMenu.style.pointerEvents = 'none';
@@ -11039,19 +12711,19 @@
                 renderBatchConversationList(
                     listEl,
                     recentConversations,
-                    (c) => [
-                        `会话编号: ${c.id || '-'}`,
-                        `消息数: ${Number.isFinite(c.badgeCount) ? String(c.badgeCount) : '-'}`,
-                        `更新时间: ${c.updatedAtText || '-'}`,
-                        `创建时间: ${c.createdAtText || '-'}`
-                    ],
+                    (c) => buildUnifiedBatchMetaTags(c, { idLabel: '会话ID' }),
                     '未获取到历史会话，请稍后重试。'
                 );
                 updateSelectToggleButton();
             };
+            const getMissingCountTotal = () => recentConversations.filter((c) => {
+                const n = Number(c?.badgeCount ?? c?.messageCount);
+                return !Number.isFinite(n) || n <= 0;
+            }).length;
             const loadRecentConversations = async () => {
                 if (loading) return;
                 loading = true;
+                countHydrationSeq += 1;
                 const limit = getRecentLimit();
                 hideExportMenu();
                 listEl.innerHTML = '<div class="db-batch-loading"><div class="db-batch-spinner"></div><div>正在加载历史会话...</div></div>';
@@ -11059,8 +12731,41 @@
                 try {
                     const result = await fetchQwenRecentConversations(limit, 5);
                     recentConversations = result.conversations;
-                    statusEl.textContent = `已加载 ${Number(result?.obtained || recentConversations.length)}/${Number(result?.requested || limit)} 个历史会话`;
+                    const requested = Number(result?.requested || limit);
+                    const obtained = Number(result?.obtained || recentConversations.length);
+                    statusEl.textContent = `已加载 ${obtained}/${requested} 个历史会话`;
                     renderRecentList();
+
+                    const runSeq = countHydrationSeq;
+                    const missingTotal = getMissingCountTotal();
+                    if (missingTotal > 0) {
+                        statusEl.textContent = `已加载 ${obtained}/${requested} 个历史会话 · 正在补齐消息数（0/${missingTotal}）...`;
+                        hydrateConversationMessageCounts(recentConversations, {
+                            concurrency: 2,
+                            isCancelled: () => runSeq !== countHydrationSeq || !modal.isConnected,
+                            shouldHydrate: (conv) => {
+                                const n = Number(conv?.badgeCount ?? conv?.messageCount);
+                                return !Number.isFinite(n) || n <= 0;
+                            },
+                            getCount: async (conv) => {
+                                const allRes = await fetchQwenAllConversationMessages(conv.id, 20, () => {});
+                                return Array.isArray(allRes?.messages) ? allRes.messages.length : null;
+                            },
+                            onProgress: ({ total, completed }) => {
+                                if (runSeq !== countHydrationSeq || !modal.isConnected) return;
+                                renderRecentList();
+                                statusEl.textContent = `已加载 ${obtained}/${requested} 个历史会话 · 正在补齐消息数（${completed}/${total}）...`;
+                            }
+                        }).then(({ total, completed, resolved }) => {
+                            if (runSeq !== countHydrationSeq || !modal.isConnected) return;
+                            if (total > 0 && completed > 0) {
+                                statusEl.textContent = `已加载 ${obtained}/${requested} 个历史会话 · 已补齐消息数 ${resolved}/${total}`;
+                            }
+                        }).catch(() => {
+                            if (runSeq !== countHydrationSeq || !modal.isConnected) return;
+                            statusEl.textContent = `已加载 ${obtained}/${requested} 个历史会话 · 消息数补齐失败`;
+                        });
+                    }
                 } catch (e) {
                     recentConversations = [];
                     statusEl.textContent = '加载历史会话失败';
@@ -11142,9 +12847,6 @@
             };
 
             modal.querySelector('#qw-batch-close').addEventListener('click', close);
-            overlay.addEventListener('click', (e) => {
-                if (e.target === overlay) close();
-            });
             exportMenuTrigger.addEventListener('click', (e) => {
                 e.stopPropagation();
                 if (exportMenu.style.opacity === '1') hideExportMenu();
