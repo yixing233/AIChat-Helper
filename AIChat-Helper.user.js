@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AI对话助手
 // @namespace    http://tampermonkey.net/
-// @version      2.0.2
+// @version      2.0.5
 // @description  支持 ChatGPT、通义千问、豆包、DeepSeek：自动生成对话节点导航、一键导出对话（PDF/Markdown/JSON/CSV/TXT）。
 // @author       xchengb
 // @updateURL    https://gitee.com/xcb157342/ai-chat-nodes/raw/master/AIChat-Helper.user.js
