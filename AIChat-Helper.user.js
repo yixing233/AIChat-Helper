@@ -4,8 +4,8 @@
 // @version      2.0.5
 // @description  支持 ChatGPT、通义千问、豆包、DeepSeek：自动生成对话节点导航、一键导出对话（PDF/Markdown/JSON/CSV/TXT）。
 // @author       xchengb
-// @updateURL    https://gitee.com/xcb157342/ai-chat-nodes/raw/master/AIChat-Helper.user.js
-// @downloadURL  https://gitee.com/xcb157342/ai-chat-nodes/raw/master/AIChat-Helper.user.js
+// @updateURL    https://github.com/yixing233/AIChat-Helper/raw/master/AIChat-Helper.user.js
+// @downloadURL  https://github.com/yixing233/AIChat-Helper/raw/master/AIChat-Helper.user.js
 // @icon         data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIzMiIgaGVpZ2h0PSIzMiIgdmlld0JveD0iMCAwIDMyIDMyIj48cmVjdCB3aWR0aD0iMzIiIGhlaWdodD0iMzIiIGZpbGw9Im5vbmUiLz48cGF0aCBmaWxsPSIjMDQwMGU2IiBkPSJNMTYgMTlhNi45OSAxNi45OSAwIDAgMS01LjgzMy0zLjEyOWwxLjY2Ni0xLjEwN2E1IDUgMCAwIDAgOC4zMzQgMGwxLjY2NiAxLjEwN0E2Ljk5IDYuOTkgMCAwIDEgMTYgMTl6Ii8+PGNpcmNsZSBjeD0iMjAyMCIgY3k9IjEwIiByPSIyIiBmaWxsPSIjMDQwMGU2Ii8+PGNpcmNsZSBjeD0iMTIiIGN5PSIxMCIgcj0iMiIgZmlsbD0iIzA0MDBlNiIvPjxjaXJjbGUgY3g9IjEyIiBjeT0iMTAiIHI9IjIiIGZpbGw9IiMwNDAwZTYiLz48Y2lyY2xlIGN4PSIxMiIgY3k9IjEwIiByPSIyIiBmaWxsPSIjMDQwMGU2Ii8+PHBhdGggZmlsbD0iIzA0MDBlNiIgZD0iTTE3LjczNiAzMEwxNiAyOWw0LTdoNmEyIDIgMCAwIDAgMi0yVjZhMiAyIDAgMCAwLTItMkg2YTIgMiAwIDAgMC0yIDJ2MTRhMiAyIDAgMCAwIDIgMmg5djJINmE0IDQgMCAwIDEtNC00VjZhNCA0IDAgMCAxIDQtNGgyMGE0IDQgMCAwIDEgNCA0djE0YTQgNCAwIDAgMS00IDRoLTQuODM1eiIvPjwvc3ZnPg==
 // @match        *://chatgpt.com/*
 // @match        *://www.qianwen.com/*
@@ -6056,7 +6056,7 @@
         if (isQwen || isDeepSeek || isDoubao) {
             const node = isQwen
                 ? getQwenActiveNodeByConversationState(scrollEl)
-                : (isDeepSeek ? getDeepSeekActiveNodeByConversationState(scrollEl) : getDoubaoActiveNodeByNavState());
+                : (isDeepSeek ? getDeepSeekActiveNodeByConversationState(scrollEl) : getDoubaoActiveNodeByConversationState(scrollEl));
             const resolvedNode = node || (nodes.length === 1 ? nodes[0] : null);
             if (resolvedNode && resolvedNode.id !== activeNodeId) {
                 setActiveDot(resolvedNode.dot, resolvedNode.id);
@@ -6139,25 +6139,25 @@
         const btn = document.createElement('button');
         btn.type = 'button';
         btn.className = 'ai-nodes-settings-btn' + (isDeepSeek ? ' ds-icon-button ds-icon-button--l ds-icon-button--s ds-icon-button--sizing-container' : '');
-        // 使用 SVG 代替 FontAwesome 字体，以绕过 ChatGPT 严格的 CSP（防止字体库加载失败）
+        // 使用 SVG 代替字体图标，避免 CSP 限制
         btn.innerHTML = `
-            <svg width="22" height="22" viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg">
-                <rect width="48" height="48" fill="white" fill-opacity="0.01"></rect>
-                <path d="M18.2838 43.1712C14.9327 42.1735 11.9498 40.3212 9.58787 37.8669C10.469 36.8226 11 35.4733 11 34C11 30.6863 8.31371 28 5 28C4.79955 28 4.60139 28.0098 4.40599 28.029C4.13979 26.7276 4 25.3801 4 24C4 21.9094 4.32077 19.8937 4.91579 17.9994C4.94381 17.9998 4.97188 18 5 18C8.31371 18 11 15.3137 11 12C11 11.0487 10.7786 10.1491 10.3846 9.34999C12.6975 7.19937 15.5205 5.5899 18.6521 4.72302C19.6444 6.66807 21.6667 8.00001 24 8.00001C26.3333 8.00001 28.3556 6.66807 29.3479 4.72302C32.4795 5.5899 35.3025 7.19937 37.6154 9.34999C37.2214 10.1491 37 11.0487 37 12C37 15.3137 39.6863 18 43 18C43.0281 18 43.0562 17.9998 43.0842 17.9994C43.6792 19.8937 44 21.9094 44 24C44 25.3801 43.8602 26.7276 43.594 28.029C43.3986 28.0098 43.2005 28 43 28C39.6863 28 37 30.6863 37 34C37 35.4733 37.531 36.8226 38.4121 37.8669C36.0502 40.3212 33.0673 42.1735 29.7162 43.1712C28.9428 40.7518 26.676 39 24 39C21.324 39 19.0572 40.7518 18.2838 43.1712Z" fill="#2F88FF" stroke="#333" stroke-width="3" stroke-linejoin="round"></path>
-                <path d="M24 31C27.866 31 31 27.866 31 24C31 20.134 27.866 17 24 17C20.134 17 17 20.134 17 24C17 27.866 20.134 31 24 31Z" fill="#43CCF8" stroke="white" stroke-width="3" stroke-linejoin="round"></path>
+            <svg class="ai-settings-icon-root" viewBox="0 0 24 24" width="20" height="20" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true" style="display:block;overflow:visible;">
+                <path fill-rule="evenodd" clip-rule="evenodd" d="M12 9.75C10.7574 9.75 9.75 10.7574 9.75 12C9.75 13.2426 10.7574 14.25 12 14.25C13.2426 14.25 14.25 13.2426 14.25 12C14.25 10.7574 13.2426 9.75 12 9.75ZM8.25 12C8.25 9.92893 9.92893 8.25 12 8.25C14.0711 8.25 15.75 9.92893 15.75 12C15.75 14.0711 14.0711 15.75 12 15.75C9.92893 15.75 8.25 14.0711 8.25 12Z" fill="currentColor"></path>
+                <path fill-rule="evenodd" clip-rule="evenodd" d="M9.60347 3.77018C9.3358 3.32423 8.77209 3.18551 8.35347 3.43457L8.34256 3.44105L6.61251 4.43096C6.06514 4.74375 5.8763 5.45289 6.1894 5.9948L5.54 6.37001L6.18888 5.99391C6.72395 6.91704 6.86779 7.92882 6.38982 8.75823C5.91192 9.58753 4.96479 9.97001 3.9 9.97001C3.26678 9.97001 2.75 10.4917 2.75 11.12V12.88C2.75 13.5084 3.26678 14.03 3.9 14.03C4.96479 14.03 5.91192 14.4125 6.38982 15.2418C6.86773 16.0711 6.72398 17.0827 6.18909 18.0058C5.87642 18.5476 6.06491 19.2561 6.6121 19.5688L8.35352 20.5654C8.77214 20.8144 9.33577 20.6758 9.60345 20.2299L9.71093 20.0442C10.2458 19.1214 11.052 18.4925 12.0087 18.4925C12.9662 18.4925 13.77 19.1219 14.3 20.0458C14.3002 20.0462 14.3004 20.0466 14.3007 20.047L14.4065 20.2298C14.6742 20.6758 15.2379 20.8145 15.6565 20.5655L15.6674 20.559L17.3975 19.5691C17.9434 19.2571 18.1351 18.5578 17.8198 18.0038C17.2858 17.0813 17.1426 16.0705 17.6202 15.2418C18.0981 14.4125 19.0452 14.03 20.11 14.03C20.7432 14.03 21.26 13.5084 21.26 12.88V11.12C21.26 10.4868 20.7384 9.97001 20.11 9.97001C19.0452 9.97001 18.0981 9.58753 17.6202 8.75824C17.1423 7.92899 17.286 6.91744 17.8208 5.99445C18.1336 5.45258 17.9451 4.74391 17.3979 4.43119L15.6565 3.43466C15.2379 3.1856 14.6742 3.32423 14.4065 3.77019L14.2991 3.95579C13.7642 4.8786 12.958 5.50751 12.0012 5.50751C11.0439 5.50751 10.2402 4.87825 9.71021 3.95455C9.70992 3.95403 9.70962 3.95352 9.70933 3.95301L9.60347 3.77018ZM7.59248 2.14193C8.75191 1.45656 10.2226 1.87704 10.8946 3.00654L10.8991 3.01421L11.0091 3.20423L11.0107 3.20701C11.3807 3.85247 11.7666 4.00751 12.0012 4.00751C12.237 4.00751 12.6259 3.85115 13.0009 3.20423C13.001 3.20412 13.0009 3.20434 13.0009 3.20423L13.1154 3.00651C13.7874 1.877 15.2581 1.45656 16.4175 2.14193L18.1421 3.12883C19.4147 3.85604 19.8463 5.48713 19.1194 6.74522L19.1189 6.74611C18.7439 7.39298 18.8028 7.8062 18.9198 8.00929C19.0369 8.21249 19.3648 8.47001 20.11 8.47001C21.5616 8.47001 22.76 9.65323 22.76 11.12V12.88C22.76 14.3317 21.5768 15.53 20.11 15.53C19.3648 15.53 19.0369 15.7875 18.9198 15.9907C18.8028 16.1938 18.7439 16.607 19.1189 17.2539L19.1212 17.2579C19.8444 18.5235 19.4157 20.1431 18.1425 20.871C18.1424 20.871 18.1426 20.8709 18.1425 20.871L16.4174 21.8581C15.258 22.5434 13.7874 22.123 13.1154 20.9935L13.1109 20.9858L13.0009 20.7958L12.9993 20.793C12.6293 20.1476 12.2434 19.9925 12.0087 19.9925C11.773 19.9925 11.3841 20.1489 11.0091 20.7958C11.009 20.7959 11.0091 20.7957 11.0091 20.7958L10.8946 20.9935C10.2226 22.123 8.75199 22.5434 7.59257 21.8581L5.8679 20.8712C5.86776 20.8711 5.86803 20.8713 5.8679 20.8712C4.59558 20.1439 4.16378 18.5128 4.8906 17.2548L4.89112 17.2539C5.26605 16.607 5.20721 16.1938 5.09018 15.9907C4.97308 15.7875 4.64521 15.53 3.9 15.53C2.43322 15.53 1.25 14.3317 1.25 12.88V11.12C1.25 9.66837 2.43322 8.47001 3.9 8.47001C4.64521 8.47001 4.97308 8.21249 5.09018 8.00929C5.20721 7.8062 5.26605 7.39298 4.89112 6.74611L4.8906 6.74522C4.16378 5.48726 4.59518 3.85639 5.86749 3.12906L7.59248 2.14193Z" fill="currentColor"></path>
             </svg>
         `;
         btn.title = 'AI 节点设置';
         btn.style.cssText = `
             background: transparent;
-            border: none;
+            border: 1px solid rgba(37, 99, 235, 0.3);
+            border-radius: 999px;
             cursor: pointer;
-            color: #888;
+            color: rgba(37, 99, 235, 0.92);
             padding: 0;
             margin: 0;
             width: 32px;
             height: 32px;
-            transition: color 0.2s, transform 0.2s;
+            transition: transform 0.2s, box-shadow 0.2s, border-color 0.2s, color 0.2s;
             display: flex;
             align-items: center;
             justify-content: center;
@@ -6166,27 +6166,63 @@
             position: relative;
             pointer-events: auto;
             z-index: 10150;
-            background-clip: padding-box;
         `;
         btn.addEventListener('mouseenter', () => {
-            btn.style.color = '#555';
-            btn.style.transform = 'rotate(30deg)';
+            btn.style.borderColor = 'rgba(37, 99, 235, 1)';
+            btn.style.color = '#1d4ed8';
         });
         btn.addEventListener('mouseleave', () => {
-            btn.style.color = '#888';
-            btn.style.transform = 'none';
+            btn.style.borderColor = 'rgba(37, 99, 235, 0.3)';
+            btn.style.color = 'rgba(37, 99, 235, 0.92)';
+        });
+        const searchBtn = document.createElement('button');
+        searchBtn.type = 'button';
+        searchBtn.className = 'ai-nodes-search-btn';
+        const searchBtnSvg = `<svg class="ai-search-icon-root" viewBox="0 0 24 24" width="20" height="20" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path class="ai-search-icon-base" d="M16.6725 16.6412L21 21M19 11C19 15.4183 15.4183 19 11 19C6.58172 19 3 15.4183 3 11C3 6.58172 6.58172 3 11 3C15.4183 3 19 6.58172 19 11Z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path><path class="ai-search-icon-extra" d="M11 6C13.7614 6 16 8.23858 16 11" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path></svg>`;
+        searchBtn.innerHTML = searchBtnSvg;
+        searchBtn.title = '搜索当前对话';
+        searchBtn.style.cssText = `
+            background: transparent;
+            border: 1px solid rgba(37, 99, 235, 0.3);
+            color: rgba(37, 99, 235, 0.92);
+            cursor: pointer;
+            padding: 0;
+            margin: 0;
+            width: 32px;
+            height: 32px;
+            border-radius: 999px;
+            transition: transform 0.2s, box-shadow 0.2s, border-color 0.2s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            outline: none;
+            flex-shrink: 0;
+            position: relative;
+            pointer-events: auto;
+            z-index: 10150;
+        `;
+        searchBtn.addEventListener('mouseenter', () => {
+            searchBtn.style.borderColor = 'rgba(37, 99, 235, 1)';
+            searchBtn.style.color = '#1d4ed8';
+        });
+        searchBtn.addEventListener('mouseleave', () => {
+            searchBtn.style.borderColor = 'rgba(37, 99, 235, 0.3)';
+            searchBtn.style.color = 'rgba(37, 99, 235, 0.92)';
         });
         const buttonHost = document.createElement('div');
         buttonHost.className = 'ai-nodes-settings-host';
         buttonHost.style.cssText = `
             position: relative;
             display: flex;
+            flex-direction: column;
             align-items: center;
             justify-content: center;
+            gap: 6px;
             flex-shrink: 0;
             pointer-events: auto;
             z-index: 10150;
         `;
+        buttonHost.appendChild(searchBtn);
         buttonHost.appendChild(btn);
 
         const fallbackHost = document.createElement('div');
@@ -6395,6 +6431,107 @@
                 #ai-nodes-export-trigger:hover {
                     box-shadow: inset 0 0 0 1px rgba(191,219,254,0.9), 0 6px 14px rgba(30,136,229,0.28);
                 }
+                #ai-nodes-search-input:focus {
+                    border-color: #3b82f6 !important;
+                    box-shadow: 0 0 0 2px rgba(59,130,246,0.15);
+                }
+                #ai-nodes-search-confirm:hover {
+                    box-shadow: 0 0 0 2px rgba(59,130,246,0.18);
+                }
+                .ai-nodes-search-results-popup {
+                    scrollbar-width: thin;
+                    scrollbar-color: rgba(37,99,235,0.42) rgba(226,232,240,0.5);
+                }
+                .ai-nodes-search-results-popup::-webkit-scrollbar {
+                    width: 8px;
+                    height: 8px;
+                }
+                .ai-nodes-search-results-popup::-webkit-scrollbar-track {
+                    background: rgba(226,232,240,0.42);
+                    border-radius: 999px;
+                }
+                .ai-nodes-search-results-popup::-webkit-scrollbar-thumb {
+                    background: linear-gradient(180deg, rgba(59,130,246,0.72), rgba(37,99,235,0.62));
+                    border-radius: 999px;
+                    border: 1px solid rgba(255,255,255,0.72);
+                }
+                .ai-nodes-search-results-popup::-webkit-scrollbar-thumb:hover {
+                    background: linear-gradient(180deg, rgba(37,99,235,0.9), rgba(29,78,216,0.84));
+                }
+                .ai-nodes-search-btn .ai-search-icon-root {
+                    display: block;
+                    overflow: visible;
+                }
+                .ai-nodes-settings-btn .ai-settings-icon-root {
+                    transform: rotate(0deg);
+                    transform-origin: 50% 50%;
+                    transition: transform .22s cubic-bezier(0.22, 0.61, 0.36, 1);
+                }
+                .ai-nodes-settings-btn:hover .ai-settings-icon-root {
+                    transform: rotate(90deg);
+                }
+                .ai-nodes-search-btn .ai-search-icon-base {
+                    transition: transform .2s linear;
+                    transform-origin: 50% 50%;
+                }
+                .ai-nodes-search-btn .ai-search-icon-extra {
+                    opacity: 0;
+                    stroke-dasharray: 14;
+                    stroke-dashoffset: 14;
+                    transition: opacity .16s linear, stroke-dashoffset .2s linear;
+                }
+                .ai-nodes-search-btn:hover .ai-search-icon-base {
+                    transform: scale(0.98);
+                }
+                .ai-nodes-search-btn:hover .ai-search-icon-extra {
+                    opacity: 1;
+                    stroke-dashoffset: 0;
+                }
+                #m-list-box,
+                #gpt-batch-list,
+                #ds-batch-list,
+                #db-batch-list,
+                #qw-batch-list,
+                .db-batch-scroll {
+                    scrollbar-width: thin;
+                    scrollbar-color: rgba(37,99,235,0.42) rgba(226,232,240,0.5);
+                }
+                #m-list-box::-webkit-scrollbar,
+                #gpt-batch-list::-webkit-scrollbar,
+                #ds-batch-list::-webkit-scrollbar,
+                #db-batch-list::-webkit-scrollbar,
+                #qw-batch-list::-webkit-scrollbar,
+                .db-batch-scroll::-webkit-scrollbar {
+                    width: 8px;
+                    height: 8px;
+                }
+                #m-list-box::-webkit-scrollbar-track,
+                #gpt-batch-list::-webkit-scrollbar-track,
+                #ds-batch-list::-webkit-scrollbar-track,
+                #db-batch-list::-webkit-scrollbar-track,
+                #qw-batch-list::-webkit-scrollbar-track,
+                .db-batch-scroll::-webkit-scrollbar-track {
+                    background: rgba(226,232,240,0.42);
+                    border-radius: 999px;
+                }
+                #m-list-box::-webkit-scrollbar-thumb,
+                #gpt-batch-list::-webkit-scrollbar-thumb,
+                #ds-batch-list::-webkit-scrollbar-thumb,
+                #db-batch-list::-webkit-scrollbar-thumb,
+                #qw-batch-list::-webkit-scrollbar-thumb,
+                .db-batch-scroll::-webkit-scrollbar-thumb {
+                    background: linear-gradient(180deg, rgba(59,130,246,0.72), rgba(37,99,235,0.62));
+                    border-radius: 999px;
+                    border: 1px solid rgba(255,255,255,0.72);
+                }
+                #m-list-box::-webkit-scrollbar-thumb:hover,
+                #gpt-batch-list::-webkit-scrollbar-thumb:hover,
+                #ds-batch-list::-webkit-scrollbar-thumb:hover,
+                #db-batch-list::-webkit-scrollbar-thumb:hover,
+                #qw-batch-list::-webkit-scrollbar-thumb:hover,
+                .db-batch-scroll::-webkit-scrollbar-thumb:hover {
+                    background: linear-gradient(180deg, rgba(37,99,235,0.9), rgba(29,78,216,0.84));
+                }
             `;
             document.head.appendChild(hoverStyle);
         }
@@ -6531,6 +6668,120 @@
         readingLinePreview.appendChild(rlLabel);
         document.body.appendChild(readingLinePreview);
 
+        // 当前对话搜索浮层（控制区/结果区分离）
+        const searchControlsPopup = document.createElement('div');
+        searchControlsPopup.className = 'ai-nodes-search-controls-popup';
+        searchControlsPopup.style.cssText = `
+            position: fixed;
+            width: 320px;
+            max-width: calc(100vw - 24px);
+            background: rgba(255, 255, 255, 0.97);
+            border: 1px solid rgba(37, 99, 235, 0.22);
+            border-radius: 12px;
+            box-shadow: 0 0 10px rgba(15, 23, 42, 0.14);
+            padding: 10px;
+            z-index: 10162;
+            opacity: 0;
+            pointer-events: none;
+            transform: translateX(-8px) scale(0.96);
+            transition: opacity 0.24s cubic-bezier(0.22, 0.61, 0.36, 1), transform 0.24s cubic-bezier(0.22, 0.61, 0.36, 1);
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+        `;
+        searchControlsPopup.innerHTML = `
+            <div id="ai-nodes-search-controls" style="display:flex; align-items:center; gap:8px;">
+                <input id="ai-nodes-search-input" type="text" placeholder="搜索当前对话消息..." style="flex:1; height:34px; border:1px solid #bfdbfe; border-radius:8px; padding:0 10px; font-size:12px; color:#0f172a; outline:none; background:#fff;">
+                <button id="ai-nodes-search-confirm" type="button" style="height:34px; border:none; border-radius:8px; background:#2563eb; color:#fff; padding:0 12px; cursor:pointer; font-size:12px; font-weight:700; white-space:nowrap;">确认搜索</button>
+            </div>
+        `;
+        document.body.appendChild(searchControlsPopup);
+
+        const searchResultsPopup = document.createElement('div');
+        searchResultsPopup.className = 'ai-nodes-search-results-popup';
+        searchResultsPopup.style.cssText = `
+            position: fixed;
+            width: 320px;
+            max-width: calc(100vw - 24px);
+            background: rgba(255, 255, 255, 0.97);
+            border: 1px solid rgba(37, 99, 235, 0.22);
+            border-radius: 12px;
+            box-shadow: 0 0 10px rgba(15, 23, 42, 0.14);
+            padding: 10px;
+            z-index: 10162;
+            opacity: 0;
+            pointer-events: none;
+            transform: translateY(-8px) scale(0.98);
+            transition: opacity 0.18s linear, transform 0.18s linear;
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+            min-height: 62px;
+            max-height: min(44vh, 380px);
+            overflow: auto;
+        `;
+        searchResultsPopup.innerHTML = `<div style="font-size:12px; color:#64748b; line-height:1.45;">输入关键词后点击“确认搜索”。</div>`;
+        document.body.appendChild(searchResultsPopup);
+
+        const searchResultBox = searchResultsPopup;
+        const searchInput = searchControlsPopup.querySelector('#ai-nodes-search-input');
+        const searchConfirmBtn = searchControlsPopup.querySelector('#ai-nodes-search-confirm');
+        const decideSearchResultsVertical = () => {
+            const margin = 8;
+            const gap = 6;
+            const controlsRect = searchControlsPopup.getBoundingClientRect();
+            const belowTop = controlsRect.bottom + gap;
+            const estimatedMaxHeight = Math.max(120, Math.round(Math.min(window.innerHeight * 0.44, 380)));
+            const aboveTop = controlsRect.top - estimatedMaxHeight - gap;
+            const canShowBelow = belowTop + estimatedMaxHeight <= window.innerHeight - margin;
+            const canShowAbove = aboveTop >= margin;
+            if (canShowBelow) return 'below';
+            if (canShowAbove) return 'above';
+            const spaceBelow = window.innerHeight - controlsRect.bottom - margin;
+            const spaceAbove = controlsRect.top - margin;
+            return spaceBelow >= spaceAbove ? 'below' : 'above';
+        };
+
+        const placeAndShowSearchResultsPopup = (vertical = 'below') => {
+            const margin = 8;
+            const gap = 6;
+            const controlsRect = searchControlsPopup.getBoundingClientRect();
+            const openDirection = searchControlsPopup.dataset.openDirection || 'left';
+
+            const popupWidth = Math.max(260, Math.round(searchResultsPopup.offsetWidth || 320));
+            const popupHeight = Math.max(120, Math.round(searchResultsPopup.offsetHeight || 180));
+            const left = Math.max(margin, Math.min(controlsRect.left, window.innerWidth - popupWidth - margin));
+            const belowTop = controlsRect.bottom + gap;
+            const aboveTop = controlsRect.top - popupHeight - gap;
+            const canShowBelow = belowTop + popupHeight <= window.innerHeight - margin;
+            const canShowAbove = aboveTop >= margin;
+
+            let top = belowTop;
+            let finalVertical = vertical === 'above' ? 'above' : 'below';
+            if (finalVertical === 'below' && !canShowBelow && canShowAbove) {
+                finalVertical = 'above';
+            } else if (finalVertical === 'above' && !canShowAbove && canShowBelow) {
+                finalVertical = 'below';
+            }
+
+            if (finalVertical === 'below') {
+                top = belowTop;
+            } else {
+                top = aboveTop;
+            }
+            top = Math.max(margin, Math.min(top, window.innerHeight - popupHeight - margin));
+
+            searchResultsPopup.style.left = `${Math.round(left)}px`;
+            searchResultsPopup.style.top = `${Math.round(top)}px`;
+            searchResultsPopup.dataset.openDirection = openDirection;
+            searchResultsPopup.dataset.verticalAlign = finalVertical;
+            searchResultsPopup.style.transform = finalVertical === 'above'
+                ? 'translateY(8px) scale(0.98)'
+                : 'translateY(-8px) scale(0.98)';
+            void searchResultsPopup.offsetHeight;
+            searchResultsPopup.style.opacity = '1';
+            searchResultsPopup.style.pointerEvents = 'auto';
+            searchResultsPopup.style.transform = 'translateY(0) scale(1)';
+        };
+
         const hideExportMenu = () => {
             const openDirection = exportMenu.dataset.openDirection || 'below';
             const hiddenTransform = openDirection === 'above'
@@ -6562,6 +6813,23 @@
             nodeSettingsMenu.style.transform = hiddenTransform;
         };
 
+        const hideSearchPopup = () => {
+            const openDirection = searchControlsPopup.dataset.openDirection || 'left';
+            const controlsHiddenTransform = openDirection === 'left'
+                ? 'translateX(8px) scale(0.96)'
+                : 'translateX(-8px) scale(0.96)';
+            const resultVertical = searchResultsPopup.dataset.verticalAlign || 'below';
+            const resultsHiddenTransform = resultVertical === 'above'
+                ? 'translateY(8px) scale(0.98)'
+                : 'translateY(-8px) scale(0.98)';
+            searchControlsPopup.style.opacity = '0';
+            searchControlsPopup.style.pointerEvents = 'none';
+            searchControlsPopup.style.transform = controlsHiddenTransform;
+            searchResultsPopup.style.opacity = '0';
+            searchResultsPopup.style.pointerEvents = 'none';
+            searchResultsPopup.style.transform = resultsHiddenTransform;
+        };
+
         // 绑定事件，防止点击菜单内部导致关闭；点击主设置弹窗区域时收起二级卡片
         popup.addEventListener('pointerdown', (e) => {
             e.stopPropagation();
@@ -6579,11 +6847,41 @@
         exportMenu.addEventListener('click', (e) => e.stopPropagation());
         nodeSettingsMenu.addEventListener('click', (e) => e.stopPropagation());
         readingLineMenu.addEventListener('click', (e) => e.stopPropagation());
+        searchControlsPopup.addEventListener('pointerdown', (e) => e.stopPropagation());
+        searchResultsPopup.addEventListener('pointerdown', (e) => e.stopPropagation());
+        searchResultsPopup.addEventListener('click', (e) => {
+            const target = e.target;
+            if (!(target instanceof Element)) return;
+            const navBtn = target.closest('button[data-search-group-nav]');
+            if (navBtn) {
+                const groupKey = String(navBtn.getAttribute('data-search-group-key') || '').trim();
+                const direction = String(navBtn.getAttribute('data-search-group-nav') || '').trim();
+                if (groupKey && (direction === 'prev' || direction === 'next')) {
+                    const group = currentSearchGroups.find((g) => String(g?.groupKey || '') === groupKey);
+                    if (group && Array.isArray(group.hitIndexes) && group.hitIndexes.length > 1) {
+                        const max = group.hitIndexes.length - 1;
+                        const cur = Number(currentSearchGroupCursorMap.get(groupKey) || 0);
+                        const next = direction === 'prev' ? Math.max(0, cur - 1) : Math.min(max, cur + 1);
+                        if (next !== cur) {
+                            currentSearchGroupCursorMap.set(groupKey, next);
+                            renderGroupedSearchResultsContent();
+                        }
+                    }
+                }
+                return;
+            }
+            const hitBtn = target.closest('button[data-search-hit-index]');
+            if (!hitBtn) return;
+            const hitIdx = Number(hitBtn.getAttribute('data-search-hit-index'));
+            if (!Number.isFinite(hitIdx) || hitIdx < 0 || hitIdx >= currentSearchHits.length) return;
+            jumpToSearchHit(currentSearchHits[hitIdx], String(searchInput?.value || ''));
+        });
 
         const hideAllSubMenus = () => {
             hideExportMenu();
             hideNodeSettingsMenu();
             hideReadingLineMenu();
+            hideSearchPopup();
         };
 
         const hidePopup = () => {
@@ -10845,11 +11143,11 @@
                     .db-batch-scroll::-webkit-scrollbar,
                     ${listSelector}::-webkit-scrollbar { width: 8px; height: 8px; }
                     .db-batch-scroll::-webkit-scrollbar-track,
-                    ${listSelector}::-webkit-scrollbar-track { background: transparent; }
+                    ${listSelector}::-webkit-scrollbar-track { background: rgba(226,232,240,0.42); border-radius:999px; }
                     .db-batch-scroll::-webkit-scrollbar-thumb,
-                    ${listSelector}::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 999px; }
+                    ${listSelector}::-webkit-scrollbar-thumb { background: linear-gradient(180deg, rgba(59,130,246,0.72), rgba(37,99,235,0.62)); border-radius: 999px; border:1px solid rgba(255,255,255,0.72); }
                     .db-batch-scroll::-webkit-scrollbar-thumb:hover,
-                    ${listSelector}::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+                    ${listSelector}::-webkit-scrollbar-thumb:hover { background: linear-gradient(180deg, rgba(37,99,235,0.9), rgba(29,78,216,0.84)); }
                     .db-batch-loading { display:flex; align-items:center; justify-content:center; flex-direction:column; gap:10px; padding:28px 12px; color:#64748b; font-size:12px; }
                     .db-batch-spinner { width:22px; height:22px; border-radius:999px; border:2px solid #cbd5e1; border-top-color:#2563eb; animation: db-batch-spin 0.9s linear infinite; }
                     @keyframes db-batch-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
@@ -13616,6 +13914,471 @@
             });
         }
 
+        let currentSearchHits = [];
+        let currentSearchGroups = [];
+        let currentSearchGroupCursorMap = new Map();
+
+        const detectSearchEntryRole = (el) => {
+            if (!(el instanceof Element)) return 'unknown';
+            const roleAttr = String(el.getAttribute('data-message-author-role') || '').toLowerCase();
+            if (roleAttr === 'user') return 'user';
+            if (roleAttr === 'assistant') return 'assistant';
+            const testId = String(el.getAttribute('data-testid') || '').toLowerCase();
+            if (testId === 'send_message' || testId.includes('user')) return 'user';
+            if (testId === 'receive_message' || testId.includes('assistant')) return 'assistant';
+            const msgId = String(el.getAttribute('data-msgid') || el.getAttribute('data-msg-id') || '').toLowerCase();
+            if (msgId.endsWith('-question')) return 'user';
+            if (msgId.endsWith('-answer')) return 'assistant';
+            const cls = String(el.className || '').toLowerCase();
+            if (/(question|user|human|send_message)/.test(cls)) return 'user';
+            if (/(answer|assistant|bot|receive_message)/.test(cls)) return 'assistant';
+            return 'unknown';
+        };
+
+        const extractSearchEntryText = (el) => {
+            if (!(el instanceof Element)) return '';
+            const testId = String(el.getAttribute('data-testid') || '').toLowerCase();
+            if (testId === 'send_message' || testId === 'receive_message') {
+                return String(
+                    el.querySelector('[data-testid="message_text_content"]')?.innerText
+                    || el.querySelector('[data-testid="message_content"]')?.innerText
+                    || el.innerText
+                    || ''
+                ).trim();
+            }
+            if (el.hasAttribute('data-message-author-role')) {
+                return String(
+                    el.querySelector('.whitespace-pre-wrap, [data-message-content], .markdown, .prose, [dir="auto"]')?.innerText
+                    || el.innerText
+                    || ''
+                ).trim();
+            }
+            return String(el.innerText || '').trim();
+        };
+
+        const collectSearchEntriesFromDom = () => {
+            const list = [];
+            const seen = new Set();
+            const addEntry = (el) => {
+                if (!(el instanceof Element)) return;
+                if (seen.has(el)) return;
+                const text = extractSearchEntryText(el);
+                if (!text) return;
+                seen.add(el);
+                list.push({
+                    element: el,
+                    role: detectSearchEntryRole(el),
+                    text
+                });
+            };
+
+            document.querySelectorAll('[data-message-author-role]').forEach(addEntry);
+            document.querySelectorAll('[data-testid="send_message"], [data-testid="receive_message"]').forEach(addEntry);
+            document.querySelectorAll('._81e7b5e, .ds-message').forEach(addEntry);
+            document.querySelectorAll('[data-msgid$="-question"], [data-msgid$="-answer"], [data-msg-id$="-question"], [data-msg-id$="-answer"], [class*="questionItem"], [class*="answerItem"]').forEach(addEntry);
+
+            return list;
+        };
+
+        const normalizeSearchPlainText = (text) => String(text || '').replace(/\s+/g, ' ').trim().toLowerCase();
+
+        const getSearchEntryNodeGroupIndex = (entry, fallbackIndex) => {
+            const safeFallback = Math.max(1, Number(fallbackIndex || 1));
+            if (!Array.isArray(nodes) || !nodes.length) return safeFallback;
+
+            if (isDoubao) {
+                const row = entry?.element?.closest?.('[data-testid="send_message"], [data-testid="receive_message"]') || entry?.element || null;
+                if (row) {
+                    const resolved = resolveDoubaoNodeFromRow(row, getDoubaoConversationRows());
+                    if (resolved?.id) {
+                        const idx = nodes.findIndex((n) => String(n?.id || '') === String(resolved.id));
+                        if (idx >= 0) return idx + 1;
+                    }
+                }
+            }
+
+            const entryText = normalizeSearchPlainText(entry?.text || '');
+            if (!entryText) return safeFallback;
+            const entryPrefix = entryText.slice(0, Math.min(32, entryText.length));
+
+            let bestIdx = -1;
+            let bestScore = -1;
+            nodes.forEach((n, idx) => {
+                const nodeText = normalizeSearchPlainText(n?.text || '');
+                if (!nodeText) return;
+                let score = 0;
+                if (nodeText === entryText) score += 10;
+                if (entryPrefix && (nodeText.includes(entryPrefix) || entryText.includes(nodeText.slice(0, Math.min(24, nodeText.length))))) score += 6;
+                if (score > bestScore) {
+                    bestScore = score;
+                    bestIdx = idx;
+                }
+            });
+
+            return bestIdx >= 0 ? bestIdx + 1 : safeFallback;
+        };
+
+        const buildSearchHitsByKeyword = (keyword) => {
+            const term = String(keyword || '').trim().toLowerCase();
+            if (!term) return [];
+            const entries = collectSearchEntriesFromDom();
+            const hits = [];
+            entries.forEach((entry, entryIdx) => {
+                const rawText = String(entry.text || '');
+                const lower = rawText.toLowerCase();
+                const nodeGroupIndex = getSearchEntryNodeGroupIndex(entry, entryIdx + 1);
+                let fromIndex = 0;
+                let occurrenceNo = 0;
+                while (fromIndex <= lower.length) {
+                    const found = lower.indexOf(term, fromIndex);
+                    if (found < 0) break;
+                    occurrenceNo += 1;
+                    const snippetStart = Math.max(0, found - 18);
+                    const snippetEnd = Math.min(rawText.length, found + term.length + 26);
+                    const prefix = snippetStart > 0 ? '...' : '';
+                    const suffix = snippetEnd < rawText.length ? '...' : '';
+                    const snippetCore = rawText
+                        .slice(snippetStart, snippetEnd)
+                        .replace(/\s+/g, ' ')
+                        .trim();
+                    hits.push({
+                        role: entry.role,
+                        entryIndex: entryIdx + 1,
+                        nodeGroupIndex,
+                        hitIndexInEntry: occurrenceNo,
+                        start: found,
+                        element: entry.element,
+                        snippet: `${prefix}${snippetCore}${suffix}`
+                    });
+                    fromIndex = found + term.length;
+                }
+            });
+            return hits;
+        };
+
+        const focusKeywordOccurrenceInElement = (el, keyword, occurrenceNo) => {
+            if (!(el instanceof Element)) return false;
+            const term = String(keyword || '').trim();
+            if (!term) return false;
+            const lowerTerm = term.toLowerCase();
+            let matched = 0;
+            const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, {
+                acceptNode: (node) => {
+                    const val = String(node?.nodeValue || '').trim();
+                    return val ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT;
+                }
+            });
+
+            while (walker.nextNode()) {
+                const node = walker.currentNode;
+                const text = String(node?.nodeValue || '');
+                const lower = text.toLowerCase();
+                let from = 0;
+                while (from <= lower.length) {
+                    const idx = lower.indexOf(lowerTerm, from);
+                    if (idx < 0) break;
+                    matched += 1;
+                    if (matched === occurrenceNo) {
+                        const range = document.createRange();
+                        range.setStart(node, idx);
+                        range.setEnd(node, idx + term.length);
+                        const sel = window.getSelection();
+                        if (sel) {
+                            sel.removeAllRanges();
+                            sel.addRange(range);
+                        }
+                        return range;
+                    }
+                    from = idx + lowerTerm.length;
+                }
+            }
+            return null;
+        };
+
+        const centerRangeInViewport = (range, hostEl = null) => {
+            if (!range || typeof range.getBoundingClientRect !== 'function') return;
+            const rect = range.getBoundingClientRect();
+            if (!rect || !Number.isFinite(rect.top) || !Number.isFinite(rect.height)) return;
+            const scrollContainer = (hostEl ? findNearestScrollableAncestor(hostEl) : null) || getScrollContainer();
+            const rangeCenterY = rect.top + rect.height / 2;
+            const isWindowLike = !scrollContainer
+                || scrollContainer === window
+                || scrollContainer === document.body
+                || scrollContainer === document.documentElement
+                || scrollContainer === document.scrollingElement;
+
+            if (isWindowLike) {
+                const viewportCenterY = window.innerHeight / 2;
+                const delta = rangeCenterY - viewportCenterY;
+                if (Math.abs(delta) < 2) return;
+                window.scrollBy({ top: delta, behavior: 'smooth' });
+                return;
+            }
+
+            const scRect = scrollContainer.getBoundingClientRect();
+            const containerCenterY = scRect.top + scRect.height / 2;
+            const delta = rangeCenterY - containerCenterY;
+            if (Math.abs(delta) < 2) return;
+            try {
+                scrollContainer.scrollBy({ top: delta, behavior: 'smooth' });
+            } catch (e) {
+                scrollContainer.scrollTop += delta;
+            }
+        };
+
+        const getSearchHighlightContainer = (el) => {
+            if (!(el instanceof Element)) return null;
+            return el.closest(
+                '[data-testid="send_message"], [data-testid="receive_message"], [data-message-author-role], article[data-testid^="conversation-turn-"], ._81e7b5e, .ds-message, [data-msgid$="-question"], [data-msgid$="-answer"], [data-msg-id$="-question"], [data-msg-id$="-answer"], [class*="questionItem"], [class*="answerItem"]'
+            ) || el;
+        };
+
+        const jumpToSearchHit = (hit, keyword) => {
+            if (!hit || !(hit.element instanceof Element)) return;
+            const highlightEl = getSearchHighlightContainer(hit.element) || hit.element;
+            try {
+                highlightEl.scrollIntoView({ behavior: 'auto', block: 'center', inline: 'nearest' });
+            } catch (e) {
+                highlightEl.scrollIntoView();
+            }
+
+            setTimeout(() => {
+                const range = focusKeywordOccurrenceInElement(hit.element, keyword, Number(hit.hitIndexInEntry || 1));
+                if (range) {
+                    centerRangeInViewport(range, highlightEl);
+                    setTimeout(() => centerRangeInViewport(range, highlightEl), 180);
+                }
+            }, 140);
+        };
+
+        const renderGroupedSearchResultsContent = () => {
+            if (!searchResultBox) return;
+            if (!Array.isArray(currentSearchGroups) || !currentSearchGroups.length) return;
+
+            const groupRows = currentSearchGroups.map((group) => {
+                const key = String(group.groupKey || '');
+                const hitIndexes = Array.isArray(group.hitIndexes) ? group.hitIndexes : [];
+                if (!hitIndexes.length) return '';
+                const maxPos = hitIndexes.length - 1;
+                const savedPos = Number(currentSearchGroupCursorMap.get(key) || 0);
+                const currentPos = Math.max(0, Math.min(maxPos, Number.isFinite(savedPos) ? savedPos : 0));
+                const hitIndex = Number(hitIndexes[currentPos] || 0);
+                const hit = currentSearchHits[hitIndex] || null;
+                if (!hit) return '';
+                const roleText = hit.role === 'user' ? '用户' : (hit.role === 'assistant' ? 'AI' : '消息');
+                const roleColor = roleText === '用户' ? '#1d4ed8' : (roleText === 'AI' ? '#0f766e' : '#64748b');
+                const preview = escapeHtml(hit.snippet || '');
+                const canPrev = currentPos > 0;
+                const canNext = currentPos < maxPos;
+
+                return `
+                    <div style="padding:8px 9px;border:1px solid #dbeafe;border-radius:10px;background:#fff;display:flex;align-items:center;gap:8px;">
+                        <button type="button" data-search-group-nav="prev" data-search-group-key="${escapeHtml(key)}" style="width:26px;height:26px;border:1px solid #bfdbfe;border-radius:999px;background:${canPrev ? '#eff6ff' : '#f8fafc'};color:${canPrev ? '#1d4ed8' : '#94a3b8'};cursor:${canPrev ? 'pointer' : 'not-allowed'};flex:none;display:flex;align-items:center;justify-content:center;padding:0;" ${canPrev ? '' : 'disabled'}>
+                            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="${canPrev ? '#1d4ed8' : '#94a3b8'}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:14px;height:14px;display:block;"><polyline points="15 18 9 12 15 6"></polyline></svg>
+                        </button>
+                        <button type="button" data-search-hit-index="${hitIndex}" style="flex:1;min-width:0;text-align:left;border:none;background:transparent;padding:0;cursor:pointer;display:flex;flex-direction:column;gap:4px;">
+                            <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;">
+                                <span style="font-size:11px;font-weight:700;color:${roleColor};">${roleText}</span>
+                                <span style="font-size:11px;color:#64748b;">节点${hit.nodeGroupIndex || hit.entryIndex}&nbsp;&nbsp;${currentPos + 1}/${hitIndexes.length}</span>
+                            </div>
+                            <div style="font-size:12px;line-height:1.45;color:#0f172a;word-break:break-word;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;">${preview}</div>
+                        </button>
+                        <button type="button" data-search-group-nav="next" data-search-group-key="${escapeHtml(key)}" style="width:26px;height:26px;border:1px solid #bfdbfe;border-radius:999px;background:${canNext ? '#eff6ff' : '#f8fafc'};color:${canNext ? '#1d4ed8' : '#94a3b8'};cursor:${canNext ? 'pointer' : 'not-allowed'};flex:none;display:flex;align-items:center;justify-content:center;padding:0;" ${canNext ? '' : 'disabled'}>
+                            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="${canNext ? '#1d4ed8' : '#94a3b8'}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:14px;height:14px;display:block;"><polyline points="9 18 15 12 9 6"></polyline></svg>
+                        </button>
+                    </div>
+                `;
+            }).join('');
+
+            searchResultBox.innerHTML = `
+                <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;gap:8px;">
+                    <span style="font-size:12px;color:#334155;">命中 <b style="color:#1d4ed8;">${currentSearchHits.length}</b> 处 · 节点 <b style="color:#1d4ed8;">${currentSearchGroups.length}</b> 组</span>
+                </div>
+                <div style="display:flex;flex-direction:column;gap:6px;">${groupRows}</div>
+            `;
+        };
+
+        const renderSearchResults = (keyword, messages, source) => {
+            if (!searchResultBox) return;
+            const term = String(keyword || '').trim();
+            if (!term) {
+                currentSearchHits = [];
+                currentSearchGroups = [];
+                currentSearchGroupCursorMap.clear();
+                searchResultBox.innerHTML = `<div style="font-size:12px;color:#64748b;line-height:1.45;">输入关键词后点击“确认搜索”。</div>`;
+                return;
+            }
+
+            const hits = buildSearchHitsByKeyword(term);
+            currentSearchHits = hits.slice();
+
+            if (!hits.length) {
+                currentSearchHits = [];
+                currentSearchGroups = [];
+                currentSearchGroupCursorMap.clear();
+                searchResultBox.innerHTML = `
+                    <div style="font-size:12px;color:#334155;line-height:1.45;">
+                        关键词 <b style="color:#1d4ed8;">${escapeHtml(term)}</b> 未命中。
+                    </div>
+                `;
+                return;
+            }
+
+            const groupedMap = new Map();
+            hits.slice(0, 260).forEach((item, idx) => {
+                const groupKey = `node-${Number(item.nodeGroupIndex || item.entryIndex || 0)}`;
+                if (!groupedMap.has(groupKey)) {
+                    groupedMap.set(groupKey, {
+                        groupKey,
+                        nodeGroupIndex: Number(item.nodeGroupIndex || item.entryIndex || 0),
+                        hitIndexes: []
+                    });
+                }
+                groupedMap.get(groupKey).hitIndexes.push(idx);
+            });
+            currentSearchGroups = Array.from(groupedMap.values()).sort((a, b) => a.nodeGroupIndex - b.nodeGroupIndex);
+            currentSearchGroups.forEach((group) => {
+                const key = String(group.groupKey || '');
+                const old = Number(currentSearchGroupCursorMap.get(key) || 0);
+                const max = Math.max(0, (group.hitIndexes?.length || 1) - 1);
+                currentSearchGroupCursorMap.set(key, Math.max(0, Math.min(max, Number.isFinite(old) ? old : 0)));
+            });
+
+            renderGroupedSearchResultsContent();
+        };
+
+        const runConversationSearch = async () => {
+            if (!searchInput || !searchConfirmBtn || !searchResultBox) return;
+            const keyword = String(searchInput.value || '').trim();
+            if (!keyword) {
+                hideSearchPopup();
+                searchControlsPopup.style.opacity = '1';
+                searchControlsPopup.style.pointerEvents = 'auto';
+                searchControlsPopup.style.transform = 'translateX(0) scale(1)';
+                return;
+            }
+
+            const originalLabel = searchConfirmBtn.textContent;
+            const resultVertical = decideSearchResultsVertical();
+            searchConfirmBtn.disabled = true;
+            searchConfirmBtn.textContent = '搜索中...';
+            searchResultBox.innerHTML = `<div style="font-size:12px;color:#64748b;line-height:1.45;">正在检索当前对话...</div>`;
+            placeAndShowSearchResultsPopup(resultVertical);
+            try {
+                const result = await getAllMessages();
+                const messages = Array.isArray(result) ? result : (Array.isArray(result?.messages) ? result.messages : []);
+                const source = Array.isArray(result) ? 'DOM' : String(result?.source || 'DOM');
+                renderSearchResults(keyword, messages, source);
+                placeAndShowSearchResultsPopup(resultVertical);
+            } catch (e) {
+                searchResultBox.innerHTML = `<div style="font-size:12px;color:#b91c1c;line-height:1.45;">搜索失败: ${escapeHtml(e?.message || String(e))}</div>`;
+                placeAndShowSearchResultsPopup(resultVertical);
+            } finally {
+                searchConfirmBtn.disabled = false;
+                searchConfirmBtn.textContent = originalLabel || '确认搜索';
+            }
+        };
+
+        const toggleSearchPopup = (e) => {
+            if (e && typeof e.stopPropagation === 'function') e.stopPropagation();
+            if (e && typeof e.preventDefault === 'function') e.preventDefault();
+
+            const isVisible = searchControlsPopup.style.opacity === '1';
+            if (isVisible) {
+                hideSearchPopup();
+                return;
+            }
+
+            hidePopup();
+            hideExportMenu();
+            hideNodeSettingsMenu();
+            hideReadingLineMenu();
+
+            const rect = searchBtn.getBoundingClientRect();
+            const margin = 8;
+            const gap = 8;
+            const controlsWidth = Math.max(260, Math.round(searchControlsPopup.offsetWidth || 320));
+            const leftSide = rect.left - controlsWidth - gap;
+            const rightSide = rect.right + gap;
+            const canUseLeft = leftSide >= margin;
+            const canUseRight = rightSide + controlsWidth <= window.innerWidth - margin;
+            const openDirection = canUseLeft ? 'left' : (canUseRight ? 'right' : (rect.left > (window.innerWidth / 2) ? 'left' : 'right'));
+            const rawLeft = openDirection === 'left' ? leftSide : rightSide;
+            const left = Math.max(margin, Math.min(rawLeft, window.innerWidth - controlsWidth - margin));
+
+            // 垂直对齐规则：
+            // - top: 容器顶部与按钮顶部对齐
+            // - bottom: 容器底部与按钮底部对齐
+            // 首次呼出优先按按钮所在半屏决定：下半屏优先 bottom，上半屏优先 top。
+            const spaceAbove = rect.bottom - margin;
+            const spaceBelow = window.innerHeight - rect.top - margin;
+            const roughControlsHeight = Math.max(52, Math.round(searchControlsPopup.offsetHeight || 56));
+            const controlsHeight = Math.max(52, Math.round(searchControlsPopup.offsetHeight || roughControlsHeight));
+            const canTopAlign = rect.top >= margin && (rect.top + controlsHeight) <= (window.innerHeight - margin);
+            const canBottomAlign = (rect.bottom - controlsHeight) >= margin && rect.bottom <= (window.innerHeight - margin);
+            const inLowerHalf = rect.top >= (window.innerHeight / 2);
+            let verticalAlignMode = inLowerHalf ? 'bottom' : 'top';
+            if (verticalAlignMode === 'top' && !canTopAlign) {
+                verticalAlignMode = canBottomAlign ? 'bottom' : 'top';
+            } else if (verticalAlignMode === 'bottom' && !canBottomAlign) {
+                verticalAlignMode = canTopAlign ? 'top' : 'bottom';
+            }
+            if (!canTopAlign && !canBottomAlign) {
+                verticalAlignMode = (spaceBelow >= spaceAbove) ? 'top' : 'bottom';
+            }
+            let controlsTop = verticalAlignMode === 'top'
+                ? rect.top
+                : (rect.bottom - controlsHeight);
+            controlsTop = Math.max(margin, Math.min(controlsTop, window.innerHeight - controlsHeight - margin));
+            const hiddenTransform = openDirection === 'left'
+                ? 'translateX(8px) scale(0.96)'
+                : 'translateX(-8px) scale(0.96)';
+
+            searchControlsPopup.style.left = `${Math.round(left)}px`;
+            searchControlsPopup.style.top = `${Math.round(controlsTop)}px`;
+            searchControlsPopup.dataset.openDirection = openDirection;
+            searchControlsPopup.dataset.verticalAlign = verticalAlignMode;
+            searchControlsPopup.style.transform = hiddenTransform;
+
+            void searchControlsPopup.offsetHeight;
+            searchControlsPopup.style.opacity = '1';
+            searchControlsPopup.style.pointerEvents = 'auto';
+            searchControlsPopup.style.transform = 'translateX(0) scale(1)';
+            searchResultsPopup.style.opacity = '0';
+            searchResultsPopup.style.pointerEvents = 'none';
+            searchResultsPopup.style.transform = verticalAlignMode === 'bottom'
+                ? 'translateY(8px) scale(0.98)'
+                : 'translateY(-8px) scale(0.98)';
+            if (searchInput) {
+                searchInput.focus();
+                if (String(searchInput.value || '').length > 0) {
+                    requestAnimationFrame(() => {
+                        try {
+                            searchInput.select();
+                        } catch (_) {
+                            // ignore
+                        }
+                    });
+                }
+            }
+        };
+
+        searchBtn.addEventListener('click', toggleSearchPopup);
+        if (searchConfirmBtn) {
+            searchConfirmBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                runConversationSearch();
+            });
+        }
+        if (searchInput) {
+            searchInput.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    runConversationSearch();
+                }
+            });
+        }
+
         const toggleSettingsPopup = (e) => {
             const now = Date.now();
             if (now - lastToggleSettingsAt < 180) return;
@@ -13628,6 +14391,7 @@
                 hidePopup();
                 hideExportMenu();
             } else {
+                hideSearchPopup();
                 const rect = btn.getBoundingClientRect();
                 const margin = 8;
                 const sideGap = 10;
@@ -13660,11 +14424,14 @@
 
         const isWithinSettingsUi = (target) => {
             if (!target || !(target instanceof Element)) return false;
+            if (searchBtn.contains(target)) return true;
             if (btn.contains(target)) return true;
             if (popup.contains(target)) return true;
             if (exportMenu.contains(target)) return true;
             if (nodeSettingsMenu.contains(target)) return true;
             if (readingLineMenu.contains(target)) return true;
+            if (searchControlsPopup.contains(target)) return true;
+            if (searchResultsPopup.contains(target)) return true;
             return false;
         };
 
@@ -13674,6 +14441,7 @@
             hideExportMenu();
             hideNodeSettingsMenu();
             hideReadingLineMenu();
+            hideSearchPopup();
         }, true);
 
         // 收起逻辑实现
