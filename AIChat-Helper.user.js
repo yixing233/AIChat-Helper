@@ -30,7 +30,7 @@
 
     const isChatGPTPath = /^\/(?:$|c\/[a-z0-9-]+\/?)$/i.test(pathname);
     const isQwenPath = /^\/(?:$|chat(?:\/[a-z0-9_-]{8,})?\/?)$/i.test(pathname);
-    const isDoubaoPath = /^\/chat(?:\/\d+)?\/?$/i.test(pathname);
+    const isDoubaoPath = /^\/chat(?:\/[^/?#]+)?\/?$/i.test(pathname);
     const isDeepSeekPath = /^\/(?:$|a\/chat\/s(?:\/[0-9a-f-]{36})?\/?|chat(?:\/[0-9a-f-]{36})?\/?)$/i.test(pathname);
 
     const isChatGPT = isChatGPTHost && isChatGPTPath;
@@ -1601,32 +1601,23 @@
     }
 
     function getDoubaoDomUserSignature() {
-        const rows = Array.from(document.querySelectorAll('[data-testid="send_message"]'));
+        const rows = getDoubaoConversationRows().filter((row) => getDoubaoRowType(row) === 'user');
         if (!rows.length) return '';
 
         const pick = [];
         const step = Math.max(1, Math.floor(rows.length / 6));
         for (let i = 0; i < rows.length; i += step) {
             const row = rows[i];
-            const msgId = String(
-                row?.querySelector('[data-testid="message_content"]')?.getAttribute('data-message-id')
-                || row?.getAttribute('data-id')
-                || ''
-            ).trim();
-            const txt = String(
-                row?.querySelector('[data-testid="ref-content"]')?.innerText
-                || row?.querySelector('[data-testid="message_text_content"]')?.innerText
-                || row?.querySelector('[data-testid="message_content"]')?.innerText
-                || ''
-            ).replace(/\s+/g, ' ').trim().slice(0, 32);
+            const msgId = String(getDoubaoRowId(row) || '').trim();
+            const txt = String(getDoubaoUserTextFromRow(row) || '').replace(/\s+/g, ' ').trim().slice(0, 32);
             pick.push(`${msgId}|${txt}`);
             if (pick.length >= 8) break;
         }
 
         const first = rows[0];
         const last = rows[rows.length - 1];
-        const firstId = String(first?.querySelector('[data-testid="message_content"]')?.getAttribute('data-message-id') || first?.getAttribute('data-id') || '').trim();
-        const lastId = String(last?.querySelector('[data-testid="message_content"]')?.getAttribute('data-message-id') || last?.getAttribute('data-id') || '').trim();
+        const firstId = String(getDoubaoRowId(first) || '').trim();
+        const lastId = String(getDoubaoRowId(last) || '').trim();
         return `${rows.length}::${firstId}::${lastId}::${pick.join('||')}`;
     }
 
@@ -3640,8 +3631,42 @@
         return compact.join('\n').trim();
     }
 
+    function isDoubaoSidebarElement(el) {
+        if (!el || !el.closest) return false;
+        return Boolean(
+            el.closest(
+                'nav[data-testid="chat_route_layout_leftside_nav"], aside, [data-testid*="leftside"], [data-testid*="sidebar"], [class*="left-side"], [class*="sidebar"], [class*="sider"]'
+            )
+        );
+    }
+
+    function getDoubaoPrimaryMessageRoot() {
+        const candidates = Array.from(document.querySelectorAll('[data-target-id="message-box-target-id"], [data-testid="message-list"], [data-testid="message-block-container"], [class*="message-list-"]'))
+            .filter((el) => !isDoubaoSidebarElement(el));
+        if (!candidates.length) return null;
+
+        let best = null;
+        let bestCount = -1;
+        candidates.forEach((el) => {
+            const count = el.querySelectorAll('[data-testid="send_message"], [data-testid="receive_message"], [data-message-id]').length;
+            if (count > bestCount) {
+                bestCount = count;
+                best = el;
+            }
+        });
+        return best;
+    }
+
     function getDoubaoConversationRows() {
-        const rows = Array.from(document.querySelectorAll('[data-testid="send_message"], [data-testid="receive_message"]'));
+        const root = getDoubaoPrimaryMessageRoot();
+        const base = root || document;
+        const rows = Array.from(base.querySelectorAll('[data-testid="send_message"], [data-testid="receive_message"], [data-target-id="message-box-target-id"]'))
+            .filter((row) => !isDoubaoSidebarElement(row))
+            .filter((row) => {
+                const testId = String(row.getAttribute('data-testid') || '').toLowerCase();
+                if (testId === 'send_message' || testId === 'receive_message') return true;
+                return Boolean(row.querySelector('[data-message-id]'));
+            });
         rows.sort((a, b) => {
             if (a === b) return 0;
             const pos = a.compareDocumentPosition(b);
@@ -3654,34 +3679,84 @@
 
     function getDoubaoMessageBubble(row) {
         if (!row) return null;
-        return row.querySelector('[data-testid="message_content"]') || row;
+        return row.querySelector('[data-testid="message_content"]')
+            || row.querySelector('[data-message-id]')
+            || row;
     }
 
     function getDoubaoUserTextFromRow(row) {
         if (!row) return '';
+        const normalizeLines = (raw) => String(raw || '')
+            .split(/\r?\n+/)
+            .map((line) => sanitizeDoubaoUserNodeText(line))
+            .map((line) => normalizeDoubaoTextForMatch(line))
+            .filter(Boolean)
+            .filter((line) => {
+                if (/^(查看|复制|重试|分享|进入\s*AI\s*阅读)$/i.test(line)) return false;
+                if (/^内容由豆包\s*ai\s*生成$/i.test(line)) return false;
+                if (/^(pdf|docx?|xlsx?|pptx?|txt|csv)\b/i.test(line)) return false;
+                if (/^\d+(\.\d+)?\s*(kb|mb|gb)\b/i.test(line)) return false;
+                if (/^约\s*\d+/.test(line)) return false;
+                return true;
+            });
+
+        const pickBestLine = (raw) => {
+            const lines = normalizeLines(raw);
+            if (!lines.length) return '';
+            const sorted = lines.slice().sort((a, b) => b.length - a.length);
+            return sorted[0] || lines[0] || '';
+        };
+
+        const bubbleText = pickBestLine(
+            row.querySelector('[class*="send-msg-bubble"]')?.innerText
+            || row.querySelector('[data-plugin-identifier*="send"] .whitespace-pre-wrap')?.innerText
+            || ''
+        );
+        if (bubbleText) return bubbleText;
+
         const refText = sanitizeDoubaoUserNodeText(row.querySelector('[data-testid="ref-content"]')?.innerText || '');
         const fullText = sanitizeDoubaoUserNodeText(row.querySelector('[data-testid="message_content"]')?.innerText || '');
         const plainText = sanitizeDoubaoUserNodeText(row.querySelector('[data-testid="message_text_content"]')?.innerText || '');
-        return refText || fullText || plainText || '';
+        if (refText) return refText;
+        if (fullText) return fullText;
+        if (plainText) return plainText;
+
+        const messageBlockText = pickBestLine(
+            row.querySelector('[data-message-id]')?.innerText
+            || row.innerText
+            || ''
+        );
+        return messageBlockText || '';
     }
 
     function getDoubaoRowType(row) {
         const testId = String(row?.getAttribute?.('data-testid') || '').toLowerCase();
         if (testId === 'send_message') return 'user';
         if (testId === 'receive_message') return 'assistant';
+        if (row?.querySelector?.('[data-plugin-identifier*="receive"]')) return 'assistant';
+        if (row?.querySelector?.('[data-plugin-identifier*="send"]')) return 'user';
+        if (row?.querySelector?.('[data-foundation-type="receive-message-action-bar"]')) return 'assistant';
+        if (row?.querySelector?.('[class*="justify-end"]')) return 'user';
         return 'unknown';
     }
 
     function getDoubaoRowId(row) {
         const byMessageContent = String(row?.querySelector?.('[data-testid="message_content"]')?.getAttribute?.('data-message-id') || '').trim();
         if (byMessageContent) return byMessageContent;
+        const byMessageId = String(row?.querySelector?.('[data-message-id]')?.getAttribute?.('data-message-id') || row?.getAttribute?.('data-message-id') || '').trim();
+        if (byMessageId) return byMessageId;
         return String(row?.getAttribute?.('data-id') || '').trim();
     }
 
     function getDoubaoRowText(row) {
         return getDoubaoRowType(row) === 'user'
             ? getDoubaoUserTextFromRow(row)
-            : normalizeDoubaoTextForMatch((row?.querySelector?.('[data-testid="message_text_content"]') || row)?.innerText || '');
+            : normalizeDoubaoTextForMatch(
+                row?.querySelector?.('[data-testid="message_text_content"]')?.innerText
+                || row?.querySelector?.('[data-message-id]')?.innerText
+                || row?.innerText
+                || ''
+            );
     }
 
     function getDoubaoUserDomCandidates() {
@@ -4833,16 +4908,36 @@
             }
         }
         if (host.includes('doubao.com')) {
-            const doubaoRow = document.querySelector('[data-testid="send_message"], [data-testid="receive_message"]');
+            const directScrollable = document.querySelector('.scrollable-Se7zNt')
+                || document.querySelector('[class*="scrollable-"]')
+                || document.querySelector('.scroll-view-OEiNXD')
+                || document.querySelector('[class*="scroll-view-"]');
+            if (directScrollable && !isDoubaoSidebarElement(directScrollable)) {
+                const byDirect = findNearestScrollableAncestor(directScrollable) || directScrollable;
+                if (byDirect && !isDoubaoSidebarElement(byDirect)) return byDirect;
+            }
+            const messageRoot = getDoubaoPrimaryMessageRoot();
+            if (messageRoot) {
+                const byRoot = findNearestScrollableAncestor(messageRoot);
+                if (byRoot && !isDoubaoSidebarElement(byRoot)) return byRoot;
+            }
+            const doubaoRows = getDoubaoConversationRows();
+            const doubaoRow = doubaoRows.length ? doubaoRows[0] : null;
             if (doubaoRow) {
                 const realScroll = findNearestScrollableAncestor(doubaoRow);
-                if (realScroll) return realScroll;
+                if (realScroll && !isDoubaoSidebarElement(realScroll)) return realScroll;
             }
             const chatMain = document.querySelector('[data-testid="chat_content"], [class*="chat-content"], [class*="conversation"], main');
             if (chatMain) {
                 const realScroll = findNearestScrollableAncestor(chatMain);
-                if (realScroll) return realScroll;
+                if (realScroll && !isDoubaoSidebarElement(realScroll)) return realScroll;
             }
+            const msgIdNode = document.querySelector('[data-message-id]');
+            if (msgIdNode) {
+                const byMsg = findNearestScrollableAncestor(msgIdNode);
+                if (byMsg && !isDoubaoSidebarElement(byMsg)) return byMsg;
+            }
+            return document.scrollingElement || document.documentElement || document.body || window;
         }
         
         for (const n of nodes) {
@@ -6148,7 +6243,7 @@
         `;
         btn.title = 'AI 节点设置';
         btn.style.cssText = `
-            background: transparent;
+            background: rgba(255, 255, 255, 0.2);
             border: 1px solid rgba(37, 99, 235, 0.3);
             border-radius: 999px;
             cursor: pointer;
@@ -6166,14 +6261,18 @@
             position: relative;
             pointer-events: auto;
             z-index: 10150;
+            backdrop-filter: blur(10px) saturate(118%);
+            -webkit-backdrop-filter: blur(10px) saturate(118%);
         `;
         btn.addEventListener('mouseenter', () => {
             btn.style.borderColor = 'rgba(37, 99, 235, 1)';
             btn.style.color = '#1d4ed8';
+            btn.style.background = 'rgba(255, 255, 255, 0.28)';
         });
         btn.addEventListener('mouseleave', () => {
             btn.style.borderColor = 'rgba(37, 99, 235, 0.3)';
             btn.style.color = 'rgba(37, 99, 235, 0.92)';
+            btn.style.background = 'rgba(255, 255, 255, 0.2)';
         });
         const searchBtn = document.createElement('button');
         searchBtn.type = 'button';
@@ -6182,7 +6281,7 @@
         searchBtn.innerHTML = searchBtnSvg;
         searchBtn.title = '搜索当前对话';
         searchBtn.style.cssText = `
-            background: transparent;
+            background: rgba(255, 255, 255, 0.2);
             border: 1px solid rgba(37, 99, 235, 0.3);
             color: rgba(37, 99, 235, 0.92);
             cursor: pointer;
@@ -6200,14 +6299,18 @@
             position: relative;
             pointer-events: auto;
             z-index: 10150;
+            backdrop-filter: blur(10px) saturate(118%);
+            -webkit-backdrop-filter: blur(10px) saturate(118%);
         `;
         searchBtn.addEventListener('mouseenter', () => {
             searchBtn.style.borderColor = 'rgba(37, 99, 235, 1)';
             searchBtn.style.color = '#1d4ed8';
+            searchBtn.style.background = 'rgba(255, 255, 255, 0.28)';
         });
         searchBtn.addEventListener('mouseleave', () => {
             searchBtn.style.borderColor = 'rgba(37, 99, 235, 0.3)';
             searchBtn.style.color = 'rgba(37, 99, 235, 0.92)';
+            searchBtn.style.background = 'rgba(255, 255, 255, 0.2)';
         });
         const buttonHost = document.createElement('div');
         buttonHost.className = 'ai-nodes-settings-host';
@@ -6313,6 +6416,7 @@
             </div>
             ${(isQwen || isDoubao) ? `
                 <div style="margin-top: 12px; padding-top: 8px; border-top: 1px dashed #eee; display: flex; flex-direction: column; gap: 8px;">
+                    ${isQwen ? `
                     <label style="display:flex; align-items:center; justify-content:space-between; gap:10px; font-size:12px; cursor:pointer; color:#0f172a; background:rgba(248,250,252,0.75); border:1px solid #e2e8f0; border-radius:8px; padding:7px 10px;">
                         <span style="font-weight:600;">自动收起侧边栏</span>
                         <span class="ai-nodes-switch">
@@ -6320,7 +6424,6 @@
                             <span class="ai-nodes-switch-slider"></span>
                         </span>
                     </label>
-                    ${isQwen ? `
                     <label style="display:flex; align-items:center; justify-content:space-between; gap:10px; font-size:12px; cursor:pointer; color:#0f172a; background:rgba(248,250,252,0.75); border:1px solid #e2e8f0; border-radius:8px; padding:7px 10px;">
                         <span style="font-weight:600;">移除推荐广告</span>
                         <span class="ai-nodes-switch">
@@ -6440,9 +6543,11 @@
                     border-color: #64748b !important;
                     box-shadow: 0 0 0 2px rgba(100,116,139,0.12);
                 }
-                #ai-nodes-search-input:focus {
-                    border-color: #3b82f6 !important;
-                    box-shadow: 0 0 0 2px rgba(59,130,246,0.15);
+                #ai-nodes-search-input:focus,
+                #ai-nodes-search-input:focus-visible {
+                    outline: none !important;
+                    border-color: transparent !important;
+                    box-shadow: none !important;
                 }
                 #ai-nodes-search-confirm:hover {
                     box-shadow: 0 0 0 2px rgba(59,130,246,0.18);
@@ -6688,7 +6793,7 @@
             border: 1px solid rgba(37, 99, 235, 0.22);
             border-radius: 12px;
             box-shadow: 0 0 10px rgba(15, 23, 42, 0.14);
-            padding: 10px;
+            padding: 0;
             z-index: 10162;
             opacity: 0;
             pointer-events: none;
@@ -6696,11 +6801,12 @@
             transition: opacity 0.24s cubic-bezier(0.22, 0.61, 0.36, 1), transform 0.24s cubic-bezier(0.22, 0.61, 0.36, 1);
             backdrop-filter: blur(10px);
             -webkit-backdrop-filter: blur(10px);
+            overflow: hidden;
         `;
         searchControlsPopup.innerHTML = `
-            <div id="ai-nodes-search-controls" style="display:flex; align-items:center; gap:8px;">
-                <input id="ai-nodes-search-input" type="text" placeholder="搜索当前对话消息..." style="flex:1; height:34px; border:1px solid #bfdbfe; border-radius:8px; padding:0 10px; font-size:12px; color:#0f172a; outline:none; background:#fff;">
-                <button id="ai-nodes-search-confirm" type="button" style="height:34px; border:none; border-radius:8px; background:#2563eb; color:#fff; padding:0 12px; cursor:pointer; font-size:12px; font-weight:700; white-space:nowrap;">确认搜索</button>
+            <div id="ai-nodes-search-controls" style="display:flex; align-items:stretch; gap:0; width:100%; height:32px;">
+                <input id="ai-nodes-search-input" type="text" placeholder="搜索当前对话消息..." style="flex:1; height:100%; margin:0; border:none; border-radius:0; padding:0 12px; font-size:12px; line-height:32px; color:#0f172a; outline:none; background:transparent; box-sizing:border-box; display:block; -webkit-appearance:none; appearance:none;">
+                <button id="ai-nodes-search-confirm" type="button" style="height:100%; margin:0; border:none; border-left:1px solid rgba(37,99,235,0.22); border-radius:0; background:rgba(37,99,235,0.08); color:#1d4ed8; padding:0 12px; min-width:76px; cursor:pointer; font-size:12px; font-weight:700; line-height:1; white-space:nowrap; box-sizing:border-box; display:flex; align-items:center; justify-content:center; flex-shrink:0; -webkit-appearance:none; appearance:none;">搜索</button>
             </div>
         `;
         document.body.appendChild(searchControlsPopup);
@@ -6727,7 +6833,7 @@
             max-height: min(44vh, 380px);
             overflow: auto;
         `;
-        searchResultsPopup.innerHTML = `<div style="font-size:12px; color:#64748b; line-height:1.45;">输入关键词后点击“确认搜索”。</div>`;
+        searchResultsPopup.innerHTML = `<div style="font-size:12px; color:#64748b; line-height:1.45;">输入关键词后点击“搜索”。</div>`;
         document.body.appendChild(searchResultsPopup);
 
         const searchResultBox = searchResultsPopup;
@@ -6739,7 +6845,7 @@
             const controlsRect = searchControlsPopup.getBoundingClientRect();
             const belowTop = controlsRect.bottom + gap;
             const estimatedMaxHeight = Math.max(120, Math.round(Math.min(window.innerHeight * 0.44, 380)));
-            const aboveTop = controlsRect.top - estimatedMaxHeight - gap;
+            const aboveTop = controlsRect.top - estimatedMaxHeight;
             const canShowBelow = belowTop + estimatedMaxHeight <= window.innerHeight - margin;
             const canShowAbove = aboveTop >= margin;
             if (canShowBelow) return 'below';
@@ -6759,7 +6865,7 @@
             const popupHeight = Math.max(120, Math.round(searchResultsPopup.offsetHeight || 180));
             const left = Math.max(margin, Math.min(controlsRect.left, window.innerWidth - popupWidth - margin));
             const belowTop = controlsRect.bottom + gap;
-            const aboveTop = controlsRect.top - popupHeight - gap;
+            const aboveTop = controlsRect.top - popupHeight;
             const canShowBelow = belowTop + popupHeight <= window.innerHeight - margin;
             const canShowAbove = aboveTop >= margin;
 
@@ -6776,12 +6882,21 @@
             } else {
                 top = aboveTop;
             }
-            top = Math.max(margin, Math.min(top, window.innerHeight - popupHeight - margin));
-
             searchResultsPopup.style.left = `${Math.round(left)}px`;
-            searchResultsPopup.style.top = `${Math.round(top)}px`;
+            // 关键修复：上方展示时改为 bottom 锚定，确保结果卡片底边始终与搜索控制容器顶边贴齐。
+            if (finalVertical === 'above') {
+                const aboveGap = 4;
+                const anchoredBottom = Math.max(margin, Math.round(window.innerHeight - controlsRect.top + aboveGap));
+                searchResultsPopup.style.top = 'auto';
+                searchResultsPopup.style.bottom = `${anchoredBottom}px`;
+            } else {
+                top = Math.max(margin, Math.min(top, window.innerHeight - popupHeight - margin));
+                searchResultsPopup.style.bottom = 'auto';
+                searchResultsPopup.style.top = `${Math.round(top)}px`;
+            }
             searchResultsPopup.dataset.openDirection = openDirection;
             searchResultsPopup.dataset.verticalAlign = finalVertical;
+            // 上方展示时：从下往上出现；下方展示时：从上往下出现。
             searchResultsPopup.style.transform = finalVertical === 'above'
                 ? 'translateY(8px) scale(0.98)'
                 : 'translateY(-8px) scale(0.98)';
@@ -7034,7 +7149,7 @@
         // 监听设置项变化
 
 
-        if (isQwen || isDoubao) {
+        if (isQwen) {
             popup.querySelector('#ai-nodes-opt-collapse').addEventListener('change', (e) => {
                 autoCollapse = e.target.checked;
                 setGlobalValue(COLLAPSE_KEY, autoCollapse);
@@ -9390,8 +9505,20 @@
         };
 
         function getDoubaoConversationIdFromUrl() {
-            const m = window.location.pathname.match(/\/chat\/([0-9]+)/i);
-            return m ? m[1] : '';
+            try {
+                const u = new URL(window.location.href);
+                const fromQuery = String(
+                    u.searchParams.get('conversation_id')
+                    || u.searchParams.get('chat_id')
+                    || u.searchParams.get('session_id')
+                    || ''
+                ).trim();
+                if (fromQuery) return fromQuery;
+            } catch (e) {
+                // ignore
+            }
+            const m = window.location.pathname.match(/\/chat\/([^/?#]+)/i);
+            return m ? String(m[1] || '').trim() : '';
         }
 
         function genUuid() {
@@ -13940,12 +14067,21 @@
 
         const detectSearchEntryRole = (el) => {
             if (!(el instanceof Element)) return 'unknown';
+            if (isDoubao) {
+                const row = el.closest?.('[data-testid="send_message"], [data-testid="receive_message"], [data-target-id="message-box-target-id"]') || el;
+                const rowType = getDoubaoRowType(row);
+                if (rowType === 'user') return 'user';
+                if (rowType === 'assistant') return 'assistant';
+            }
             const roleAttr = String(el.getAttribute('data-message-author-role') || '').toLowerCase();
             if (roleAttr === 'user') return 'user';
             if (roleAttr === 'assistant') return 'assistant';
             const testId = String(el.getAttribute('data-testid') || '').toLowerCase();
             if (testId === 'send_message' || testId.includes('user')) return 'user';
             if (testId === 'receive_message' || testId.includes('assistant')) return 'assistant';
+            const plugin = String(el.getAttribute('data-plugin-identifier') || '').toLowerCase();
+            if (plugin.includes('send')) return 'user';
+            if (plugin.includes('receive') || plugin.includes('assistant')) return 'assistant';
             const msgId = String(el.getAttribute('data-msgid') || el.getAttribute('data-msg-id') || '').toLowerCase();
             if (msgId.endsWith('-question')) return 'user';
             if (msgId.endsWith('-answer')) return 'assistant';
@@ -13957,6 +14093,21 @@
 
         const extractSearchEntryText = (el) => {
             if (!(el instanceof Element)) return '';
+            if (isDoubao) {
+                const row = el.closest?.('[data-testid="send_message"], [data-testid="receive_message"], [data-target-id="message-box-target-id"]') || el;
+                const rowType = getDoubaoRowType(row);
+                if (rowType === 'user') {
+                    return String(getDoubaoUserTextFromRow(row) || '').trim();
+                }
+                if (rowType === 'assistant') {
+                    return String(getDoubaoRowText(row) || '').trim();
+                }
+                return String(
+                    row.querySelector?.('[data-message-id]')?.innerText
+                    || row.innerText
+                    || ''
+                ).trim();
+            }
             const testId = String(el.getAttribute('data-testid') || '').toLowerCase();
             if (testId === 'send_message' || testId === 'receive_message') {
                 return String(
@@ -13992,6 +14143,14 @@
                 });
             };
 
+            if (isDoubao) {
+                getDoubaoConversationRows().forEach(addEntry);
+                if (!list.length) {
+                    document.querySelectorAll('[data-target-id="message-box-target-id"], [data-message-id]').forEach(addEntry);
+                }
+                return list;
+            }
+
             document.querySelectorAll('[data-message-author-role]').forEach(addEntry);
             document.querySelectorAll('[data-testid="send_message"], [data-testid="receive_message"]').forEach(addEntry);
             document.querySelectorAll('._81e7b5e, .ds-message').forEach(addEntry);
@@ -14007,7 +14166,7 @@
             if (!Array.isArray(nodes) || !nodes.length) return safeFallback;
 
             if (isDoubao) {
-                const row = entry?.element?.closest?.('[data-testid="send_message"], [data-testid="receive_message"]') || entry?.element || null;
+                const row = entry?.element?.closest?.('[data-testid="send_message"], [data-testid="receive_message"], [data-target-id="message-box-target-id"]') || entry?.element || null;
                 if (row) {
                     const resolved = resolveDoubaoNodeFromRow(row, getDoubaoConversationRows());
                     if (resolved?.id) {
@@ -14149,7 +14308,7 @@
         const getSearchHighlightContainer = (el) => {
             if (!(el instanceof Element)) return null;
             return el.closest(
-                '[data-testid="send_message"], [data-testid="receive_message"], [data-message-author-role], article[data-testid^="conversation-turn-"], ._81e7b5e, .ds-message, [data-msgid$="-question"], [data-msgid$="-answer"], [data-msg-id$="-question"], [data-msg-id$="-answer"], [class*="questionItem"], [class*="answerItem"]'
+                '[data-testid="send_message"], [data-testid="receive_message"], [data-target-id="message-box-target-id"], [data-message-id], [data-message-author-role], article[data-testid^="conversation-turn-"], ._81e7b5e, .ds-message, [data-msgid$="-question"], [data-msgid$="-answer"], [data-msg-id$="-question"], [data-msg-id$="-answer"], [class*="questionItem"], [class*="answerItem"]'
             ) || el;
         };
 
@@ -14185,8 +14344,9 @@
                 const hitIndex = Number(hitIndexes[currentPos] || 0);
                 const hit = currentSearchHits[hitIndex] || null;
                 if (!hit) return '';
-                const roleText = hit.role === 'user' ? '用户' : (hit.role === 'assistant' ? 'AI' : '消息');
-                const roleColor = roleText === '用户' ? '#1d4ed8' : (roleText === 'AI' ? '#0f766e' : '#64748b');
+                const assistantLabel = String(AI_NAME || 'AI');
+                const roleText = hit.role === 'user' ? '用户' : (hit.role === 'assistant' ? assistantLabel : '消息');
+                const roleColor = roleText === '用户' ? '#1d4ed8' : (roleText === assistantLabel ? '#0f766e' : '#64748b');
                 const preview = escapeHtml(hit.snippet || '');
                 const canPrev = currentPos > 0;
                 const canNext = currentPos < maxPos;
@@ -14225,7 +14385,7 @@
                 currentSearchHits = [];
                 currentSearchGroups = [];
                 currentSearchGroupCursorMap.clear();
-                searchResultBox.innerHTML = `<div style="font-size:12px;color:#64748b;line-height:1.45;">输入关键词后点击“确认搜索”。</div>`;
+                searchResultBox.innerHTML = `<div style="font-size:12px;color:#64748b;line-height:1.45;">输入关键词后点击“搜索”。</div>`;
                 return;
             }
 
@@ -14295,7 +14455,7 @@
                 placeAndShowSearchResultsPopup(resultVertical);
             } finally {
                 searchConfirmBtn.disabled = false;
-                searchConfirmBtn.textContent = originalLabel || '确认搜索';
+                searchConfirmBtn.textContent = originalLabel || '搜索';
             }
         };
 
@@ -14332,8 +14492,10 @@
             // 首次呼出优先按按钮所在半屏决定：下半屏优先 bottom，上半屏优先 top。
             const spaceAbove = rect.bottom - margin;
             const spaceBelow = window.innerHeight - rect.top - margin;
-            const roughControlsHeight = Math.max(52, Math.round(searchControlsPopup.offsetHeight || 56));
-            const controlsHeight = Math.max(52, Math.round(searchControlsPopup.offsetHeight || roughControlsHeight));
+            // 依据真实渲染高度做对齐，避免样式调整后（如 38px 紧凑输入条）仍被旧的 52px 最小值拉偏。
+            const computedControlsHeight = parseFloat(window.getComputedStyle(searchControlsPopup).height || '0') || 0;
+            const roughControlsHeight = Math.round(searchControlsPopup.offsetHeight || computedControlsHeight || 32);
+            const controlsHeight = Math.max(32, roughControlsHeight);
             const canTopAlign = rect.top >= margin && (rect.top + controlsHeight) <= (window.innerHeight - margin);
             const canBottomAlign = (rect.bottom - controlsHeight) >= margin && rect.bottom <= (window.innerHeight - margin);
             const inLowerHalf = rect.top >= (window.innerHeight / 2);
@@ -14364,9 +14526,11 @@
             searchControlsPopup.style.opacity = '1';
             searchControlsPopup.style.pointerEvents = 'auto';
             searchControlsPopup.style.transform = 'translateX(0) scale(1)';
+            const predictedResultVertical = decideSearchResultsVertical();
             searchResultsPopup.style.opacity = '0';
             searchResultsPopup.style.pointerEvents = 'none';
-            searchResultsPopup.style.transform = verticalAlignMode === 'bottom'
+            searchResultsPopup.dataset.verticalAlign = predictedResultVertical;
+            searchResultsPopup.style.transform = predictedResultVertical === 'above'
                 ? 'translateY(8px) scale(0.98)'
                 : 'translateY(-8px) scale(0.98)';
             if (searchInput) {
@@ -14467,107 +14631,29 @@
         // 收起逻辑实现
         function applyAutoCollapse() {
             if (!autoCollapse) return;
-            if (isQwen) {
-                const sidebar = document.querySelector("#new-nav-tab-wrapper");
-                if (sidebar) {
-                    const width = sidebar.getBoundingClientRect().width || 0;
-                    const isExpanded = !sidebar.classList.contains('!w-0') && width > 40;
-                    if (isExpanded) {
-                        const icon = sidebar.querySelector('span[data-icon-type="qwpcicon-sidebarLeft"]');
-                        const toggleBtn = (icon ? icon.closest('button') : null)
-                            || sidebar.querySelector('button[aria-label*="收起"], button[title*="收起"], button[class*="sidebar"]')
-                            || document.querySelector('button[aria-label*="收起侧边栏"], button[title*="收起侧边栏"], button[aria-label*="侧边栏"], button[title*="侧边栏"]');
-
-                        if (toggleBtn) {
-                            toggleBtn.click();
-                        } else {
-                            sidebar.classList.add('!w-0', 'basis-0', '!min-w-0');
-                        }
-                    }
-                }
-                return;
-            }
-            if (!isDoubao) return;
-
-            const sidebar = document.querySelector('nav[data-testid="chat_route_layout_leftside_nav"]');
+            if (!isQwen) return;
+            const sidebar = document.querySelector("#new-nav-tab-wrapper");
             if (!sidebar) return;
-
-            const cls = String(sidebar.className || '');
-            const isExpandedByClass = /left-side__expand/i.test(cls);
             const width = sidebar.getBoundingClientRect().width || 0;
-            const isExpanded = isExpandedByClass || width > 120;
+            const isExpanded = !sidebar.classList.contains('!w-0') && width > 40;
             if (!isExpanded) return;
+            const icon = sidebar.querySelector('span[data-icon-type="qwpcicon-sidebarLeft"]');
+            const toggleBtn = (icon ? icon.closest('button') : null)
+                || sidebar.querySelector('button[aria-label*="收起"], button[title*="收起"], button[class*="sidebar"]')
+                || document.querySelector('button[aria-label*="收起侧边栏"], button[title*="收起侧边栏"], button[aria-label*="侧边栏"], button[title*="侧边栏"]');
 
-            const dispatchSmartClick = (el) => {
-                if (!(el instanceof HTMLElement)) return false;
-                try {
-                    ['pointerdown', 'mousedown', 'mouseup', 'click'].forEach((type) => {
-                        el.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, view: window }));
-                    });
-                    return true;
-                } catch (_) {
-                    try {
-                        el.click();
-                        return true;
-                    } catch (__){}
-                }
-                return false;
-            };
-
-            const directToggleBtn = document.querySelector('[data-testid="siderbar_close_btn"], [data-testid="sidebar_close_btn"]');
-            if (directToggleBtn && isElementVisiblyRenderable(directToggleBtn) && dispatchSmartClick(directToggleBtn)) {
-                return;
-            }
-
-            const candidateSelector = [
-                '[data-testid="siderbar_close_btn"]',
-                '[data-testid="sidebar_close_btn"]',
-                '[data-testid="chat_header_fold_sidebar_button"]',
-                '[data-testid="chat_header_sidebar_button"]',
-                '[data-testid*="fold_sidebar"]',
-                '[data-testid*="sidebar_fold"]',
-                '[data-testid*="collapse_sidebar"]',
-                'button[aria-label*="收起侧边栏"]',
-                'button[title*="收起侧边栏"]',
-                'button[aria-label*="侧边栏"]',
-                'button[title*="侧边栏"]',
-                'div[role="button"][aria-label*="收起侧边栏"]',
-                'div[role="button"][title*="收起侧边栏"]',
-                'div[role="button"][aria-label*="侧边栏"]',
-                'div[role="button"][title*="侧边栏"]'
-            ].join(', ');
-
-            const candidates = Array.from(document.querySelectorAll(candidateSelector))
-                .filter((el) => el instanceof HTMLElement)
-                .filter((el) => isElementVisiblyRenderable(el));
-
-            if (candidates.length) {
-                candidates.sort((a, b) => {
-                    const ra = a.getBoundingClientRect();
-                    const rb = b.getBoundingClientRect();
-                    const sa = (ra.top <= 180 ? 1000 : 0) + (ra.left >= window.innerWidth * 0.45 ? 500 : 0);
-                    const sb = (rb.top <= 180 ? 1000 : 0) + (rb.left >= window.innerWidth * 0.45 ? 500 : 0);
-                    return sb - sa;
-                });
-                if (dispatchSmartClick(candidates[0])) return;
-            }
-
-            // 兜底：切换容器状态类（一次性），不做持续样式锁定。
-            const expandClass = String(sidebar.className || '').split(/\s+/).find((c) => /left-side__expand/i.test(c));
-            if (expandClass) {
-                const collapseClass = expandClass.replace(/expand/i, 'collapse');
-                sidebar.classList.remove(expandClass);
-                if (collapseClass && collapseClass !== expandClass) {
-                    sidebar.classList.add(collapseClass);
-                }
+            if (toggleBtn) {
+                toggleBtn.click();
+            } else {
+                sidebar.classList.add('!w-0', 'basis-0', '!min-w-0');
             }
         }
 
         function scheduleAutoCollapseRetry() {
-            if (!autoCollapse) return;
+            if (!autoCollapse || !isQwen) return;
             [0, 160, 420, 900, 1600].forEach((delay) => {
                 setTimeout(() => {
-                    if (!autoCollapse) return;
+                    if (!autoCollapse || !isQwen) return;
                     applyAutoCollapse();
                 }, delay);
             });
@@ -14778,7 +14864,7 @@
         window.addEventListener('resize', ensureInjected, { passive: true });
         window.addEventListener('scroll', ensureInjected, { passive: true });
 
-        if (autoCollapse) {
+        if (isQwen && autoCollapse) {
             scheduleAutoCollapseRetry();
         }
     }
