@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AI对话助手
 // @namespace    http://tampermonkey.net/
-// @version      2.0.5
+// @version      2.0.6
 // @description  支持 ChatGPT、通义千问、豆包、DeepSeek：自动生成对话节点导航、一键导出对话（PDF/Markdown/JSON/CSV/TXT）。
 // @author       xchengb
 // @updateURL    https://github.com/yixing233/AIChat-Helper/raw/master/AIChat-Helper.user.js
@@ -6288,6 +6288,7 @@
             backdrop-filter: blur(10px);
         `;
         const platformIconUrl = getPlatformIconUrl();
+        const projectRepoUrl = 'https://github.com/yixing233/AIChat-Helper';
         popup.innerHTML = `
             <div style="margin-bottom: 12px; border-bottom: 1px solid #eee; padding-bottom: 8px; display:flex; align-items:baseline; gap:6px;">
                 <span style="font-weight:700;font-size:15px;letter-spacing:.2px;color:#0f172a;">AI对话助手</span>
@@ -6358,15 +6359,18 @@
                 </div>
             ` : ''}
 
-            <div style="margin-top: 12px; padding-top: 12px; border-top: 1px dashed #eee; display: flex; flex-direction: column; gap: 8px;">
-                <button id="ai-nodes-clear-refresh" style="width: 100%; border: 1px solid #ff4d4f; background: #fff; color: #ff4d4f; padding: 6px; border-radius: 8px; cursor: pointer; font-size: 12px; font-weight: 500; transition: all 0.2s;">
-                    <span style="margin-right: 4px; display:inline-flex; vertical-align:middle;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 2v6h-6"></path><path d="M3 12a9 9 0 0115-6.7L21 8"></path><path d="M3 22v-6h6"></path><path d="M21 12a9 9 0 01-15 6.7L3 16"></path></svg></span> 重新获取节点
-                </button>
-                
-                <button id="ai-nodes-export-trigger" style="width: 100%; padding: 10px; background: #1E88E5; color: white; border: none; border-radius: 10px; cursor: pointer; font-size: 13px; font-weight: 600; display: flex; align-items: center; justify-content: center; gap: 8px; transition: all 0.2s; box-shadow: 0 4px 10px rgba(30, 136, 229, 0.2);">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
-                    <span>导出对话记录</span>
-                </button>
+            <div style="margin-top: 12px; padding-top: 12px; border-top: 1px dashed #eee;">
+                <div style="display:flex; align-items:center; gap:8px;">
+                    <button id="ai-nodes-clear-refresh" title="重新获取节点" aria-label="重新获取节点" style="flex:1; min-width:0; height:38px; border:1px solid #fca5a5; background:transparent; color:#ef4444; border-radius:10px; cursor:pointer; display:flex; align-items:center; justify-content:center; transition:border-color 0.2s, color 0.2s, box-shadow 0.2s; box-shadow:none;">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 2v6h-6"></path><path d="M3 12a9 9 0 0115-6.7L21 8"></path><path d="M3 22v-6h6"></path><path d="M21 12a9 9 0 01-15 6.7L3 16"></path></svg>
+                    </button>
+                    <button id="ai-nodes-export-trigger" title="导出对话记录" aria-label="导出对话记录" style="flex:1; min-width:0; height:38px; background:transparent; color:#1E88E5; border:1px solid #93c5fd; border-radius:10px; cursor:pointer; display:flex; align-items:center; justify-content:center; transition:border-color 0.2s, color 0.2s, box-shadow 0.2s; box-shadow:none;">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+                    </button>
+                    <button id="ai-nodes-github-link" title="GitHub 项目" aria-label="GitHub 项目" style="flex:1; min-width:0; height:38px; background:transparent; color:#111827; border:1px solid #cbd5e1; border-radius:10px; cursor:pointer; display:flex; align-items:center; justify-content:center; transition:border-color 0.2s, color 0.2s, box-shadow 0.2s; box-shadow:none;">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 .5C5.65.5.5 5.65.5 12a11.5 11.5 0 0 0 7.86 10.92c.58.1.79-.25.79-.56v-2.17c-3.2.7-3.88-1.36-3.88-1.36-.52-1.33-1.28-1.68-1.28-1.68-1.05-.72.08-.71.08-.71 1.16.08 1.77 1.19 1.77 1.19 1.03 1.76 2.71 1.25 3.37.96.1-.75.4-1.25.73-1.54-2.55-.29-5.24-1.27-5.24-5.67 0-1.25.45-2.28 1.18-3.08-.12-.29-.51-1.46.11-3.05 0 0 .97-.31 3.19 1.18a11.1 11.1 0 0 1 5.81 0c2.22-1.49 3.19-1.18 3.19-1.18.62 1.59.23 2.76.11 3.05.73.8 1.18 1.83 1.18 3.08 0 4.41-2.69 5.38-5.25 5.66.41.35.78 1.04.78 2.1v3.11c0 .31.21.67.8.56A11.5 11.5 0 0 0 23.5 12C23.5 5.65 18.35.5 12 .5z"></path></svg>
+                    </button>
+                </div>
             </div>
         `;
         document.body.appendChild(popup);
@@ -6429,7 +6433,12 @@
                     box-shadow: inset 0 0 0 1px rgba(15, 23, 42, 0.08), 0 0 0 2px rgba(37, 99, 235, 0.22);
                 }
                 #ai-nodes-export-trigger:hover {
-                    box-shadow: inset 0 0 0 1px rgba(191,219,254,0.9), 0 6px 14px rgba(30,136,229,0.28);
+                    border-color: #3b82f6 !important;
+                    box-shadow: 0 0 0 2px rgba(59,130,246,0.12);
+                }
+                #ai-nodes-github-link:hover {
+                    border-color: #64748b !important;
+                    box-shadow: 0 0 0 2px rgba(100,116,139,0.12);
                 }
                 #ai-nodes-search-input:focus {
                     border-color: #3b82f6 !important;
@@ -7216,6 +7225,17 @@
             exportMenu.style.pointerEvents = 'auto';
             exportMenu.style.transform = 'translateY(0) scale(1)';
         };
+
+        const githubBtn = popup.querySelector('#ai-nodes-github-link');
+        if (githubBtn) {
+            githubBtn.onclick = (e) => {
+                e.stopPropagation();
+                hideNodeSettingsMenu();
+                hideReadingLineMenu();
+                hideExportMenu();
+                window.open(projectRepoUrl, '_blank', 'noopener,noreferrer');
+            };
+        }
 
         const exportCurrentBtn = exportMenu.querySelector('#ai-nodes-export-current');
         if (exportCurrentBtn) {
