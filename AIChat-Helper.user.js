@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AI对话助手
 // @namespace    http://tampermonkey.net/
-// @version      2.0.7
+// @version      2.0.9
 // @description  支持 ChatGPT、通义千问、豆包、DeepSeek：自动生成对话节点导航、一键导出对话（PDF/Markdown/JSON/CSV/TXT）。
 // @author       xchengb
 // @updateURL    https://github.com/yixing233/AIChat-Helper/raw/master/AIChat-Helper.user.js
@@ -15,6 +15,9 @@
 // @grant        GM_addStyle
 // @grant        GM_getValue
 // @grant        GM_setValue
+// @grant        GM_xmlhttpRequest
+// @connect      github.com
+// @connect      raw.githubusercontent.com
 // @run-at       document-start
 // ==/UserScript==
 
@@ -42,6 +45,10 @@
     const isDeepSeek = isDeepSeekHost && isDeepSeekPath;
     const isClaude = isClaudeHost && isClaudePath;
     const AI_NAME = isChatGPT ? 'ChatGPT' : (isDeepSeek ? 'DeepSeek' : (isDoubao ? '豆包' : (isQwen ? '通义千问' : (isClaude ? 'Claude' : 'AI 助手'))));
+    const SCRIPT_VERSION = '2.0.9';
+    const SCRIPT_UPDATE_URL = 'https://raw.githubusercontent.com/yixing233/AIChat-Helper/master/AIChat-Helper.user.js';
+    const SCRIPT_DOWNLOAD_URL = 'https://github.com/yixing233/AIChat-Helper/raw/master/AIChat-Helper.user.js';
+    const SCRIPT_CHANGELOG_URL = 'https://raw.githubusercontent.com/yixing233/AIChat-Helper/master/update.json';
 
     if (!isChatGPT && !isQwen && !isDoubao && !isDeepSeek && !isClaude) return;
 
@@ -74,6 +81,7 @@
     const DOT_GAP_KEY = 'ai-nodes-dot-gap';
     const VISIBLE_LIMIT_KEY = 'ai-nodes-visible-limit';
     const READING_LINE_KEY = 'ai-nodes-reading-line';
+    const AUTO_UPDATE_CHECK_KEY = 'ai-nodes-auto-update-check';
 
     const getGlobalValue = (key, defaultValue) => {
         let val;
@@ -1109,6 +1117,7 @@
     let qwenGlassPopups = getGlobalValue(QWEN_GLASS_POPUPS_KEY, true);
     let hideDeepSeekNativeNav = getGlobalValue(DEEPSEEK_NATIVE_NAV_KEY, false);
     let doubaoGlassPopups = getGlobalValue(DOUBAO_GLASS_POPUPS_KEY, true);
+    let autoUpdateCheck = getGlobalValue(AUTO_UPDATE_CHECK_KEY, false);
 
     const initialVisibleLimitRaw = Number(getGlobalValue(VISIBLE_LIMIT_KEY, 12));
     const initialVisibleLimit = Math.max(3, Math.min(12, Number.isFinite(initialVisibleLimitRaw) ? Math.floor(initialVisibleLimitRaw) : 12));
@@ -1265,20 +1274,48 @@
 
     // ===== 拖拽手柄 =====
     const dragHandle = document.createElement('div');
-    dragHandle.style.width = '32px';
-    dragHandle.style.height = '4px';
-    dragHandle.style.background = 'rgba(160, 160, 160, 0.3)';
-    dragHandle.style.borderRadius = '10px';
+    const dragHandleBar = document.createElement('div');
+    dragHandle.style.width = '44px';
+    dragHandle.style.height = '16px';
     dragHandle.style.margin = '0 auto 6px';
     dragHandle.style.cursor = 'grab';
     dragHandle.style.flexShrink = '0';
-    dragHandle.style.transition = 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)';
+    dragHandle.style.display = 'flex';
+    dragHandle.style.alignItems = 'center';
+    dragHandle.style.justifyContent = 'center';
+    dragHandle.style.background = 'transparent';
     dragHandle.title = '拖动调整位置';
+    dragHandleBar.style.width = '32px';
+    dragHandleBar.style.height = '4px';
+    dragHandleBar.style.background = 'rgba(160, 160, 160, 0.3)';
+    dragHandleBar.style.borderRadius = '10px';
+    dragHandleBar.style.transform = 'scaleY(1)';
+    dragHandleBar.style.transformOrigin = 'center center';
+    dragHandleBar.style.transition = 'transform 0.22s cubic-bezier(0.4, 0, 0.2, 1), background-color 0.22s cubic-bezier(0.4, 0, 0.2, 1), border-radius 0.22s cubic-bezier(0.4, 0, 0.2, 1)';
+    dragHandle.appendChild(dragHandleBar);
     container.prepend(dragHandle);
-    dragHandle.onmouseleave = () => dragHandle.style.background = 'rgba(150, 150, 150, 0.4)';
+    dragHandle.onmouseenter = () => {
+        if (isDragging) return;
+        dragHandleBar.style.transform = 'scaleY(2)';
+        dragHandleBar.style.background = 'rgba(150, 150, 150, 0.45)';
+        dragHandleBar.style.borderRadius = '14px';
+    };
+    dragHandle.onmouseleave = () => {
+        if (isDragging) return;
+        dragHandleBar.style.transform = 'scaleY(1)';
+        dragHandleBar.style.background = 'rgba(150, 150, 150, 0.4)';
+        dragHandleBar.style.borderRadius = '10px';
+    };
 
     let isDragging = false;
     let startX, startY, startRight, startTop;
+    let dragMaxRight = 0;
+    let dragMaxTop = 0;
+    let dragPendingRight = 0;
+    let dragPendingTop = 0;
+    let dragAppliedRight = 0;
+    let dragAppliedTop = 0;
+    let dragRenderRaf = 0;
     const SETTINGS_BUTTON_SAFE_HEIGHT = 42;
     const SETTINGS_BUTTON_GAP = 10;
     const SETTINGS_VIEWPORT_PADDING = 8;
@@ -1289,14 +1326,45 @@
         return Math.max(0, Math.floor(window.innerHeight - reserveBottom - railRect.height));
     }
 
+    function cancelDragRenderRaf() {
+        if (dragRenderRaf) {
+            cancelAnimationFrame(dragRenderRaf);
+            dragRenderRaf = 0;
+        }
+    }
+
+    function applyPendingDragPosition() {
+        dragRenderRaf = 0;
+        dragAppliedRight = dragPendingRight;
+        dragAppliedTop = dragPendingTop;
+        container.style.right = dragAppliedRight + 'px';
+        container.style.top = dragAppliedTop + 'px';
+        container.style.maxHeight = `calc(100vh - ${dragAppliedTop + CONFIG.bottomGap}px)`;
+    }
+
+    function scheduleDragPositionApply() {
+        if (dragRenderRaf) return;
+        dragRenderRaf = requestAnimationFrame(applyPendingDragPosition);
+    }
+
     dragHandle.addEventListener('mousedown', (e) => {
         isDragging = true;
         startX = e.clientX;
         startY = e.clientY;
         startRight = parseInt(getComputedStyle(container).right);
         startTop = parseInt(getComputedStyle(container).top);
+        dragMaxRight = window.innerWidth - CONFIG.panelWidth;
+        dragMaxTop = Math.max(0, Math.min(window.innerHeight - 30, getMaxRailTopWithSettingsSpace()));
+        dragPendingRight = startRight;
+        dragPendingTop = startTop;
+        dragAppliedRight = startRight;
+        dragAppliedTop = startTop;
         dragHandle.style.cursor = 'grabbing';
+        dragHandleBar.style.transform = 'scaleY(2)';
+        dragHandleBar.style.background = 'rgba(150, 150, 150, 0.45)';
+        dragHandleBar.style.borderRadius = '14px';
         document.body.style.userSelect = 'none';
+        container.style.willChange = 'top, right';
         e.preventDefault();
     });
 
@@ -1304,27 +1372,25 @@
         if (!isDragging) return;
         const deltaX = startX - e.clientX; 
         const deltaY = e.clientY - startY;
-        
-        // 约束拖拽范围，不超出页面
-        const maxRight = window.innerWidth - CONFIG.panelWidth;
-        const maxTop = Math.max(0, Math.min(window.innerHeight - 30, getMaxRailTopWithSettingsSpace()));
-        
-        const newRight = Math.max(0, Math.min(maxRight, startRight + deltaX));
-        const newTop = Math.max(0, Math.min(maxTop, startTop + deltaY));
-        
-        container.style.right = newRight + 'px';
-        container.style.top = newTop + 'px';
-        container.style.maxHeight = `calc(100vh - ${newTop + CONFIG.bottomGap}px)`;
-        
-        localStorage.setItem('AI-Chat-Helper-pos', JSON.stringify({ right: newRight, top: newTop }));
-        render(); // 实时刷新高度计算
+
+        dragPendingRight = Math.max(0, Math.min(dragMaxRight, startRight + deltaX));
+        dragPendingTop = Math.max(0, Math.min(dragMaxTop, startTop + deltaY));
+        scheduleDragPositionApply();
     });
 
     document.addEventListener('mouseup', () => {
         if (isDragging) {
             isDragging = false;
+            cancelDragRenderRaf();
+            applyPendingDragPosition();
             dragHandle.style.cursor = 'grab';
+            dragHandleBar.style.transform = dragHandle.matches(':hover') ? 'scaleY(2)' : 'scaleY(1)';
+            dragHandleBar.style.background = dragHandle.matches(':hover') ? 'rgba(150, 150, 150, 0.45)' : 'rgba(150, 150, 150, 0.4)';
+            dragHandleBar.style.borderRadius = dragHandle.matches(':hover') ? '14px' : '10px';
             document.body.style.userSelect = '';
+            container.style.willChange = 'auto';
+            localStorage.setItem('AI-Chat-Helper-pos', JSON.stringify({ right: dragAppliedRight, top: dragAppliedTop }));
+            render();
         }
     });
 
@@ -1501,6 +1567,9 @@
     let jumpToastWatchRaf = 0;
     let jumpToastArrivedTimer = 0;
     let jumpToastArrivedShownId = '';
+    let genericJumpToastHideTimer = 0;
+    let availableUpdateVersion = '';
+    let autoUpdateCheckStarted = false;
 
     let fixedScrollDragging = false; // 虽然移除了 UI，但保留部分内部状态标记以防代码依赖
 
@@ -1607,6 +1676,13 @@
         if (jumpToastSecondaryHideTimer) {
             clearTimeout(jumpToastSecondaryHideTimer);
             jumpToastSecondaryHideTimer = 0;
+        }
+    }
+
+    function clearGenericJumpToastTimer() {
+        if (genericJumpToastHideTimer) {
+            clearTimeout(genericJumpToastHideTimer);
+            genericJumpToastHideTimer = 0;
         }
     }
 
@@ -1878,6 +1954,7 @@
         clearJumpToastWatch();
         clearJumpToastArrivedTimer();
         clearJumpToastSecondaryTimer();
+        clearGenericJumpToastTimer();
         jumpToastPendingNodeId = '';
         jumpToastArrivedShownId = '';
         if (!jumpToastEl) return;
@@ -1886,6 +1963,224 @@
         if (jumpToastSecondaryEl) {
             jumpToastSecondaryEl.style.opacity = '0';
             jumpToastSecondaryEl.style.transform = 'translateX(-50%) translateY(-8px)';
+        }
+    }
+
+    function compareVersionParts(a, b) {
+        const pa = String(a || '').split('.').map((x) => parseInt(x, 10) || 0);
+        const pb = String(b || '').split('.').map((x) => parseInt(x, 10) || 0);
+        const len = Math.max(pa.length, pb.length);
+        for (let i = 0; i < len; i += 1) {
+            const va = pa[i] || 0;
+            const vb = pb[i] || 0;
+            if (va > vb) return 1;
+            if (va < vb) return -1;
+        }
+        return 0;
+    }
+
+    function showSimpleToast(message, options = {}) {
+        const text = String(message || '').trim();
+        if (!text) return;
+        const tone = String(options.tone || 'info').trim().toLowerCase();
+        const duration = Math.max(1200, Number(options.duration) || 2200);
+        const stateText = tone === 'warn' ? '提示' : '检查更新';
+        clearJumpToastWatch();
+        clearJumpToastArrivedTimer();
+        clearGenericJumpToastTimer();
+        jumpToastPendingNodeId = '';
+        jumpToastArrivedShownId = '';
+        renderJumpToast(stateText, text, true);
+        if (jumpToastEl) {
+            jumpToastEl.style.opacity = '1';
+            jumpToastEl.style.transform = 'translateX(-50%) translateY(0)';
+        }
+        genericJumpToastHideTimer = setTimeout(() => {
+            genericJumpToastHideTimer = 0;
+            if (!jumpToastPendingNodeId) hideJumpToast();
+        }, duration);
+    }
+
+    function parseScriptVersionFromSource(text) {
+        const match = String(text || '').match(/^\/\/\s*@version\s+([^\s]+)\s*$/m);
+        if (!match || !match[1]) throw new Error('未解析到远程版本号');
+        return {
+            version: String(match[1]).trim(),
+            source: String(text || '')
+        };
+    }
+
+    function requestTextByGm(url) {
+        return new Promise((resolve, reject) => {
+            if (typeof GM_xmlhttpRequest !== 'function') {
+                reject(new Error('GM_xmlhttpRequest unavailable'));
+                return;
+            }
+            try {
+                GM_xmlhttpRequest({
+                    method: 'GET',
+                    url,
+                    nocache: true,
+                    timeout: 15000,
+                    onload: (resp) => {
+                        const status = Number(resp?.status || 0);
+                        if (status < 200 || status >= 300) {
+                            reject(new Error(`HTTP ${status || 'ERR'}`));
+                            return;
+                        }
+                        resolve(String(resp?.responseText || ''));
+                    },
+                    onerror: () => reject(new Error('GM request failed')),
+                    ontimeout: () => reject(new Error('GM request timeout'))
+                });
+            } catch (e) {
+                reject(e);
+            }
+        });
+    }
+
+    async function fetchLatestScriptVersion() {
+        const url = `${SCRIPT_UPDATE_URL}?t=${Date.now()}`;
+        if (typeof GM_xmlhttpRequest === 'function') {
+            return parseScriptVersionFromSource(await requestTextByGm(url));
+        }
+        const resp = await fetch(url, {
+            method: 'GET',
+            cache: 'no-store'
+        });
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        return parseScriptVersionFromSource(await resp.text());
+    }
+
+    async function fetchUpdateChangelog() {
+        const url = `${SCRIPT_CHANGELOG_URL}?t=${Date.now()}`;
+        let text = '';
+        if (typeof GM_xmlhttpRequest === 'function') {
+            text = await requestTextByGm(url);
+        } else {
+            const resp = await fetch(url, {
+                method: 'GET',
+                cache: 'no-store'
+            });
+            if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+            text = await resp.text();
+        }
+        let json = null;
+        try {
+            json = JSON.parse(text);
+        } catch (_) {
+            throw new Error('更新日志 JSON 解析失败');
+        }
+        const versions = Array.isArray(json?.versions) ? json.versions : [];
+        return {
+            versions
+        };
+    }
+
+    function getUpdateLogEntriesBetweenVersions(changelog, currentVersion, latestVersion) {
+        const versions = Array.isArray(changelog?.versions) ? changelog.versions : [];
+        return versions.filter((entry) => {
+            const version = String(entry?.version || '').trim();
+            if (!version) return false;
+            return compareVersionParts(version, currentVersion) > 0
+                && compareVersionParts(version, latestVersion) <= 0;
+        }).sort((a, b) => compareVersionParts(String(b?.version || ''), String(a?.version || '')));
+    }
+
+    function showScriptUpdateDialog(currentVersion, latestVersion, changelogEntries = []) {
+        const logHtml = Array.isArray(changelogEntries) && changelogEntries.length
+            ? changelogEntries.map((entry) => {
+                const version = escapeHtml(String(entry?.version || '').trim() || '-');
+                const date = escapeHtml(String(entry?.date || '').trim() || '');
+                const items = (Array.isArray(entry?.changes) ? entry.changes : [])
+                    .map((item) => `<li style="margin:0 0 6px 0;">${escapeHtml(String(item || '').trim())}</li>`)
+                    .join('');
+                return `
+                    <div style="padding:10px 12px;border:1px solid #e2e8f0;border-radius:12px;background:#fff;">
+                        <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:${items ? '8px' : '0'};">
+                            <span style="font-size:13px;font-weight:800;color:#0f172a;">v${version}</span>
+                            ${date ? `<span style="font-size:11px;color:#64748b;">${date}</span>` : ''}
+                        </div>
+                        ${items ? `<ul style="margin:0;padding-left:18px;font-size:12px;line-height:1.6;color:#334155;">${items}</ul>` : '<div style="font-size:12px;color:#64748b;">暂无更新说明</div>'}
+                    </div>
+                `;
+            }).join('')
+            : '<div style="font-size:12px;color:#64748b;">暂无可显示的更新日志。</div>';
+        const overlay = document.createElement('div');
+        overlay.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(15,23,42,0.4);z-index:1000005;display:flex;align-items:center;justify-content:center;padding:24px;';
+        const modal = document.createElement('div');
+        modal.style.cssText = 'width:100%;max-width:520px;background:#fff;border-radius:16px;padding:20px 20px 16px;box-shadow:0 20px 60px rgba(15,23,42,.22);';
+        modal.innerHTML = `
+            <div style="font-size:18px;font-weight:800;color:#0f172a;">发现新版本</div>
+            <div style="margin-top:12px;font-size:13px;line-height:1.8;color:#334155;">
+                <div>当前版本：<b>${escapeHtml(String(currentVersion || '-'))}</b></div>
+                <div>最新版本：<b>${escapeHtml(String(latestVersion || '-'))}</b></div>
+            </div>
+            <div style="margin-top:14px;">
+                <div style="font-size:12px;font-weight:700;color:#475569;margin-bottom:8px;">更新日志</div>
+                <div style="max-height:260px;overflow:auto;padding-right:4px;display:flex;flex-direction:column;gap:8px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:12px;padding:10px;">
+                    ${logHtml}
+                </div>
+            </div>
+            <div style="margin-top:18px;display:flex;justify-content:flex-end;gap:10px;">
+                <button id="ai-nodes-update-cancel" style="min-width:86px;height:36px;border:1px solid #cbd5e1;background:#fff;color:#475569;border-radius:10px;cursor:pointer;font-size:13px;font-weight:700;">取消</button>
+                <button id="ai-nodes-update-confirm" style="min-width:86px;height:36px;border:1px solid #2563eb;background:#2563eb;color:#fff;border-radius:10px;cursor:pointer;font-size:13px;font-weight:700;">更新</button>
+            </div>
+        `;
+        overlay.appendChild(modal);
+        document.body.appendChild(overlay);
+        const lifecycle = setupUnifiedModalLifecycle(overlay, modal);
+        modal.querySelector('#ai-nodes-update-cancel')?.addEventListener('click', () => lifecycle.close());
+        modal.querySelector('#ai-nodes-update-confirm')?.addEventListener('click', () => {
+            lifecycle.close();
+            window.open(SCRIPT_DOWNLOAD_URL, '_blank', 'noopener,noreferrer');
+        });
+    }
+
+    function setVersionUpdateBadge(latestVersion = '') {
+        availableUpdateVersion = String(latestVersion || '').trim();
+        const badge = document.querySelector('#ai-nodes-version-badge');
+        const trigger = document.querySelector('#ai-nodes-version-trigger');
+        if (!(badge instanceof HTMLElement) || !(trigger instanceof HTMLElement)) return;
+        const hasUpdate = !!availableUpdateVersion && compareVersionParts(availableUpdateVersion, SCRIPT_VERSION) > 0;
+        badge.style.opacity = hasUpdate ? '1' : '0';
+        badge.style.transform = hasUpdate ? 'scale(1)' : 'scale(.7)';
+        trigger.title = hasUpdate
+            ? `发现新版本 v${availableUpdateVersion}，点击更新`
+            : `当前版本 v${SCRIPT_VERSION}，点击检查更新`;
+    }
+
+    async function checkScriptUpdateManually(options = {}) {
+        const silent = Boolean(options && options.silent);
+        if (!silent) {
+            showSimpleToast('正在检查更新', { duration: 10000 });
+        }
+        try {
+            const latest = await fetchLatestScriptVersion();
+            const currentVersion = SCRIPT_VERSION;
+            if (compareVersionParts(latest.version, currentVersion) <= 0) {
+                setVersionUpdateBadge('');
+                if (!silent) {
+                    showSimpleToast(`已是最新版本 v${currentVersion}`, { tone: 'success' });
+                }
+                return;
+            }
+            setVersionUpdateBadge(latest.version);
+            if (!silent) {
+                let changelogEntries = [];
+                try {
+                    const changelog = await fetchUpdateChangelog();
+                    changelogEntries = getUpdateLogEntriesBetweenVersions(changelog, currentVersion, latest.version);
+                } catch (e) {
+                    console.warn('AI-Chat-Helper: 获取更新日志失败', e);
+                }
+                showScriptUpdateDialog(currentVersion, latest.version, changelogEntries);
+            }
+        } catch (e) {
+            console.warn('AI-Chat-Helper: 检查脚本更新失败', e);
+            if (!silent) {
+                showSimpleToast('检查更新失败，请稍后重试', { tone: 'warn', duration: 2600 });
+            }
         }
     }
 
@@ -1919,10 +2214,9 @@
         const targetTop = containerTop + readingLineOffset;
         const rect = targetEl.getBoundingClientRect();
 
-        // 新增：只要目标节点进入当前可视区域，即视为到达（兼容顶部/底部无法触达阅读线）。
         const viewportPad = 4;
         const inViewport = rect.bottom >= (containerRect.top + viewportPad) && rect.top <= (containerRect.bottom - viewportPad);
-        if (inViewport) return true;
+        if ((isQwen || isDoubao || isDeepSeek || isClaude) && inViewport) return true;
 
         if (isDeepSeek && node) {
             const alignY = getDeepSeekNodeAlignY(node, scrollEl);
@@ -1935,7 +2229,20 @@
             if ((delta < 0 && atTop) || (delta > 0 && atBottom)) return true;
             return false;
         }
-        return Math.abs(rect.top - targetTop) <= 28;
+        const delta = rect.top - targetTop;
+        if (Math.abs(delta) <= 28) return true;
+        const containerHeight = Math.max(0, (containerRect.bottom || 0) - (containerRect.top || 0));
+        const maxScrollTop = Math.max(0, (scrollEl.scrollHeight || 0) - (scrollEl.clientHeight || window.innerHeight || 0));
+        const currentScrollTop = isWindowScroller
+            ? (window.scrollY || document.documentElement.scrollTop || 0)
+            : (scrollEl.scrollTop || 0);
+        const nearTopLimit = currentScrollTop <= 2;
+        const nearBottomLimit = maxScrollTop > 0 && currentScrollTop >= (maxScrollTop - 2);
+        if (inViewport && containerHeight > 0) {
+            if (delta < 0 && nearTopLimit) return true;
+            if (delta > 0 && nearBottomLimit) return true;
+        }
+        return false;
     }
 
     function startJumpToastWatch(nodeId) {
@@ -3451,16 +3758,51 @@
                 alignY = rect.top;
             }
             const targetTop = currentTop + alignY - containerRect.top - readingLineOffset;
+            const jumpBehavior = (!isClaude && !isQwen && !isDoubao && !isDeepSeek) ? 'auto' : 'smooth';
             
             if (typeof scrollEl.scrollTo === 'function') {
-                scrollEl.scrollTo({ top: targetTop, behavior: 'smooth' });
+                scrollEl.scrollTo({ top: targetTop, behavior: jumpBehavior });
             } else {
-                window.scrollTo({ top: targetTop, behavior: 'smooth' });
+                window.scrollTo({ top: targetTop, behavior: jumpBehavior });
             }
+        };
+
+        const scheduleChatGPTJumpCorrection = () => {
+            if (isClaude || isQwen || isDoubao || isDeepSeek) return;
+            const retries = [220, 520];
+            retries.forEach((delay) => {
+                setTimeout(() => {
+                    if (!targetEl || !targetEl.isConnected) return;
+                    const liveScrollEl = getScrollContainer();
+                    if (!liveScrollEl) return;
+                    const isWindowScroller = (
+                        liveScrollEl === window
+                        || liveScrollEl === document.documentElement
+                        || liveScrollEl === document.scrollingElement
+                    );
+                    const containerRect = isWindowScroller
+                        ? { top: 0 }
+                        : liveScrollEl.getBoundingClientRect();
+                    const readingLineOffset = Math.max(10, Math.min(500, CONFIG.readingLineOffset || 150));
+                    const currentTop = isWindowScroller
+                        ? (window.scrollY || document.documentElement.scrollTop || 0)
+                        : (liveScrollEl.scrollTop || 0);
+                    const rect = targetEl.getBoundingClientRect();
+                    const delta = rect.top - (containerRect.top + readingLineOffset);
+                    if (Math.abs(delta) <= 24) return;
+                    const correctedTop = currentTop + delta;
+                    if (typeof liveScrollEl.scrollTo === 'function') {
+                        liveScrollEl.scrollTo({ top: correctedTop, behavior: 'auto' });
+                    } else {
+                        window.scrollTo({ top: correctedTop, behavior: 'auto' });
+                    }
+                }, delay);
+            });
         };
 
         if (scrollEl) {
             executeJump();
+            scheduleChatGPTJumpCorrection();
             // DeepSeek 保留二次校正；Qwen 关闭，避免点击后被页面自动带回旧位置。
             // DeepSeek 已走独立跳转链路，不在通用路径做二次校正。
         } else {
@@ -6610,7 +6952,8 @@
             return;
         }
 
-        const dotEdgePad = 14;
+        const activeGlowPad = 20;
+        const dotEdgePad = Math.max(14, Math.ceil(CONFIG.dotSize / 2) + activeGlowPad);
         const visibleLimit = Math.max(3, Math.min(12, Number.isFinite(Number(CONFIG.maxVisibleDotsBeforeScroll))
             ? Math.floor(Number(CONFIG.maxVisibleDotsBeforeScroll))
             : 12));
@@ -7572,11 +7915,24 @@
         popup.innerHTML = `
             <div style="margin-bottom: 12px; border-bottom: 1px solid #eee; padding-bottom: 8px; display:flex; align-items:baseline; gap:6px;">
                 <span style="font-weight:700;font-size:15px;letter-spacing:.2px;color:#0f172a;">AI对话助手</span>
-                <span style="font-weight:500;font-size:12px;color:#64748b;">设置</span>
+                <button id="ai-nodes-version-trigger" type="button" style="position:relative;border:none;background:transparent;padding:0 10px 0 0;margin:0;font-weight:500;font-size:12px;color:#64748b;cursor:pointer;display:inline-flex;align-items:center;gap:4px;">
+                    <span>v${escapeHtml(SCRIPT_VERSION)}</span>
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" aria-hidden="true" style="display:block;flex:none;"><path fill-rule="evenodd" clip-rule="evenodd" d="M8 10C8 7.79086 9.79086 6 12 6C14.2091 6 16 7.79086 16 10V11H17C18.933 11 20.5 12.567 20.5 14.5C20.5 16.433 18.933 18 17 18H16.9C16.3477 18 15.9 18.4477 15.9 19C15.9 19.5523 16.3477 20 16.9 20H17C20.0376 20 22.5 17.5376 22.5 14.5C22.5 11.7793 20.5245 9.51997 17.9296 9.07824C17.4862 6.20213 15.0003 4 12 4C8.99974 4 6.51381 6.20213 6.07036 9.07824C3.47551 9.51997 1.5 11.7793 1.5 14.5C1.5 17.5376 3.96243 20 7 20H7.1C7.65228 20 8.1 19.5523 8.1 19C8.1 18.4477 7.65228 18 7.1 18H7C5.067 18 3.5 16.433 3.5 14.5C3.5 12.567 5.067 11 7 11H8V10ZM13 11C13 10.4477 12.5523 10 12 10C11.4477 10 11 10.4477 11 11V16.5858L9.70711 15.2929C9.31658 14.9024 8.68342 14.9024 8.29289 15.2929C7.90237 15.6834 7.90237 16.3166 8.29289 16.7071L11.2929 19.7071C11.6834 20.0976 12.3166 20.0976 12.7071 19.7071L15.7071 16.7071C16.0976 16.3166 16.0976 15.6834 15.7071 15.2929C15.3166 14.9024 14.6834 14.9024 14.2929 15.2929L13 16.5858V11Z" fill="currentColor"/></svg>
+                    <span id="ai-nodes-version-badge" style="position:absolute;top:-2px;right:0;width:8px;height:8px;border-radius:999px;background:#ef4444;box-shadow:0 0 0 2px rgba(255,255,255,0.98);opacity:0;transform:scale(.7);transition:opacity .18s ease, transform .18s ease;pointer-events:none;"></span>
+                </button>
             </div>
-            <div style="display: flex; align-items: center; gap: 8px; font-size: 13px; color: #666;">
+            <button id="ai-nodes-platform-info" type="button" style="width:100%;display:flex;align-items:center;gap:8px;font-size:13px;color:#666;border:1px solid #e2e8f0;background:rgba(248,250,252,0.78);border-radius:10px;padding:9px 10px;cursor:pointer;">
                 <img src="${escapeHtml(platformIconUrl)}" alt="${escapeHtml(aiName)}" style="width:16px;height:16px;border-radius:4px;display:block;flex-shrink:0;" referrerpolicy="no-referrer">
-                <span>当前 AI 平台: <b>${aiName}</b></span>
+                <span style="flex:1;text-align:left;">当前 AI 平台: <b>${aiName}</b></span>
+            </button>
+            <div style="margin-top:8px;">
+                <label style="display:flex; align-items:center; justify-content:space-between; gap:10px; font-size:12px; cursor:pointer; color:#0f172a; background:rgba(248,250,252,0.75); border:1px solid #e2e8f0; border-radius:8px; padding:7px 10px;">
+                    <span style="font-weight:600;">自动检查更新</span>
+                    <span class="ai-nodes-switch">
+                        <input type="checkbox" id="ai-nodes-opt-auto-update-check" ${autoUpdateCheck ? 'checked' : ''}>
+                        <span class="ai-nodes-switch-slider"></span>
+                    </span>
+                </label>
             </div>
             
             <div style="margin-top: 12px; padding-top: 8px; border-top: 1px dashed #eee; display: flex; flex-direction: column; gap: 8px;">
@@ -8238,6 +8594,38 @@
         const visibleLimitInput = nodeSettingsMenu.querySelector('#ai-nodes-visible-limit-val');
         const nodeSettingsTrigger = popup.querySelector('#ai-nodes-node-settings-trigger');
         const nodeSettingsTriggerVal = popup.querySelector('#ai-nodes-node-settings-trigger-val');
+        const versionTrigger = popup.querySelector('#ai-nodes-version-trigger');
+
+        const handleVersionCheckClick = (e) => {
+            e.stopPropagation();
+            hidePopup();
+            setTimeout(() => {
+                checkScriptUpdateManually();
+            }, 0);
+        };
+
+        if (versionTrigger) versionTrigger.addEventListener('click', handleVersionCheckClick);
+        setVersionUpdateBadge(availableUpdateVersion);
+        if (autoUpdateCheck && !autoUpdateCheckStarted) {
+            autoUpdateCheckStarted = true;
+            setTimeout(() => {
+                checkScriptUpdateManually({ silent: true });
+            }, 1800);
+        }
+
+        const autoUpdateCheckOpt = popup.querySelector('#ai-nodes-opt-auto-update-check');
+        if (autoUpdateCheckOpt) {
+            autoUpdateCheckOpt.addEventListener('change', (e) => {
+                autoUpdateCheck = Boolean(e.target.checked);
+                setGlobalValue(AUTO_UPDATE_CHECK_KEY, autoUpdateCheck);
+                if (autoUpdateCheck && !autoUpdateCheckStarted) {
+                    autoUpdateCheckStarted = true;
+                    setTimeout(() => {
+                        checkScriptUpdateManually({ silent: true });
+                    }, 1200);
+                }
+            });
+        }
 
         const updateCustomParams = () => {
             let gap = parseInt(dotGapInput.value);
