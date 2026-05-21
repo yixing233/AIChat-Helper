@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AI对话助手
 // @namespace    http://tampermonkey.net/
-// @version      2.0.10
+// @version      2.0.11
 // @description  支持 ChatGPT、通义千问、豆包、DeepSeek：自动生成对话节点导航、一键导出对话（PDF/Markdown/JSON/CSV/TXT）。
 // @author       xchengb
 // @updateURL    https://github.com/yixing233/AIChat-Helper/raw/master/AIChat-Helper.user.js
@@ -45,7 +45,7 @@
     const isDeepSeek = isDeepSeekHost && isDeepSeekPath;
     const isClaude = isClaudeHost && isClaudePath;
     const AI_NAME = isChatGPT ? 'ChatGPT' : (isDeepSeek ? 'DeepSeek' : (isDoubao ? '豆包' : (isQwen ? '通义千问' : (isClaude ? 'Claude' : 'AI 助手'))));
-    const SCRIPT_VERSION = '2.0.10';
+    const SCRIPT_VERSION = '2.0.11';
     const SCRIPT_UPDATE_URL = 'https://raw.githubusercontent.com/yixing233/AIChat-Helper/master/AIChat-Helper.user.js';
     const SCRIPT_DOWNLOAD_URL = 'https://github.com/yixing233/AIChat-Helper/raw/master/AIChat-Helper.user.js';
     const SCRIPT_CHANGELOG_URL = 'https://raw.githubusercontent.com/yixing233/AIChat-Helper/master/update.json';
@@ -2109,10 +2109,58 @@
         `;
         overlay.appendChild(modal);
         document.body.appendChild(overlay);
-        const lifecycle = setupUnifiedModalLifecycle(overlay, modal);
-        modal.querySelector('#ai-nodes-update-cancel')?.addEventListener('click', () => lifecycle.close());
+        const reduceMotion = Boolean(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+        const exitDurationMs = reduceMotion ? 20 : 220;
+        overlay.style.opacity = '0';
+        overlay.style.transition = reduceMotion ? 'opacity 0.01s linear' : 'opacity 0.22s cubic-bezier(0.22,0.61,0.36,1)';
+        modal.style.opacity = '0';
+        modal.style.transform = 'translateY(14px) scale(0.98)';
+        modal.style.transition = reduceMotion
+            ? 'opacity 0.01s linear, transform 0.01s linear'
+            : 'opacity 0.24s cubic-bezier(0.22,0.61,0.36,1), transform 0.24s cubic-bezier(0.22,0.61,0.36,1)';
+
+        let closing = false;
+        let cleanupTimer = 0;
+
+        const cleanup = () => {
+            if (cleanupTimer) {
+                clearTimeout(cleanupTimer);
+                cleanupTimer = 0;
+            }
+            document.removeEventListener('keydown', onKeydown, true);
+            if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
+        };
+
+        const closeDialog = () => {
+            if (closing) return;
+            closing = true;
+            overlay.style.pointerEvents = 'none';
+            overlay.style.opacity = '0';
+            modal.style.opacity = '0';
+            modal.style.transform = 'translateY(10px) scale(0.985)';
+            cleanupTimer = window.setTimeout(cleanup, exitDurationMs);
+        };
+
+        const onKeydown = (e) => {
+            if (e.key !== 'Escape') return;
+            e.preventDefault();
+            closeDialog();
+        };
+
+        overlay.addEventListener('click', (e) => {
+            if (e.target === overlay) closeDialog();
+        });
+        document.addEventListener('keydown', onKeydown, true);
+
+        requestAnimationFrame(() => {
+            overlay.style.opacity = '1';
+            modal.style.opacity = '1';
+            modal.style.transform = 'translateY(0) scale(1)';
+        });
+
+        modal.querySelector('#ai-nodes-update-cancel')?.addEventListener('click', closeDialog);
         modal.querySelector('#ai-nodes-update-confirm')?.addEventListener('click', () => {
-            lifecycle.close();
+            closeDialog();
             window.open(SCRIPT_DOWNLOAD_URL, '_blank', 'noopener,noreferrer');
         });
     }
