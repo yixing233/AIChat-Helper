@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AI对话助手
 // @namespace    http://tampermonkey.net/
-// @version      2.0.9
+// @version      2.0.10
 // @description  支持 ChatGPT、通义千问、豆包、DeepSeek：自动生成对话节点导航、一键导出对话（PDF/Markdown/JSON/CSV/TXT）。
 // @author       xchengb
 // @updateURL    https://github.com/yixing233/AIChat-Helper/raw/master/AIChat-Helper.user.js
@@ -45,7 +45,7 @@
     const isDeepSeek = isDeepSeekHost && isDeepSeekPath;
     const isClaude = isClaudeHost && isClaudePath;
     const AI_NAME = isChatGPT ? 'ChatGPT' : (isDeepSeek ? 'DeepSeek' : (isDoubao ? '豆包' : (isQwen ? '通义千问' : (isClaude ? 'Claude' : 'AI 助手'))));
-    const SCRIPT_VERSION = '2.0.9';
+    const SCRIPT_VERSION = '2.0.10';
     const SCRIPT_UPDATE_URL = 'https://raw.githubusercontent.com/yixing233/AIChat-Helper/master/AIChat-Helper.user.js';
     const SCRIPT_DOWNLOAD_URL = 'https://github.com/yixing233/AIChat-Helper/raw/master/AIChat-Helper.user.js';
     const SCRIPT_CHANGELOG_URL = 'https://raw.githubusercontent.com/yixing233/AIChat-Helper/master/update.json';
@@ -75,9 +75,7 @@
     let storageKey = '';
     const COLLAPSE_KEY = 'ai-nodes-auto-collapse-qwen';
     const ADS_KEY = 'ai-nodes-remove-qwen-ads';
-    const QWEN_GLASS_POPUPS_KEY = 'ai-nodes-qwen-glass-popups';
     const DEEPSEEK_NATIVE_NAV_KEY = 'ai-nodes-hide-deepseek-native-nav';
-    const DOUBAO_GLASS_POPUPS_KEY = 'ai-nodes-doubao-glass-popups';
     const DOT_GAP_KEY = 'ai-nodes-dot-gap';
     const VISIBLE_LIMIT_KEY = 'ai-nodes-visible-limit';
     const READING_LINE_KEY = 'ai-nodes-reading-line';
@@ -1114,10 +1112,8 @@
     let ticking = false;
     let autoCollapse = getGlobalValue(COLLAPSE_KEY, false);
     let removeAds = getGlobalValue(ADS_KEY, false);
-    let qwenGlassPopups = getGlobalValue(QWEN_GLASS_POPUPS_KEY, true);
     let hideDeepSeekNativeNav = getGlobalValue(DEEPSEEK_NATIVE_NAV_KEY, false);
-    let doubaoGlassPopups = getGlobalValue(DOUBAO_GLASS_POPUPS_KEY, true);
-    let autoUpdateCheck = getGlobalValue(AUTO_UPDATE_CHECK_KEY, false);
+    let autoUpdateCheck = getGlobalValue(AUTO_UPDATE_CHECK_KEY, true);
 
     const initialVisibleLimitRaw = Number(getGlobalValue(VISIBLE_LIMIT_KEY, 12));
     const initialVisibleLimit = Math.max(3, Math.min(12, Number.isFinite(initialVisibleLimitRaw) ? Math.floor(initialVisibleLimitRaw) : 12));
@@ -1224,25 +1220,6 @@
         body.ai-nodes-hide-deepseek-native-nav ._189b4a0 .ds-virtual-list {
             display: none !important;
         }
-        /* 豆包输入框弹层卡片玻璃背景（更多/附件/快速-思考-专家） */
-        body.ai-nodes-doubao-glass-popups [data-radix-popper-content-wrapper] [data-slot="dropdown-menu-content"]:has(input[data-testid="upload-file-input"]),
-        body.ai-nodes-doubao-glass-popups [data-radix-popper-content-wrapper] [data-slot="dropdown-menu-content"]:has([data-testid="upload_file_panel_upload_item"]),
-        body.ai-nodes-doubao-glass-popups [data-radix-popper-content-wrapper] [data-slot="dropdown-menu-content"]:has([data-testid^="deep-thinking-action-item-"]),
-        body.ai-nodes-doubao-glass-popups [data-radix-popper-content-wrapper] [role="dialog"]:has([data-testid^="skill_bar_button_"]) {
-            background: rgba(255, 255, 255, 0.5) !important;
-            backdrop-filter: blur(10px) saturate(118%) !important;
-            -webkit-backdrop-filter: blur(10px) saturate(118%) !important;
-            border: 1px solid rgba(255, 255, 255, 0.34) !important;
-            box-shadow: 0 6px 16px rgba(15, 23, 42, 0.08), inset 0 1px 0 rgba(255, 255, 255, 0.36) !important;
-        }
-        /* 千问输入框弹层卡片玻璃背景 */
-        body.ai-nodes-qwen-glass-popups [data-radix-popper-content-wrapper] [role="menu"][data-radix-menu-content]:has([data-overflow-activator="true"]) {
-            background: rgba(255, 255, 255, 0.5) !important;
-            backdrop-filter: blur(10px) saturate(118%) !important;
-            -webkit-backdrop-filter: blur(10px) saturate(118%) !important;
-            border: 1px solid rgba(255, 255, 255, 0.34) !important;
-            box-shadow: 0 6px 16px rgba(15, 23, 42, 0.08), inset 0 1px 0 rgba(255, 255, 255, 0.36) !important;
-        }
         /* 节点标识样式优化 */
         .ai-nav-dot {
             box-shadow: 0 1px 3px rgba(0,0,0,0.08);
@@ -1268,9 +1245,7 @@
     if (document.head) document.head.appendChild(styleTag);
 
     if (removeAds && document.body) document.body.classList.add('ai-nodes-hide-ads');
-    if (isQwen && qwenGlassPopups && document.body) document.body.classList.add('ai-nodes-qwen-glass-popups');
     if (hideDeepSeekNativeNav && document.body) document.body.classList.add('ai-nodes-hide-deepseek-native-nav');
-    if (isDoubao && doubaoGlassPopups && document.body) document.body.classList.add('ai-nodes-doubao-glass-popups');
 
     // ===== 拖拽手柄 =====
     const dragHandle = document.createElement('div');
@@ -1579,9 +1554,7 @@
         if (!globalTooltip.isConnected) document.body.appendChild(globalTooltip);
         if (!styleTag.isConnected) document.head.appendChild(styleTag);
         document.body.classList.toggle('ai-nodes-hide-ads', Boolean(removeAds));
-        document.body.classList.toggle('ai-nodes-qwen-glass-popups', Boolean(isQwen && qwenGlassPopups));
         document.body.classList.toggle('ai-nodes-hide-deepseek-native-nav', Boolean(isDeepSeek && hideDeepSeekNativeNav));
-        document.body.classList.toggle('ai-nodes-doubao-glass-popups', Boolean(isDoubao && doubaoGlassPopups));
         if (!container.isConnected) {
             document.body.appendChild(container);
             qwenNodeLog('nav:reattach-container', { isConnected: container.isConnected });
@@ -1979,6 +1952,13 @@
         return 0;
     }
 
+    function escapeHtmlSafe(str) {
+        return String(str || '')
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;');
+    }
+
     function showSimpleToast(message, options = {}) {
         const text = String(message || '').trim();
         if (!text) return;
@@ -2090,10 +2070,10 @@
     function showScriptUpdateDialog(currentVersion, latestVersion, changelogEntries = []) {
         const logHtml = Array.isArray(changelogEntries) && changelogEntries.length
             ? changelogEntries.map((entry) => {
-                const version = escapeHtml(String(entry?.version || '').trim() || '-');
-                const date = escapeHtml(String(entry?.date || '').trim() || '');
+                const version = escapeHtmlSafe(String(entry?.version || '').trim() || '-');
+                const date = escapeHtmlSafe(String(entry?.date || '').trim() || '');
                 const items = (Array.isArray(entry?.changes) ? entry.changes : [])
-                    .map((item) => `<li style="margin:0 0 6px 0;">${escapeHtml(String(item || '').trim())}</li>`)
+                    .map((item) => `<li style="margin:0 0 6px 0;">${escapeHtmlSafe(String(item || '').trim())}</li>`)
                     .join('');
                 return `
                     <div style="padding:10px 12px;border:1px solid #e2e8f0;border-radius:12px;background:#fff;">
@@ -2113,8 +2093,8 @@
         modal.innerHTML = `
             <div style="font-size:18px;font-weight:800;color:#0f172a;">发现新版本</div>
             <div style="margin-top:12px;font-size:13px;line-height:1.8;color:#334155;">
-                <div>当前版本：<b>${escapeHtml(String(currentVersion || '-'))}</b></div>
-                <div>最新版本：<b>${escapeHtml(String(latestVersion || '-'))}</b></div>
+                <div>当前版本：<b>${escapeHtmlSafe(String(currentVersion || '-'))}</b></div>
+                <div>最新版本：<b>${escapeHtmlSafe(String(latestVersion || '-'))}</b></div>
             </div>
             <div style="margin-top:14px;">
                 <div style="font-size:12px;font-weight:700;color:#475569;margin-bottom:8px;">更新日志</div>
@@ -7947,9 +7927,8 @@
                     <span id="ai-nodes-reading-line-trigger-val">${CONFIG.readingLineOffset} px</span>
                 </button>
             </div>
-            ${(isQwen || isDoubao) ? `
+            ${isQwen ? `
                 <div style="margin-top: 12px; padding-top: 8px; border-top: 1px dashed #eee; display: flex; flex-direction: column; gap: 8px;">
-                    ${isQwen ? `
                     <label style="display:flex; align-items:center; justify-content:space-between; gap:10px; font-size:12px; cursor:pointer; color:#0f172a; background:rgba(248,250,252,0.75); border:1px solid #e2e8f0; border-radius:8px; padding:7px 10px;">
                         <span style="font-weight:600;">自动收起侧边栏</span>
                         <span class="ai-nodes-switch">
@@ -7964,23 +7943,6 @@
                             <span class="ai-nodes-switch-slider"></span>
                         </span>
                     </label>
-                    <label style="display:flex; align-items:center; justify-content:space-between; gap:10px; font-size:12px; cursor:pointer; color:#0f172a; background:rgba(248,250,252,0.75); border:1px solid #e2e8f0; border-radius:8px; padding:7px 10px;">
-                        <span style="font-weight:600;">输入弹层玻璃背景</span>
-                        <span class="ai-nodes-switch">
-                            <input type="checkbox" id="ai-nodes-opt-qwen-glass-popups" ${qwenGlassPopups ? 'checked' : ''}>
-                            <span class="ai-nodes-switch-slider"></span>
-                        </span>
-                    </label>
-                    ` : ''}
-                    ${isDoubao ? `
-                    <label style="display:flex; align-items:center; justify-content:space-between; gap:10px; font-size:12px; cursor:pointer; color:#0f172a; background:rgba(248,250,252,0.75); border:1px solid #e2e8f0; border-radius:8px; padding:7px 10px;">
-                        <span style="font-weight:600;">输入弹层玻璃背景</span>
-                        <span class="ai-nodes-switch">
-                            <input type="checkbox" id="ai-nodes-opt-doubao-glass-popups" ${doubaoGlassPopups ? 'checked' : ''}>
-                            <span class="ai-nodes-switch-slider"></span>
-                        </span>
-                    </label>
-                    ` : ''}
                 </div>
             ` : ''}
             ${isDeepSeek ? `
@@ -8744,15 +8706,6 @@
                 if (removeAds) document.body.classList.add('ai-nodes-hide-ads');
                 else document.body.classList.remove('ai-nodes-hide-ads');
             });
-            const qwenGlassOpt = popup.querySelector('#ai-nodes-opt-qwen-glass-popups');
-            if (qwenGlassOpt) {
-                qwenGlassOpt.addEventListener('change', (e) => {
-                    qwenGlassPopups = e.target.checked;
-                    setGlobalValue(QWEN_GLASS_POPUPS_KEY, qwenGlassPopups);
-                    document.body.classList.toggle('ai-nodes-qwen-glass-popups', qwenGlassPopups);
-                });
-            }
-
             // 加载全部历史节点按鈕
             const loadAllBtn = popup.querySelector('#ai-nodes-load-all');
             if (loadAllBtn) {
@@ -8762,17 +8715,6 @@
                     hidePopup();
                     startLoadAllHistory(loadAllBtn);
                 };
-            }
-        }
-
-        if (isDoubao) {
-            const doubaoGlassOpt = popup.querySelector('#ai-nodes-opt-doubao-glass-popups');
-            if (doubaoGlassOpt) {
-                doubaoGlassOpt.addEventListener('change', (e) => {
-                    doubaoGlassPopups = e.target.checked;
-                    setGlobalValue(DOUBAO_GLASS_POPUPS_KEY, doubaoGlassPopups);
-                    document.body.classList.toggle('ai-nodes-doubao-glass-popups', doubaoGlassPopups);
-                });
             }
         }
 
