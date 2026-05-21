@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AI对话助手
 // @namespace    http://tampermonkey.net/
-// @version      2.0.6
+// @version      2.0.7
 // @description  支持 ChatGPT、通义千问、豆包、DeepSeek：自动生成对话节点导航、一键导出对话（PDF/Markdown/JSON/CSV/TXT）。
 // @author       xchengb
 // @updateURL    https://github.com/yixing233/AIChat-Helper/raw/master/AIChat-Helper.user.js
@@ -11,6 +11,7 @@
 // @match        *://www.qianwen.com/*
 // @match        *://www.doubao.com/chat*
 // @match        *://chat.deepseek.com/*
+// @match        *://claude.ai/chat/*
 // @grant        GM_addStyle
 // @grant        GM_getValue
 // @grant        GM_setValue
@@ -27,19 +28,22 @@
     const isQwenHost = /^www\.qianwen\.com$/i.test(host);
     const isDoubaoHost = /^www\.doubao\.com$/i.test(host);
     const isDeepSeekHost = /^chat\.deepseek\.com$/i.test(host);
+    const isClaudeHost = /^claude\.ai$/i.test(host);
 
     const isChatGPTPath = /^\/(?:$|c\/[a-z0-9-]+\/?)$/i.test(pathname);
     const isQwenPath = /^\/(?:$|chat(?:\/[a-z0-9_-]{8,})?\/?)$/i.test(pathname);
     const isDoubaoPath = /^\/chat(?:\/[^/?#]+)?\/?$/i.test(pathname);
     const isDeepSeekPath = /^\/(?:$|a\/chat\/s(?:\/[0-9a-f-]{36})?\/?|chat(?:\/[0-9a-f-]{36})?\/?)$/i.test(pathname);
+    const isClaudePath = /^\/chat(?:\/[0-9a-f-]{36})?\/?$/i.test(pathname);
 
     const isChatGPT = isChatGPTHost && isChatGPTPath;
     const isQwen = isQwenHost && isQwenPath;
     const isDoubao = isDoubaoHost && isDoubaoPath;
     const isDeepSeek = isDeepSeekHost && isDeepSeekPath;
-    const AI_NAME = isChatGPT ? 'ChatGPT' : (isDeepSeek ? 'DeepSeek' : (isDoubao ? '豆包' : (isQwen ? '通义千问' : 'AI 助手')));
+    const isClaude = isClaudeHost && isClaudePath;
+    const AI_NAME = isChatGPT ? 'ChatGPT' : (isDeepSeek ? 'DeepSeek' : (isDoubao ? '豆包' : (isQwen ? '通义千问' : (isClaude ? 'Claude' : 'AI 助手'))));
 
-    if (!isChatGPT && !isQwen && !isDoubao && !isDeepSeek) return;
+    if (!isChatGPT && !isQwen && !isDoubao && !isDeepSeek && !isClaude) return;
 
     function getPlatformIconUrl() {
         const iconEl = document.querySelector('link[rel="icon"], link[rel="shortcut icon"], link[rel="apple-touch-icon"], link[rel*="icon"]');
@@ -53,6 +57,7 @@
         if (isQwen) return 'https://www.qianwen.com/favicon.ico';
         if (isDoubao) return 'https://www.doubao.com/favicon.ico';
         if (isDeepSeek) return 'https://chat.deepseek.com/favicon.ico';
+        if (isClaude) return 'https://claude.ai/favicon.ico';
         return `${window.location.origin}/favicon.ico`;
     }
 
@@ -86,6 +91,8 @@
         if (typeof defaultValue === 'number') return Number(val);
         return val;
     };
+
+    const wait = (ms) => new Promise((resolve) => setTimeout(resolve, Math.max(0, Number(ms) || 0)));
 
     const setGlobalValue = (key, value) => {
         try {
@@ -141,6 +148,12 @@
     let deepseekVirtualNodesLoaded = false;
     let deepseekVirtualNodesLastFetchAt = 0;
     let deepseekDomNodesSnapshot = [];
+    let claudeVirtualNodesCache = [];
+    let claudeVirtualNodesLoading = false;
+    let claudeVirtualNodesLoaded = false;
+    let claudeVirtualNodesLastFetchAt = 0;
+    let claudeVirtualNodesConversationId = '';
+    let claudeNavJumpSeq = 0;
     let doubaoVirtualNodesCache = [];
     let doubaoVirtualNodesLoading = false;
     let doubaoVirtualNodesLoaded = false;
@@ -166,11 +179,16 @@
     let deepseekPageListTemplate = null;
     let deepseekCaptureHooksInstalled = false;
     let deepseekLastSessionMeta = null;
+    let claudeCapturedHeaders = null;
+    let claudeCaptureHooksInstalled = false;
+    let claudeLastConversationMeta = null;
     let chatgptAccessToken = null;
     const chatgptCapturedWorkspaceIds = new Set();
     const chatgptCapturedDeviceIds = new Set();
     const DEEPSEEK_PAGE_LIST_PATH = '/api/v0/chat_session/fetch_page';
     const DEEPSEEK_HISTORY_PATH = '/api/v0/chat/history_messages';
+    const CLAUDE_CONV_PATH_RE = /\/api\/organizations\/([0-9a-f-]{36})\/chat_conversations\/([0-9a-f-]{36})/i;
+    const CLAUDE_CONV_LIST_PATH_RE = /\/api\/organizations\/([0-9a-f-]{36})\/chat_conversations_v2/i;
     const CHATGPT_BATCH_PAGE_LIMIT = 100;
     const QWEN_NODE_DEBUG = false;
 
@@ -195,6 +213,522 @@
     let getDoubaoMessagesByApi = async function () {
         return [];
     };
+
+    function parseClaudeHeaders(headersLike) {
+        if (!headersLike) return {};
+        const out = {};
+        if (headersLike instanceof Headers) {
+            headersLike.forEach((v, k) => out[String(k).toLowerCase()] = String(v));
+            return out;
+        }
+        if (Array.isArray(headersLike)) {
+            headersLike.forEach((pair) => {
+                if (!Array.isArray(pair) || pair.length < 2) return;
+                out[String(pair[0]).toLowerCase()] = String(pair[1]);
+            });
+            return out;
+        }
+        if (typeof headersLike === 'object') {
+            Object.entries(headersLike).forEach(([k, v]) => out[String(k).toLowerCase()] = String(v));
+        }
+        return out;
+    }
+
+    function sanitizeClaudeHeaders(inputHeaders) {
+        const blocked = new Set([
+            'cookie', 'host', 'origin', 'referer', 'content-length',
+            'sec-fetch-site', 'sec-fetch-mode', 'sec-fetch-dest',
+            'sec-ch-ua', 'sec-ch-ua-mobile', 'sec-ch-ua-platform',
+            'accept-encoding', 'connection', ':authority', ':method', ':path', ':scheme'
+        ]);
+        const out = {};
+        Object.entries(inputHeaders || {}).forEach(([k, v]) => {
+            const key = String(k).toLowerCase();
+            if (blocked.has(key)) return;
+            if (v == null || v === '') return;
+            out[key] = String(v);
+        });
+        return out;
+    }
+
+    function getClaudeConversationIdFromUrl() {
+        const m = String(window.location.pathname || '').match(/^\/chat\/([0-9a-f-]{36})\/?$/i);
+        return m ? String(m[1] || '').trim() : '';
+    }
+
+    function getClaudeOrgIdFromCookie() {
+        const raw = String(document.cookie || '');
+        const m = raw.match(/(?:^|;\s*)lastActiveOrg=([0-9a-f-]{36})(?:;|$)/i);
+        return m && m[1] ? String(m[1]).trim() : '';
+    }
+
+    function parseClaudeApiMeta(rawUrl) {
+        try {
+            const u = new URL(rawUrl, window.location.origin);
+            const m = u.pathname.match(CLAUDE_CONV_PATH_RE);
+            if (!m) return null;
+            return { orgId: String(m[1] || '').trim(), convId: String(m[2] || '').trim() };
+        } catch (_) {
+            return null;
+        }
+    }
+
+    function isClaudeConversationUrl(rawUrl) {
+        try {
+            const u = new URL(rawUrl, window.location.origin);
+            return CLAUDE_CONV_PATH_RE.test(u.pathname);
+        } catch (_) {
+            return false;
+        }
+    }
+
+    function isClaudeConversationListUrl(rawUrl) {
+        try {
+            const u = new URL(rawUrl, window.location.origin);
+            return CLAUDE_CONV_LIST_PATH_RE.test(u.pathname);
+        } catch (_) {
+            return false;
+        }
+    }
+
+    function installClaudeCaptureHooks() {
+        if (!isClaude || claudeCaptureHooksInstalled) return;
+        claudeCaptureHooksInstalled = true;
+
+        const rawFetch = window.fetch;
+        window.fetch = function (input, init) {
+            try {
+                const inputUrl = typeof input === 'string' ? input : input?.url;
+                const url = inputUrl ? new URL(inputUrl, window.location.origin).toString() : '';
+                if (url && (isClaudeConversationUrl(url) || isClaudeConversationListUrl(url))) {
+                    claudeCapturedHeaders = sanitizeClaudeHeaders({
+                        ...parseClaudeHeaders(typeof input !== 'string' ? input?.headers : null),
+                        ...parseClaudeHeaders(init?.headers),
+                        ...(claudeCapturedHeaders || {})
+                    });
+                }
+            } catch (_) {}
+            return rawFetch.apply(this, arguments);
+        };
+
+        const nativeOpen = XMLHttpRequest.prototype.open;
+        const nativeSetHeader = XMLHttpRequest.prototype.setRequestHeader;
+        const nativeSend = XMLHttpRequest.prototype.send;
+        XMLHttpRequest.prototype.open = function (method, url, ...rest) {
+            this.__aiNodesClaudeUrl = url;
+            this.__aiNodesClaudeHeaders = {};
+            return nativeOpen.call(this, method, url, ...rest);
+        };
+        XMLHttpRequest.prototype.setRequestHeader = function (name, value) {
+            if (this.__aiNodesClaudeHeaders) this.__aiNodesClaudeHeaders[String(name).toLowerCase()] = String(value);
+            return nativeSetHeader.call(this, name, value);
+        };
+        XMLHttpRequest.prototype.send = function (body) {
+            try {
+                const url = this.__aiNodesClaudeUrl ? new URL(this.__aiNodesClaudeUrl, window.location.origin).toString() : '';
+                if (url && (isClaudeConversationUrl(url) || isClaudeConversationListUrl(url))) {
+                    claudeCapturedHeaders = sanitizeClaudeHeaders({
+                        ...(claudeCapturedHeaders || {}),
+                        ...(this.__aiNodesClaudeHeaders || {})
+                    });
+                }
+            } catch (_) {}
+            return nativeSend.call(this, body);
+        };
+    }
+
+    function resolveClaudeAssetUrl(rawUrl) {
+        const raw = String(rawUrl || '').trim();
+        if (!raw) return '';
+        try {
+            return new URL(raw, window.location.origin).href;
+        } catch (_) {
+            return raw;
+        }
+    }
+
+    function normalizeClaudeImagePart(part, index = 0) {
+        if (!part || typeof part !== 'object') return null;
+        const fileName = String(part.fileName || part.file_name || part.name || '').trim();
+        const previewUrl = resolveClaudeAssetUrl(part.previewUrl || part.preview_url || part.url || part.src || '');
+        const thumbnailUrl = resolveClaudeAssetUrl(part.thumbnailUrl || part.thumbnail_url || part.thumbUrl || part.thumb_url || '');
+        const width = Number(
+            part.width
+            || part.image_width
+            || part.preview_asset?.image_width
+            || part.thumbnail_asset?.image_width
+            || 0
+        ) || 0;
+        const height = Number(
+            part.height
+            || part.image_height
+            || part.preview_asset?.image_height
+            || part.thumbnail_asset?.image_height
+            || 0
+        ) || 0;
+        return {
+            type: 'image',
+            fileName: fileName || `图片${index + 1}`,
+            fileUuid: String(part.fileUuid || part.file_uuid || part.uuid || '').trim(),
+            previewUrl,
+            thumbnailUrl,
+            url: previewUrl || thumbnailUrl,
+            width,
+            height,
+            mimeType: String(part.mimeType || part.mime_type || '').trim()
+        };
+    }
+
+    function extractClaudeToolResultText(content) {
+        const items = Array.isArray(content) ? content : [];
+        const out = [];
+        items.forEach((item) => {
+            if (!item || typeof item !== 'object') return;
+            const itemType = String(item.type || '').trim().toLowerCase();
+            if (itemType === 'text' && typeof item.text === 'string') {
+                const t = String(item.text || '').replace(/\r\n/g, '\n').trim();
+                if (t) out.push(t);
+                return;
+            }
+            if (typeof item.text === 'string') {
+                const t = String(item.text || '').replace(/\r\n/g, '\n').trim();
+                if (t) out.push(t);
+            }
+        });
+        return out.join('\n\n').trim();
+    }
+
+    function isClaudeToolBoilerplateText(text) {
+        const t = String(text || '').replace(/\r\n/g, '\n').trim();
+        if (!t) return true;
+        if (/^Content rendered and shown to the user\./i.test(t)) return true;
+        if (/^\[This tool call rendered an interactive widget/i.test(t)) return true;
+        return false;
+    }
+
+    function shouldIgnoreClaudeToolName(name) {
+        const n = String(name || '').trim().toLowerCase();
+        if (!n) return false;
+        if (n === 'visualize:read_me') return true;
+        return false;
+    }
+
+    function extractClaudeVisibleTextFromHtmlFragment(html) {
+        const raw = String(html || '').trim();
+        if (!raw) return '';
+        let doc;
+        try {
+            const parser = new DOMParser();
+            doc = parser.parseFromString(`<div id="__claude_widget_root__">${raw}</div>`, 'text/html');
+        } catch (_) {
+            return raw;
+        }
+        const root = doc?.querySelector('#__claude_widget_root__');
+        if (!(root instanceof Element)) return raw;
+
+        const BLOCK_TAGS = new Set([
+            'div', 'p', 'section', 'article', 'main', 'aside',
+            'ul', 'ol', 'li', 'pre',
+            'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
+            'table', 'thead', 'tbody', 'tr', 'td', 'th',
+            'svg'
+        ]);
+
+        const normalizeLine = (text) => String(text || '')
+            .replace(/[\u200B-\u200D\uFEFF]/g, '')
+            .replace(/[ \t]+\n/g, '\n')
+            .replace(/\n[ \t]+/g, '\n')
+            .replace(/[ \t]{2,}/g, ' ')
+            .trim();
+
+        const lines = [];
+        const pushLine = (text) => {
+            const t = normalizeLine(text);
+            if (!t) return;
+            if (lines.length && lines[lines.length - 1] === t) return;
+            lines.push(t);
+        };
+        const pushBlock = (text) => {
+            const t = String(text || '').replace(/\r\n/g, '\n').trim();
+            if (!t) return;
+            const block = `\`\`\`\n${t}\n\`\`\``;
+            if (lines.length && lines[lines.length - 1] === block) return;
+            lines.push(block);
+        };
+
+        const walk = (node) => {
+            if (!node) return;
+            if (node.nodeType === Node.TEXT_NODE) return;
+            if (!(node instanceof Element)) return;
+
+            const tag = String(node.tagName || '').toLowerCase();
+            if (['style', 'script', 'noscript', 'template'].includes(tag)) return;
+            if (node.getAttribute('aria-hidden') === 'true') return;
+            if (String(node.className || '').split(/\s+/).includes('sr-only')) return;
+            if (['input', 'select', 'textarea', 'option'].includes(tag)) return;
+            if (tag === 'button') return;
+
+            if (tag === 'pre') {
+                const t = String(node.textContent || '').replace(/\r\n/g, '\n').trim();
+                if (t) pushBlock(t);
+                return;
+            }
+
+            if (tag === 'code') {
+                const t = normalizeLine(node.textContent || '');
+                if (t) pushLine(t);
+                return;
+            }
+
+            if (tag === 'svg') {
+                const svgTexts = Array.from(node.querySelectorAll('title, desc, text'))
+                    .map((el) => normalizeLine(el.textContent || ''))
+                    .filter(Boolean);
+                if (svgTexts.length) pushLine(svgTexts.join('\n'));
+                return;
+            }
+
+            const childElements = Array.from(node.children || []).filter((el) => {
+                const childTag = String(el.tagName || '').toLowerCase();
+                return !['style', 'script', 'noscript', 'template'].includes(childTag);
+            });
+            const hasBlockChild = childElements.some((el) => BLOCK_TAGS.has(String(el.tagName || '').toLowerCase()));
+
+            if (tag === 'li') {
+                const bullet = normalizeLine(node.textContent || '');
+                if (bullet) pushLine(`- ${bullet}`);
+                return;
+            }
+
+            if (/^h[1-6]$/.test(tag)) {
+                const level = Number(tag.slice(1)) || 1;
+                const heading = normalizeLine(node.textContent || '');
+                if (heading) pushLine(`${'#'.repeat(Math.min(6, level))} ${heading}`);
+                return;
+            }
+
+            if (!hasBlockChild) {
+                const t = normalizeLine(node.textContent || '');
+                if (t) pushLine(t);
+                return;
+            }
+
+            Array.from(node.childNodes || []).forEach(walk);
+        };
+
+        Array.from(root.childNodes || []).forEach(walk);
+        return lines.join('\n\n').trim();
+    }
+
+    function summarizeClaudeToolInput(name, input) {
+        const toolName = String(name || '').trim() || 'tool';
+        const payload = input && typeof input === 'object' ? input : {};
+        const out = [];
+        if (Array.isArray(payload.loading_messages) && payload.loading_messages.length) {
+            out.push(`加载提示: ${payload.loading_messages.map((x) => String(x || '').trim()).filter(Boolean).join(' / ')}`);
+        }
+        if (payload.title) out.push(`标题: ${String(payload.title).trim()}`);
+        if (Array.isArray(payload.modules) && payload.modules.length) {
+            out.push(`模块: ${payload.modules.map((x) => String(x || '').trim()).filter(Boolean).join(', ')}`);
+        }
+        if (typeof payload.message === 'string' && payload.message.trim()) {
+            out.push(`消息: ${payload.message.trim()}`);
+        }
+        if (typeof payload.widget_code === 'string' && payload.widget_code.trim()) {
+            out.push(payload.widget_code.trim());
+        }
+        if (!out.length) {
+            try {
+                out.push(JSON.stringify(payload, null, 2));
+            } catch (_) {}
+        }
+        return `【工具调用: ${toolName}】\n${out.join('\n\n')}`.trim();
+    }
+
+    function extractClaudePartsFromContent(content) {
+        const items = Array.isArray(content) ? content : [];
+        const out = [];
+        items.forEach((frag, idx) => {
+            if (!frag || typeof frag !== 'object') return;
+            const fragType = String(frag.type || '').trim().toLowerCase();
+            if (fragType === 'text' && typeof frag.text === 'string') {
+                const t = String(frag.text || '').replace(/\r\n/g, '\n').trim();
+                if (t) out.push({ type: 'text', text: t });
+                return;
+            }
+            if (fragType === 'tool_use') {
+                const toolName = String(frag.name || '').trim();
+                if (shouldIgnoreClaudeToolName(toolName)) return;
+                const widgetText = toolName === 'visualize:show_widget'
+                    ? extractClaudeVisibleTextFromHtmlFragment(frag.input?.widget_code || '')
+                    : '';
+                const summary = widgetText || summarizeClaudeToolInput(toolName, frag.input);
+                out.push({
+                    type: 'tool_use',
+                    name: toolName,
+                    toolUseId: String(frag.id || '').trim(),
+                    integrationName: String(frag.integration_name || '').trim(),
+                    isMcpApp: Boolean(frag.is_mcp_app),
+                    input: frag.input && typeof frag.input === 'object' ? JSON.parse(JSON.stringify(frag.input)) : frag.input,
+                    text: summary
+                });
+                return;
+            }
+            if (fragType === 'tool_result') {
+                const toolName = String(frag.name || '').trim();
+                if (shouldIgnoreClaudeToolName(toolName)) return;
+                const resultText = extractClaudeToolResultText(frag.content);
+                if (isClaudeToolBoilerplateText(resultText)) return;
+                const prefix = `【工具结果: ${String(frag.name || '').trim() || 'tool'}${frag.is_error ? ' / error' : ''}】`;
+                out.push({
+                    type: 'tool_result',
+                    name: toolName,
+                    toolUseId: String(frag.tool_use_id || '').trim(),
+                    integrationName: String(frag.integration_name || '').trim(),
+                    isError: Boolean(frag.is_error),
+                    content: Array.isArray(frag.content) ? JSON.parse(JSON.stringify(frag.content)) : frag.content,
+                    text: resultText ? `${prefix}\n${resultText}` : prefix
+                });
+                return;
+            }
+            if (fragType === 'image') {
+                const imagePart = normalizeClaudeImagePart({
+                    ...frag,
+                    fileName: frag.file_name || frag.name || `图片${idx + 1}`
+                }, idx);
+                if (imagePart) out.push(imagePart);
+            }
+        });
+        return out;
+    }
+
+    function extractClaudePartsFromFiles(files) {
+        const list = Array.isArray(files) ? files : [];
+        const out = [];
+        list.forEach((file, idx) => {
+            if (!file || typeof file !== 'object') return;
+            const fileKind = String(file.file_kind || file.kind || '').trim().toLowerCase();
+            const mimeType = String(file.mime_type || file.mimeType || '').trim().toLowerCase();
+            const isImage = fileKind === 'image'
+                || mimeType.startsWith('image/')
+                || Boolean(file.preview_url || file.thumbnail_url || file.preview_asset?.url || file.thumbnail_asset?.url);
+            if (isImage) {
+                const imagePart = normalizeClaudeImagePart({
+                    ...file,
+                    previewUrl: file.preview_asset?.url || file.preview_url || file.url || '',
+                    thumbnailUrl: file.thumbnail_asset?.url || file.thumbnail_url || '',
+                    width: file.preview_asset?.image_width || file.thumbnail_asset?.image_width || file.image_width || 0,
+                    height: file.preview_asset?.image_height || file.thumbnail_asset?.image_height || file.image_height || 0,
+                    mimeType
+                }, idx);
+                if (imagePart) out.push(imagePart);
+                return;
+            }
+            out.push({
+                type: 'file',
+                fileName: String(file.file_name || file.name || file.filename || '').trim() || `文件${idx + 1}`,
+                fileUuid: String(file.file_uuid || file.uuid || '').trim(),
+                mimeType,
+                url: resolveClaudeAssetUrl(file.preview_url || file.url || '')
+            });
+        });
+        return out;
+    }
+
+    function buildClaudeTextFromParts(parts, mode = 'plain') {
+        const list = Array.isArray(parts) ? parts : [];
+        const out = [];
+        let imageSerial = 0;
+        let fileSerial = 0;
+        list.forEach((part) => {
+            if (!part || typeof part !== 'object') return;
+            const type = String(part.type || '').trim().toLowerCase();
+            if (type === 'text') {
+                const t = String(part.text || '').replace(/\r\n/g, '\n').trim();
+                if (t) out.push(t);
+                return;
+            }
+            if (type === 'tool_use' || type === 'tool_result') {
+                const t = String(part.text || '').replace(/\r\n/g, '\n').trim();
+                if (t) out.push(t);
+                return;
+            }
+            if (type === 'image') {
+                imageSerial += 1;
+                const name = String(part.fileName || '').trim() || `图片${imageSerial}`;
+                const url = resolveClaudeAssetUrl(part.previewUrl || part.url || part.thumbnailUrl || '');
+                if (mode === 'markdown' && url) {
+                    out.push(`![图片${imageSerial} ${name}](${url})`);
+                } else {
+                    out.push(`[图片${imageSerial}] ${name}`);
+                    return;
+                }
+                if (mode !== 'markdown') out.push(`[图片${imageSerial}] ${name}`);
+                return;
+            }
+            if (type === 'file') {
+                fileSerial += 1;
+                const name = String(part.fileName || '').trim() || `文件${fileSerial}`;
+                const url = resolveClaudeAssetUrl(part.url || '');
+                out.push(url ? `[附件${fileSerial}] ${name}\n链接: ${url}` : `[附件${fileSerial}] ${name}`);
+            }
+        });
+        return out.join('\n\n').trim();
+    }
+
+    function parseClaudeMessagesFromResponse(respJson) {
+        const chatMessages = Array.isArray(respJson?.chat_messages) ? respJson.chat_messages : [];
+        const out = [];
+        chatMessages.forEach((m, idx) => {
+            const sender = String(m?.sender || '').toLowerCase();
+            const role = sender === 'human' ? 'user' : (sender === 'assistant' ? 'assistant' : sender || 'unknown');
+            const contentParts = extractClaudePartsFromContent(m?.content);
+            const fileParts = extractClaudePartsFromFiles(m?.files);
+            const parts = [...contentParts, ...fileParts];
+            const fallback = String(m?.text || '').replace(/\r\n/g, '\n').trim();
+            const text = buildClaudeTextFromParts(parts, 'plain') || fallback || '';
+            if (!text.trim()) return;
+            out.push({
+                role,
+                text,
+                parts,
+                sourceMessageId: String(m?.uuid || '').trim() || `claude-msg-${idx + 1}`,
+                createdAt: String(m?.created_at || '').trim()
+            });
+        });
+        return out;
+    }
+
+    async function getClaudeMessagesByApi() {
+        if (!isClaude) return [];
+        installClaudeCaptureHooks();
+        const convId = getClaudeConversationIdFromUrl();
+        const orgId = getClaudeOrgIdFromCookie() || parseClaudeApiMeta(claudeCapturedHeaders?.__url || '')?.orgId || '';
+        if (!convId || !orgId) return [];
+
+        const u = new URL(`https://claude.ai/api/organizations/${encodeURIComponent(orgId)}/chat_conversations/${encodeURIComponent(convId)}`);
+        u.searchParams.set('tree', 'True');
+        u.searchParams.set('rendering_mode', 'messages');
+        u.searchParams.set('render_all_tools', 'true');
+        u.searchParams.set('consistency', 'strong');
+
+        const resp = await fetch(u.toString(), {
+            method: 'GET',
+            credentials: 'include',
+            headers: sanitizeClaudeHeaders(claudeCapturedHeaders || {})
+        });
+        if (!resp.ok) return [];
+        const raw = await resp.text();
+        let json = null;
+        try { json = JSON.parse(raw); } catch (_) { json = null; }
+        if (!json) return [];
+        claudeLastConversationMeta = {
+            id: String(json?.uuid || convId || ''),
+            title: String(json?.name || '').trim(),
+            updatedAt: String(json?.updated_at || '').trim()
+        };
+        return parseClaudeMessagesFromResponse(json);
+    }
 
     // 早期辅助函数：给顶部刷新链/切换保护使用，避免后续实现尚未进入当前作用域时触发 ReferenceError。
     function getQwenSessionIdFromUrl() {
@@ -576,6 +1110,9 @@
     let hideDeepSeekNativeNav = getGlobalValue(DEEPSEEK_NATIVE_NAV_KEY, false);
     let doubaoGlassPopups = getGlobalValue(DOUBAO_GLASS_POPUPS_KEY, true);
 
+    const initialVisibleLimitRaw = Number(getGlobalValue(VISIBLE_LIMIT_KEY, 12));
+    const initialVisibleLimit = Math.max(3, Math.min(12, Number.isFinite(initialVisibleLimitRaw) ? Math.floor(initialVisibleLimitRaw) : 12));
+
     const CONFIG = {
         topGap: 80,
         bottomGap: 24,
@@ -586,7 +1123,7 @@
         dotSize: 11,
         dotBorder: 2,
         dotGap: Math.max(20, Math.min(50, getGlobalValue(DOT_GAP_KEY, 36))),
-        maxVisibleDotsBeforeScroll: getGlobalValue(VISIBLE_LIMIT_KEY, 12),
+        maxVisibleDotsBeforeScroll: initialVisibleLimit,
         readingLineOffset: Math.max(10, Math.min(500, getGlobalValue(READING_LINE_KEY, 150))),
         maxTrackViewportRatio: 0.4
     };
@@ -1366,17 +1903,27 @@
             if (isQwen) targetEl = findQwenDomElementByNode(node);
             else if (isDeepSeek) targetEl = findDeepSeekDomElementByNode(node);
             else if (isDoubao) targetEl = findDoubaoDomElementByNode(node);
+            else if (isClaude) targetEl = findClaudeMessageElementByNode(node);
             if (targetEl) node.element = targetEl;
         }
         if (!targetEl || !targetEl.isConnected) return String(activeNodeId || '') === id;
 
         const scrollEl = getScrollContainer();
         if (!scrollEl) return false;
-        const containerTop = (scrollEl === window || scrollEl === document.documentElement || scrollEl === document.scrollingElement)
-            ? 0
-            : scrollEl.getBoundingClientRect().top;
+        const isWindowScroller = (scrollEl === window || scrollEl === document.documentElement || scrollEl === document.scrollingElement);
+        const containerRect = isWindowScroller
+            ? { top: 0, bottom: window.innerHeight }
+            : scrollEl.getBoundingClientRect();
+        const containerTop = containerRect.top;
         const readingLineOffset = Math.max(10, Math.min(500, CONFIG.readingLineOffset || 150));
         const targetTop = containerTop + readingLineOffset;
+        const rect = targetEl.getBoundingClientRect();
+
+        // 新增：只要目标节点进入当前可视区域，即视为到达（兼容顶部/底部无法触达阅读线）。
+        const viewportPad = 4;
+        const inViewport = rect.bottom >= (containerRect.top + viewportPad) && rect.top <= (containerRect.bottom - viewportPad);
+        if (inViewport) return true;
+
         if (isDeepSeek && node) {
             const alignY = getDeepSeekNodeAlignY(node, scrollEl);
             const readingY = getDeepSeekReadingY(scrollEl);
@@ -1388,7 +1935,6 @@
             if ((delta < 0 && atTop) || (delta > 0 && atBottom)) return true;
             return false;
         }
-        const rect = targetEl.getBoundingClientRect();
         return Math.abs(rect.top - targetTop) <= 28;
     }
 
@@ -1580,6 +2126,27 @@
             }));
             rebindDeepSeekNodesToDom(fromApi, true);
             fromApi.forEach((item) => list.push(item));
+        } else if (isClaude) {
+            const currentConvId = String(getClaudeConversationIdFromUrl() || '').trim();
+            if (currentConvId && claudeVirtualNodesConversationId && claudeVirtualNodesConversationId !== currentConvId) {
+                claudeVirtualNodesCache = [];
+                claudeVirtualNodesLoaded = false;
+                claudeVirtualNodesLastFetchAt = 0;
+                claudeVirtualNodesConversationId = currentConvId;
+            } else if (currentConvId && !claudeVirtualNodesConversationId) {
+                claudeVirtualNodesConversationId = currentConvId;
+            }
+            scheduleClaudeVirtualNodesRefresh();
+            const cached = Array.isArray(claudeVirtualNodesCache) ? claudeVirtualNodesCache : [];
+            cached.forEach((item, idx) => {
+                if (!item || !item.text) return;
+                list.push({
+                    ...item,
+                    role: 'user',
+                    sessionIndex: Number.isInteger(Number(item?.sessionIndex)) ? Number(item.sessionIndex) : idx,
+                    element: null
+                });
+            });
         }
 
         return list;
@@ -2763,6 +3330,18 @@
     }
 
     function jumpToMessage(el, nodeId) {
+        if (isClaude && nodeId) {
+            jumpToClaudeNodeById(nodeId).then((ok) => {
+                if (!ok) {
+                    console.warn(`AI-Chat-Helper: Claude 跳转未命中目标节点 ${nodeId}`);
+                    hideJumpToast();
+                }
+            }).catch((e) => {
+                console.warn('AI-Chat-Helper: Claude 跳转异常', e);
+                hideJumpToast();
+            });
+            return true;
+        }
         if (isQwen && nodeId) {
             jumpToQwenNodeById(nodeId).then((ok) => {
                 if (!ok) {
@@ -2888,6 +3467,535 @@
             targetEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
         }
         highlightMessage(targetEl);
+        return true;
+    }
+
+    function getClaudeMainContentRoot() {
+        return document.querySelector('#main-content') || document.querySelector('main') || document.body;
+    }
+
+    function isScrollableContainerElement(el) {
+        if (!(el instanceof HTMLElement)) return false;
+        const style = window.getComputedStyle(el);
+        const overflowY = String(style?.overflowY || '').toLowerCase();
+        const canScroll = overflowY === 'auto' || overflowY === 'scroll' || overflowY === 'overlay';
+        if (!canScroll) return false;
+        const capacity = (el.scrollHeight || 0) - (el.clientHeight || 0);
+        return capacity > 20;
+    }
+
+    function getNearestScrollableAncestor(el, stopAt) {
+        let cur = el instanceof HTMLElement ? el : null;
+        while (cur && cur !== stopAt && cur !== document.body && cur !== document.documentElement) {
+            if (isScrollableContainerElement(cur)) return cur;
+            cur = cur.parentElement;
+        }
+        if (stopAt && stopAt instanceof HTMLElement && isScrollableContainerElement(stopAt)) return stopAt;
+        return null;
+    }
+
+    function getClaudeScrollContainer() {
+        const root = getClaudeMainContentRoot();
+        const candidates = [];
+        if (root) {
+            let cur = root;
+            while (cur && cur !== document.body && cur !== document.documentElement) {
+                candidates.push(cur);
+                cur = cur.parentElement;
+            }
+            root.querySelectorAll('div, section, article, main').forEach((el) => candidates.push(el));
+        }
+        let best = null;
+        let bestScore = -1;
+        candidates.forEach((el) => {
+            if (!(el instanceof HTMLElement)) return;
+            const style = window.getComputedStyle(el);
+            const overflowY = String(style?.overflowY || '').toLowerCase();
+            const canScroll = overflowY === 'auto' || overflowY === 'scroll';
+            const capacity = (el.scrollHeight || 0) - (el.clientHeight || 0);
+            if (!canScroll || capacity <= 20) return;
+            const score = capacity + (el.clientHeight || 0) * 0.2;
+            if (score > bestScore) {
+                bestScore = score;
+                best = el;
+            }
+        });
+        return best || document.scrollingElement || document.documentElement;
+    }
+
+    function getClaudeScrollContainerForElement(targetEl) {
+        const root = getClaudeMainContentRoot();
+        const fromTarget = getNearestScrollableAncestor(targetEl, root);
+        if (fromTarget) return fromTarget;
+        const fromRoot = getNearestScrollableAncestor(root, null);
+        if (fromRoot) return fromRoot;
+        return getClaudeScrollContainer();
+    }
+
+    function normalizeClaudeMatchText(text) {
+        return String(text || '')
+            .replace(/\s+/g, ' ')
+            .replace(/[\u200B-\u200D\uFEFF]/g, '')
+            .trim()
+            .toLowerCase();
+    }
+
+    function resolveClaudeMessageContainerFromHeading(headingEl, root) {
+        if (!(headingEl instanceof HTMLElement)) return null;
+        const scope = root || getClaudeMainContentRoot();
+        let cur = headingEl.closest('div') || headingEl.parentElement;
+        let best = null;
+        let bestScore = -Infinity;
+        const maxW = window.innerWidth * 0.96;
+        for (let i = 0; i < 10 && cur && cur !== scope.parentElement; i += 1) {
+            if (!(cur instanceof HTMLElement)) break;
+            if (!scope.contains(cur)) break;
+            const rect = cur.getBoundingClientRect();
+            const txt = normalizeClaudeMatchText(cur.innerText || '');
+            const width = rect.width || 0;
+            const height = rect.height || 0;
+            if (txt.includes('you said') && width >= 260 && width <= maxW && height >= 28 && height <= 1200) {
+                let score = 0;
+                score += Math.max(0, 1600 - Math.abs(width - Math.min(980, window.innerWidth * 0.72)));
+                score += Math.max(0, 900 - height);
+                if (/max-w-|mx-auto|group|contents|message/i.test(String(cur.className || ''))) score += 120;
+                if (score > bestScore) {
+                    bestScore = score;
+                    best = cur;
+                }
+            }
+            cur = cur.parentElement;
+        }
+        return best || (headingEl.closest('div')?.parentElement || headingEl.closest('div') || null);
+    }
+
+    function extractClaudeBlockUserText(blockEl) {
+        if (!(blockEl instanceof HTMLElement)) return '';
+        const directMsg = blockEl.matches?.('[data-testid="user-message"]')
+            ? blockEl
+            : blockEl.querySelector?.('[data-testid="user-message"]');
+        if (directMsg instanceof HTMLElement) {
+            const text = normalizeClaudeMatchText(directMsg.innerText || directMsg.textContent || '');
+            if (text) return text;
+        }
+        const heading = blockEl.querySelector('h2, [role="heading"]');
+        const headingText = normalizeClaudeMatchText(heading?.innerText || heading?.textContent || '');
+        const m = headingText.match(/you said:\s*(.*)$/i);
+        if (m && m[1]) return normalizeClaudeMatchText(m[1]);
+        return normalizeClaudeMatchText(blockEl.innerText || '').replace(/^you said:\s*/i, '').trim();
+    }
+
+    function getClaudeUserMessageBlocks() {
+        const root = getClaudeMainContentRoot();
+        if (!root) return [];
+        const direct = Array.from(root.querySelectorAll('[data-user-message-bubble="true"]'))
+            .map((bubble) => bubble.closest('.mb-1.mt-6.group, article, section, [data-message-id], div'))
+            .filter((el) => el instanceof HTMLElement);
+        const seen = new Set();
+        const out = [];
+        direct.forEach((el) => {
+            if (!(el instanceof HTMLElement)) return;
+            if (seen.has(el)) return;
+            if (el.closest('#ai-nav-panel, #ai-nav-orbital, #ai-nav-export-modal, #ai-nav-batch-export-modal')) return;
+            const text = extractClaudeBlockUserText(el);
+            if (!text) return;
+            seen.add(el);
+            out.push(el);
+        });
+        if (out.length) return out;
+
+        const fallback = [];
+        const headings = Array.from(root.querySelectorAll('h2, [role="heading"]'));
+        headings.forEach((h) => {
+            if (!(h instanceof HTMLElement)) return;
+            const ht = normalizeClaudeMatchText(h.innerText || '');
+            if (!ht.includes('you said')) return;
+            const msgRoot = resolveClaudeMessageContainerFromHeading(h, root);
+            if (msgRoot instanceof HTMLElement && !seen.has(msgRoot)) {
+                seen.add(msgRoot);
+                fallback.push(msgRoot);
+            }
+        });
+        return fallback;
+    }
+
+    function getClaudeNodeElementMatchScore(node, element) {
+        if (!node || !(element instanceof HTMLElement)) return -Infinity;
+        const target = normalizeClaudeMatchText(node.text || '');
+        if (!target) return -Infinity;
+        const candidate = extractClaudeBlockUserText(element) || normalizeClaudeMatchText(element.innerText || '');
+        if (!candidate) return -Infinity;
+        if (candidate === target) return 1000;
+
+        let score = 0;
+        const shortTarget = target.slice(0, 96);
+        if (candidate.startsWith(target) || target.startsWith(candidate)) score += 220;
+        if (shortTarget && candidate.startsWith(shortTarget)) score += 160;
+        if (shortTarget && candidate.includes(shortTarget)) score += 90;
+        if (target.slice(0, 48) && candidate.includes(target.slice(0, 48))) score += 40;
+        const lenGap = Math.abs(candidate.length - target.length);
+        score -= Math.min(180, lenGap);
+        return score;
+    }
+
+    function isClaudeElementMatchUsable(node, element, minScore = 60) {
+        return getClaudeNodeElementMatchScore(node, element) >= minScore;
+    }
+
+    function findClaudeBlockBySourceMessageId(sourceMessageId) {
+        const id = String(sourceMessageId || '').trim().toLowerCase();
+        if (!id) return null;
+        const root = getClaudeMainContentRoot();
+        if (!root) return null;
+        const all = root.querySelectorAll('[id],[data-message-id],[data-testid],[data-message-uuid],[data-node-id]');
+        for (const el of all) {
+            if (!(el instanceof HTMLElement)) continue;
+            const attrs = [
+                el.id || '',
+                el.getAttribute('data-message-id') || '',
+                el.getAttribute('data-message-uuid') || '',
+                el.getAttribute('data-node-id') || '',
+                el.getAttribute('data-testid') || ''
+            ].join(' ').toLowerCase();
+            if (!attrs.includes(id)) continue;
+            const h = el.matches('h2,[role="heading"]') ? el : el.querySelector('h2,[role="heading"]');
+            const block = resolveClaudeMessageContainerFromHeading(h, root)
+                || el.closest('article, section, [data-message-id], div');
+            if (!(block instanceof HTMLElement)) continue;
+            const txt = normalizeClaudeMatchText(block.innerText || '');
+            if (!txt.includes('you said')) continue;
+            const rect = block.getBoundingClientRect();
+            if (rect.width < 120 || rect.height < 18) continue;
+            if (rect.height > Math.max(window.innerHeight * 0.8, 720)) continue;
+            return block;
+        }
+        return null;
+    }
+
+    function findClaudeMessageElementByNode(node, options = {}) {
+        if (!node) return null;
+        const root = getClaudeMainContentRoot();
+        if (!root) return null;
+        const excludeEls = options.excludeEls instanceof Set ? options.excludeEls : null;
+        const bySourceId = findClaudeBlockBySourceMessageId(node?.sourceMessageId || node?.id || '');
+        if (bySourceId && (!excludeEls || !excludeEls.has(bySourceId)) && isClaudeElementMatchUsable(node, bySourceId, 20)) return bySourceId;
+        const target = normalizeClaudeMatchText(node.text || '');
+        if (!target) return null;
+        const blocks = getClaudeUserMessageBlocks();
+        let best = null;
+        let bestScore = -Infinity;
+        blocks.forEach((msgRoot) => {
+            if (!(msgRoot instanceof HTMLElement)) return;
+            if (excludeEls && excludeEls.has(msgRoot)) return;
+            const score = getClaudeNodeElementMatchScore(node, msgRoot);
+            if (score > bestScore) {
+                bestScore = score;
+                best = msgRoot;
+            }
+        });
+        return bestScore >= 60 ? best : null;
+    }
+
+    function getClaudeCandidateMessageElements() {
+        const root = getClaudeMainContentRoot();
+        if (!root) return [];
+        const userBlocks = getClaudeUserMessageBlocks();
+        if (userBlocks.length) return userBlocks;
+        const selectors = [
+            '[data-testid*="message"]',
+            '[data-testid*="human"]',
+            '[data-testid*="assistant"]',
+            '[data-message-id]',
+            'article',
+            'div'
+        ];
+        const out = [];
+        const seen = new Set();
+        selectors.forEach((sel) => {
+            root.querySelectorAll(sel).forEach((el) => {
+                if (!(el instanceof HTMLElement)) return;
+                if (seen.has(el)) return;
+                if (el.closest('#ai-nav-panel, #ai-nav-orbital, #ai-nav-export-modal, #ai-nav-batch-export-modal')) return;
+                const txt = normalizeClaudeMatchText(el.innerText || '');
+                if (!txt || txt.length < 3) return;
+                if (txt.length > 1800) return;
+                const rect = el.getBoundingClientRect();
+                if (rect.height > Math.max(window.innerHeight * 0.75, 620)) return;
+                if (rect.width < 120 || rect.height < 18) return;
+                if ((el.children?.length || 0) > 40) return;
+                seen.add(el);
+                out.push(el);
+            });
+        });
+        return out;
+    }
+
+    function findClaudeDomElementForNode(node, options = {}) {
+        const excludeEls = options.excludeEls instanceof Set ? options.excludeEls : null;
+        const strict = findClaudeMessageElementByNode(node, options);
+        if (strict) return strict;
+        const target = normalizeClaudeMatchText(node?.text || '');
+        if (!target) return null;
+        const candidates = getClaudeCandidateMessageElements();
+        let best = null;
+        let bestScore = -Infinity;
+        for (const el of candidates) {
+            if (excludeEls && excludeEls.has(el)) continue;
+            const txt = normalizeClaudeMatchText(el.innerText || '');
+            if (!txt) continue;
+            let score = getClaudeNodeElementMatchScore(node, el);
+            const rect = el.getBoundingClientRect();
+            const area = Math.max(1, rect.width * rect.height);
+            score -= Math.min(60, area / 180000);
+            if ((el.children?.length || 0) <= 8) score += 1.2;
+            if ((el.children?.length || 0) >= 24) score -= 1.5;
+            const nodeMsgId = String(node?.sourceMessageId || node?.id || '').toLowerCase();
+            if (nodeMsgId) {
+                const attrs = `${el.getAttribute('id') || ''} ${el.getAttribute('data-message-id') || ''} ${el.getAttribute('data-testid') || ''}`.toLowerCase();
+                if (attrs.includes(nodeMsgId)) score += 300;
+            }
+            if (el.getAttribute('data-testid') && /message/i.test(el.getAttribute('data-testid'))) score += 1;
+            if (score > bestScore) {
+                bestScore = score;
+                best = el;
+            }
+        }
+        return bestScore >= 60 ? best : null;
+    }
+
+    function getClaudeHumanMessageElements() {
+        return getClaudeUserMessageBlocks();
+    }
+
+    function resolveClaudeElementForNode(node, options = {}) {
+        if (!node) return null;
+        const excludeEls = options.excludeEls instanceof Set ? options.excludeEls : null;
+        const cached = node.element;
+        if (cached instanceof HTMLElement && cached.isConnected && (!excludeEls || !excludeEls.has(cached)) && isClaudeElementMatchUsable(node, cached, 20)) {
+            return cached;
+        }
+        const resolved = findClaudeMessageElementByNode(node, { excludeEls }) || findClaudeDomElementForNode(node, { excludeEls });
+        if (resolved instanceof HTMLElement) {
+            node.element = resolved;
+            return resolved;
+        }
+        return null;
+    }
+
+    function getClaudePrimaryScrollContainer() {
+        const root = getClaudeMainContentRoot();
+        if (!root) return document.scrollingElement || document.documentElement;
+        if (Array.isArray(nodes) && nodes.length) {
+            const orderedNodes = nodes.slice().sort((a, b) => {
+                const ia = Number.isInteger(Number(a?.sessionIndex)) ? Number(a.sessionIndex) : Number.MAX_SAFE_INTEGER;
+                const ib = Number.isInteger(Number(b?.sessionIndex)) ? Number(b.sessionIndex) : Number.MAX_SAFE_INTEGER;
+                return ia - ib;
+            });
+            const usedEls = new Set();
+            for (let i = 0; i < Math.min(orderedNodes.length, 6); i += 1) {
+                const node = orderedNodes[i];
+                const el = resolveClaudeElementForNode(node, { excludeEls: usedEls });
+                if (el instanceof HTMLElement) usedEls.add(el);
+                const fromNode = getNearestScrollableAncestor(el, root);
+                if (fromNode) return fromNode;
+            }
+        }
+        const humanBlocks = getClaudeHumanMessageElements();
+        const anchor = humanBlocks[0] || root;
+        let cur = anchor;
+        while (cur && cur !== document.body && cur !== document.documentElement) {
+            if (isScrollableContainerElement(cur)) return cur;
+            cur = cur.parentElement;
+        }
+        const candidates = Array.from(root.querySelectorAll('div, section, article, main'))
+            .filter((el) => isScrollableContainerElement(el))
+            .sort((a, b) => (b.scrollHeight - b.clientHeight) - (a.scrollHeight - a.clientHeight));
+        return candidates[0] || document.scrollingElement || document.documentElement;
+    }
+
+    function getScrollTopForReadingLineElement(element, scrollEl) {
+        if (!element) return null;
+        const readingLineOffset = Math.max(10, Math.min(500, CONFIG.readingLineOffset || 150));
+        const containerRect = (scrollEl === window || scrollEl === document.documentElement || scrollEl === document.scrollingElement)
+            ? { top: 0 }
+            : scrollEl.getBoundingClientRect();
+        const currentTop = (scrollEl === window || scrollEl === document.documentElement || scrollEl === document.scrollingElement)
+            ? (window.scrollY || document.documentElement.scrollTop || 0)
+            : (scrollEl.scrollTop || 0);
+        const rect = element.getBoundingClientRect();
+        return currentTop + rect.top - containerRect.top - readingLineOffset;
+    }
+
+    function getClaudeActiveNodeByConversationState(scrollEl) {
+        if (!isClaude) return null;
+        if (!Array.isArray(nodes) || !nodes.length) return null;
+        const orderedNodes = nodes.slice().sort((a, b) => {
+            const ia = Number.isInteger(Number(a?.sessionIndex)) ? Number(a.sessionIndex) : Number.MAX_SAFE_INTEGER;
+            const ib = Number.isInteger(Number(b?.sessionIndex)) ? Number(b.sessionIndex) : Number.MAX_SAFE_INTEGER;
+            return ia - ib;
+        });
+        const usedEls = new Set();
+        const entries = orderedNodes.map((node, idx) => {
+            const el = resolveClaudeElementForNode(node, { excludeEls: usedEls });
+            if (el instanceof HTMLElement) usedEls.add(el);
+            return { node, idx, el };
+        }).filter((entry) => entry.el instanceof HTMLElement);
+        if (!entries.length) return null;
+
+        let workingScrollEl = scrollEl;
+        const isWindowLike = (
+            !workingScrollEl
+            || workingScrollEl === window
+            || workingScrollEl === document.documentElement
+            || workingScrollEl === document.scrollingElement
+        );
+        if (isWindowLike) {
+            const fromEntry = getClaudeScrollContainerForElement(entries[0].el);
+            if (fromEntry) workingScrollEl = fromEntry;
+        }
+        if (!workingScrollEl) workingScrollEl = getClaudePrimaryScrollContainer();
+
+        const maxScroll = Math.max(0, (workingScrollEl.scrollHeight || 0) - (workingScrollEl.clientHeight || 0));
+        const currentTop = (workingScrollEl === window || workingScrollEl === document.documentElement || workingScrollEl === document.scrollingElement)
+            ? (window.scrollY || document.documentElement.scrollTop || 0)
+            : (workingScrollEl.scrollTop || 0);
+        if (maxScroll > 20 && (maxScroll - currentTop) < 40) {
+            const last = entries[entries.length - 1];
+            if (last?.node && last.el && (!last.node.element || !last.node.element.isConnected)) last.node.element = last.el;
+            return last?.node || null;
+        }
+
+        const isWindowScroller = (workingScrollEl === window || workingScrollEl === document.documentElement || workingScrollEl === document.scrollingElement);
+        const containerRect = isWindowScroller
+            ? { top: 0, bottom: window.innerHeight }
+            : workingScrollEl.getBoundingClientRect();
+        const readingY = containerRect.top + Math.max(10, Math.min(500, CONFIG.readingLineOffset || 150));
+        let bestEntry = null;
+        for (const entry of entries) {
+            const rect = entry.el.getBoundingClientRect();
+            if (rect.top <= readingY) {
+                bestEntry = entry;
+            } else {
+                break;
+            }
+        }
+        if (!bestEntry) bestEntry = entries[0] || null;
+        if (!bestEntry) return null;
+        if (bestEntry.node && bestEntry.el && (!bestEntry.node.element || !bestEntry.node.element.isConnected)) {
+            bestEntry.node.element = bestEntry.el;
+        }
+        return bestEntry.node || null;
+    }
+
+    async function jumpToClaudeNodeById(nodeId) {
+        const token = ++claudeNavJumpSeq;
+        const targetId = String(nodeId || '').trim();
+        if (!targetId) return false;
+        const targetNode = nodesMap.get(targetId) || nodes.find((n) => String(n?.id || '') === targetId) || null;
+        let targetIndex = Number.isInteger(Number(targetNode?.sessionIndex)) ? Number(targetNode.sessionIndex) : -1;
+        if (targetIndex < 0) {
+            targetIndex = nodes.findIndex((n) => String(n?.id || '') === targetId);
+        }
+        if (targetIndex < 0) return false;
+
+        const getScrollTopValue = (sc) => {
+            if (sc === window || sc === document.documentElement || sc === document.scrollingElement) {
+                return window.scrollY || document.documentElement.scrollTop || 0;
+            }
+            return sc?.scrollTop || 0;
+        };
+
+        const setScrollTopValue = (sc, top, behavior = 'auto') => {
+            const safeTop = Math.max(0, Number(top) || 0);
+            if (sc === window || sc === document.documentElement || sc === document.scrollingElement) {
+                window.scrollTo({ top: safeTop, behavior });
+                return;
+            }
+            if (typeof sc?.scrollTo === 'function') {
+                sc.scrollTo({ top: safeTop, behavior });
+                return;
+            }
+            sc.scrollTop = safeTop;
+        };
+
+        const getTargetByOrder = () => {
+            const list = getClaudeHumanMessageElements();
+            if (!list.length) return null;
+            // 仅在目标序号已出现在当前 DOM 时命中；否则继续滚动搜寻，避免误跳到顶部。
+            if (targetIndex >= 0 && targetIndex < list.length) return list[targetIndex];
+            return null;
+        };
+
+        const resolveTargetElement = () => {
+            if (targetNode) {
+                const strict = findClaudeMessageElementByNode(targetNode) || findClaudeDomElementForNode(targetNode);
+                if (strict) return strict;
+            }
+            return getTargetByOrder();
+        };
+
+        const alignToReadingLine = async (el) => {
+            const sc = getClaudeScrollContainerForElement(el) || getClaudePrimaryScrollContainer();
+            for (let i = 0; i < 6; i += 1) {
+                if (token !== claudeNavJumpSeq) return false;
+                const targetTop = getScrollTopForReadingLineElement(el, sc);
+                const currentTop = getScrollTopValue(sc);
+                const delta = Number(targetTop) - currentTop;
+                if (Math.abs(delta) <= 10) break;
+                setScrollTopValue(sc, currentTop + delta, i === 0 ? 'auto' : 'smooth');
+                await wait(90);
+            }
+            return true;
+        };
+
+        let targetEl = resolveTargetElement();
+        const dbgList0 = getClaudeHumanMessageElements();
+        console.log('[AI-Chat-Helper][ClaudeJump]', {
+            nodeId: targetId,
+            targetIndex,
+            humanCount: dbgList0.length
+        });
+        if (!targetEl) {
+            const activeNode = (activeNodeId ? (nodesMap.get(String(activeNodeId)) || nodes.find((n) => String(n?.id || '') === String(activeNodeId)) || null) : null);
+            let activeIdx = Number.isInteger(Number(activeNode?.sessionIndex)) ? Number(activeNode.sessionIndex) : -1;
+            if (activeIdx < 0) activeIdx = Math.max(0, nodes.findIndex((n) => String(n?.id || '') === String(activeNodeId || '')));
+            const directionDown = Math.max(0, targetIndex) >= activeIdx;
+            const sc = getClaudePrimaryScrollContainer();
+            console.log('[AI-Chat-Helper][ClaudeJump] search-start', {
+                directionDown,
+                scTag: sc?.tagName || '',
+                scClass: String(sc?.className || '').slice(0, 120),
+                scCap: (sc?.scrollHeight || 0) - (sc?.clientHeight || 0)
+            });
+            let lastTop = getScrollTopValue(sc);
+            for (let i = 0; i < 32 && !targetEl; i += 1) {
+                if (token !== claudeNavJumpSeq) return false;
+                setScrollTopValue(sc, lastTop + (directionDown ? 420 : -420), 'auto');
+                await wait(100);
+                targetEl = resolveTargetElement();
+                const nowTop = getScrollTopValue(sc);
+                if (Math.abs(nowTop - lastTop) < 2) break;
+                lastTop = nowTop;
+            }
+        }
+        if (!targetEl) {
+            console.warn('[AI-Chat-Helper][ClaudeJump] no-target-element', { nodeId: targetId, targetIndex });
+            return false;
+        }
+        if (token !== claudeNavJumpSeq) return false;
+        const sc = getClaudeScrollContainerForElement(targetEl) || getClaudePrimaryScrollContainer();
+        const targetTop = getScrollTopForReadingLineElement(targetEl, sc);
+        if (targetTop != null) {
+            setScrollTopValue(sc, targetTop, 'auto');
+            await wait(120);
+        }
+        if (token !== claudeNavJumpSeq) return false;
+        const aligned = await alignToReadingLine(targetEl);
+        if (!aligned) return false;
+        const liveNode = (nodes[targetIndex] || nodesMap.get(targetId) || null);
+        if (liveNode) liveNode.element = targetEl;
+        highlightMessage(targetEl);
+        scheduleActiveNodeUpdate();
         return true;
     }
 
@@ -3638,6 +4746,53 @@
                 'nav[data-testid="chat_route_layout_leftside_nav"], aside, [data-testid*="leftside"], [data-testid*="sidebar"], [class*="left-side"], [class*="sidebar"], [class*="sider"]'
             )
         );
+    }
+
+    function scheduleClaudeVirtualNodesRefresh(force = false) {
+        if (!isClaude || claudeVirtualNodesLoading) return;
+        const scheduledConvId = String(getClaudeConversationIdFromUrl() || '').trim();
+        if (scheduledConvId && claudeVirtualNodesConversationId && claudeVirtualNodesConversationId !== scheduledConvId) {
+            claudeVirtualNodesCache = [];
+            claudeVirtualNodesLoaded = false;
+            claudeVirtualNodesLastFetchAt = 0;
+            claudeVirtualNodesConversationId = scheduledConvId;
+            force = true;
+        } else if (scheduledConvId && !claudeVirtualNodesConversationId) {
+            claudeVirtualNodesConversationId = scheduledConvId;
+        }
+        const now = Date.now();
+        if (!force && claudeVirtualNodesLoaded && (now - claudeVirtualNodesLastFetchAt) < 2500) return;
+        claudeVirtualNodesLoading = true;
+        getClaudeMessagesByApi().then((apiMsgs) => {
+            const liveConvId = String(getClaudeConversationIdFromUrl() || '').trim();
+            if (scheduledConvId && liveConvId && scheduledConvId !== liveConvId) {
+                return;
+            }
+            const built = [];
+            (Array.isArray(apiMsgs) ? apiMsgs : []).forEach((m, idx) => {
+                if (!m || String(m.role || '').toLowerCase() !== 'user') return;
+                const txt = String(m.text || '').trim();
+                if (!txt) return;
+                const sid = String(m.sourceMessageId || m.id || '').trim() || `claude-user-${idx + 1}`;
+                built.push({
+                    id: sid,
+                    sourceMessageId: sid,
+                    role: 'user',
+                    text: txt,
+                    sessionIndex: built.length,
+                    element: null,
+                    createdAt: String(m.createdAt || '').trim()
+                });
+            });
+            claudeVirtualNodesCache = built;
+            claudeVirtualNodesLoaded = true;
+            claudeVirtualNodesLastFetchAt = Date.now();
+            claudeVirtualNodesConversationId = liveConvId || scheduledConvId || claudeVirtualNodesConversationId;
+        }).catch((e) => {
+            console.warn('AI-Chat-Helper: Claude 虚拟节点刷新失败', e);
+        }).finally(() => {
+            claudeVirtualNodesLoading = false;
+        });
     }
 
     function getDoubaoPrimaryMessageRoot() {
@@ -4878,6 +6033,9 @@
     function getScrollContainer() {
         // 自动探测当前 AI 平台的主聊天滚动容器
         const host = window.location.hostname;
+        if (isClaude) {
+            return getClaudePrimaryScrollContainer();
+        }
         if (host.includes('deepseek.com')) {
             const dsCandidates = [
                 document.querySelector('.ds-virtual-list-scroll-view'),
@@ -5453,7 +6611,9 @@
         }
 
         const dotEdgePad = 14;
-        const visibleLimit = CONFIG.maxVisibleDotsBeforeScroll;
+        const visibleLimit = Math.max(3, Math.min(12, Number.isFinite(Number(CONFIG.maxVisibleDotsBeforeScroll))
+            ? Math.floor(Number(CONFIG.maxVisibleDotsBeforeScroll))
+            : 12));
         const displayCount = Math.min(nodes.length, visibleLimit);
         const visibleHeight = (displayCount - 1) * CONFIG.dotGap + CONFIG.dotSize + dotEdgePad * 2;
         
@@ -5468,7 +6628,8 @@
 
         // 核心改动：如果是少节点模式（节点总长度小于可见区域），则垂直居中分布；否则采用滚动模式
         const totalDotsHeight = (nodes.length - 1) * CONFIG.dotGap;
-        const isCenteringMode = totalDotsHeight < (finalVisibleHeight - dotEdgePad * 2 - CONFIG.dotSize);
+        const fitsWithoutScroll = totalDotsHeight <= (finalVisibleHeight - dotEdgePad * 2 - CONFIG.dotSize);
+        const isCenteringMode = nodes.length <= visibleLimit && fitsWithoutScroll;
         
         let startY;
         let runningOffset = orbitalScrollOffset;
@@ -6006,6 +7167,14 @@
                 }
             });
         }, 1200);
+
+        // Claude 额外兜底：即使内容不变，也周期刷新激活节点，确保阅读线联动稳定。
+        if (isClaude) {
+            setInterval(() => {
+                if (document.hidden) return;
+                scheduleActiveNodeUpdate({ fromPageScroll: true });
+            }, 420);
+        }
     }
     let composerRealtimeTriggerBound = false;
     let realtimeBurstTimerIds = [];
@@ -6148,10 +7317,12 @@
         const scrollEl = getScrollContainer();
         if (!scrollEl) return;
 
-        if (isQwen || isDeepSeek || isDoubao) {
+        if (isQwen || isDeepSeek || isDoubao || isClaude) {
             const node = isQwen
                 ? getQwenActiveNodeByConversationState(scrollEl)
-                : (isDeepSeek ? getDeepSeekActiveNodeByConversationState(scrollEl) : getDoubaoActiveNodeByConversationState(scrollEl));
+                : (isDeepSeek
+                    ? getDeepSeekActiveNodeByConversationState(scrollEl)
+                    : (isDoubao ? getDoubaoActiveNodeByConversationState(scrollEl) : getClaudeActiveNodeByConversationState(scrollEl)));
             const resolvedNode = node || (nodes.length === 1 ? nodes[0] : null);
             if (resolvedNode && resolvedNode.id !== activeNodeId) {
                 setActiveDot(resolvedNode.dot, resolvedNode.id);
@@ -6206,7 +7377,13 @@
     // ===== 设置按钮与弹出层 =====
     function injectSettings() {
         // 使用全局变量 host, isQwen, isChatGPT, isDoubao, isDeepSeek
-        const aiName = isChatGPT ? 'ChatGPT' : (isDeepSeek ? 'DeepSeek' : (isDoubao ? '豆包' : '通义千问'));
+        const aiName = isChatGPT
+            ? 'ChatGPT'
+            : (isDeepSeek
+                ? 'DeepSeek'
+                : (isDoubao
+                    ? '豆包'
+                    : (isClaude ? 'Claude' : '通义千问')));
         if (!document.getElementById('ai-nodes-inline-style')) {
             const inlineStyle = document.createElement('style');
             inlineStyle.id = 'ai-nodes-inline-style';
@@ -6678,8 +7855,8 @@
                     <svg viewBox="9 7 6 10" fill="none" xmlns="http://www.w3.org/2000/svg" style="width:10px;height:10px;flex:none;"><path d="M10 16L14 12L10 8" stroke="#ffffff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path></svg>
                     <span>导出当前对话</span>
                 </button>
-                <button id="ai-nodes-export-batch" style="width:152px;padding:8px 10px;background:${(isChatGPT || isDoubao || isQwen || isDeepSeek) ? '#0f766e' : '#f3f4f6'};color:${(isChatGPT || isDoubao || isQwen || isDeepSeek) ? '#fff' : '#6b7280'};border:${(isChatGPT || isDoubao || isQwen || isDeepSeek) ? 'none' : '1px solid #e5e7eb'};border-radius:9px;cursor:pointer;font-size:12px;font-weight:600;display:flex;align-items:center;justify-content:center;gap:4px;">
-                    <svg viewBox="9 7 6 10" fill="none" xmlns="http://www.w3.org/2000/svg" style="width:10px;height:10px;flex:none;"><path d="M10 16L14 12L10 8" stroke="${(isChatGPT || isDoubao || isQwen || isDeepSeek) ? '#ffffff' : '#6b7280'}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+                <button id="ai-nodes-export-batch" style="width:152px;padding:8px 10px;background:${(isChatGPT || isDoubao || isQwen || isDeepSeek || isClaude) ? '#0f766e' : '#f3f4f6'};color:${(isChatGPT || isDoubao || isQwen || isDeepSeek || isClaude) ? '#fff' : '#6b7280'};border:${(isChatGPT || isDoubao || isQwen || isDeepSeek || isClaude) ? 'none' : '1px solid #e5e7eb'};border-radius:9px;cursor:pointer;font-size:12px;font-weight:600;display:flex;align-items:center;justify-content:center;gap:4px;">
+                    <svg viewBox="9 7 6 10" fill="none" xmlns="http://www.w3.org/2000/svg" style="width:10px;height:10px;flex:none;"><path d="M10 16L14 12L10 8" stroke="${(isChatGPT || isDoubao || isQwen || isDeepSeek || isClaude) ? '#ffffff' : '#6b7280'}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path></svg>
                     <span>批量导出对话</span>
                 </button>
             </div>
@@ -7050,7 +8227,7 @@
             hidePopup();
             hideExportMenu();
             // GPT、豆包、千问、DeepSeek 导出不走导出前回溯历史
-            if (!isChatGPT && !isDoubao && !isQwen && !isDeepSeek) {
+            if (!isChatGPT && !isDoubao && !isQwen && !isDeepSeek && !isClaude) {
                 await startLoadAllHistory();
             }
             await openExportModal();
@@ -7068,8 +8245,10 @@
             
             if (isNaN(gap) || gap < 20) gap = 20;
             if (gap > 50) gap = 50;
-            if (isNaN(limit) || limit < 2) limit = 2;
-            if (limit > 30) limit = 30;
+            if (isNaN(limit) || limit < 3) limit = 3;
+            if (limit > 12) limit = 12;
+            dotGapInput.value = String(gap);
+            visibleLimitInput.value = String(limit);
 
             CONFIG.dotGap = gap;
             CONFIG.maxVisibleDotsBeforeScroll = limit;
@@ -7082,8 +8261,17 @@
             if (activeNode) centerNodeInOrbital(nodes.indexOf(activeNode), true);
         };
 
+        dotGapInput.addEventListener('input', updateCustomParams);
         dotGapInput.addEventListener('change', updateCustomParams);
+        visibleLimitInput.addEventListener('input', updateCustomParams);
         visibleLimitInput.addEventListener('change', updateCustomParams);
+        visibleLimitInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                updateCustomParams();
+                visibleLimitInput.blur();
+            }
+        });
 
         // 阅读线滑动逻辑
         const rlSlider = readingLineMenu.querySelector('#ai-nodes-reading-line-slider');
@@ -7364,7 +8552,7 @@
         if (exportBatchBtn) {
             exportBatchBtn.onclick = (e) => {
                 e.stopPropagation();
-                if (!isChatGPT && !isDoubao && !isQwen && !isDeepSeek) {
+                if (!isChatGPT && !isDoubao && !isQwen && !isDeepSeek && !isClaude) {
                     alert(`${aiName} 暂未实现该功能`);
                     return;
                 }
@@ -7374,6 +8562,7 @@
                 else if (isDoubao) openDoubaoBatchExportModal();
                 else if (isQwen) openQwenBatchExportModal();
                 else if (isDeepSeek) openDeepSeekBatchExportModal();
+                else if (isClaude) openClaudeBatchExportModal();
             };
         }
 
@@ -7913,6 +9102,9 @@
         }
 
         function buildBatchConversationJson(platform, conversation) {
+            const messages = Array.isArray(conversation.messages)
+                ? conversation.messages.map((m) => buildMessageExportSnapshot(m))
+                : [];
             return JSON.stringify({
                 platform,
                 exportedAt: new Date().toISOString(),
@@ -7920,44 +9112,51 @@
                 title: conversation.title || '',
                 updatedAt: conversation.updatedAtText || '',
                 messageCount: Number(conversation.messageCount || 0),
-                messages: Array.isArray(conversation.messages)
-                    ? conversation.messages.map((m) => ({
-                        role: m.role,
-                        text: getDisplayTextForExport(m.text || '')
-                    }))
-                    : []
+                messages: messages.map((m) => ({
+                    role: m.role,
+                    text: m.__displayText,
+                    markdown: m.__markdownText,
+                    parts: Array.isArray(m.parts) ? m.parts : []
+                }))
             }, null, 2);
         }
 
         function buildBatchConversationMarkdown(conversation, assistantLabel) {
             const header = `# ${conversation.title || `会话 ${conversation.conversationId || '-'}`}\n\n- 会话ID: ${conversation.conversationId || '-'}\n- 更新时间: ${conversation.updatedAtText || '-'}\n- 消息数: ${conversation.messageCount || 0}`;
-            const body = (Array.isArray(conversation.messages) ? conversation.messages : []).map((m, idx) => `\n## ${idx + 1}. ${m.role === 'user' ? '用户' : assistantLabel}\n\n${getDisplayTextForExport(m.text || '')}\n`).join('\n');
+            const body = (Array.isArray(conversation.messages) ? conversation.messages : [])
+                .map((m) => buildMessageExportSnapshot(m))
+                .map((m, idx) => `\n## ${idx + 1}. ${m.role === 'user' ? '用户' : assistantLabel}\n\n${m.__markdownText}\n`)
+                .join('\n');
             return `${header}\n${body}`.trim();
         }
 
         function buildBatchConversationText(conversation, assistantLabel) {
             const header = `${conversation.title || `会话 ${conversation.conversationId || '-'}`}\n会话ID: ${conversation.conversationId || '-'}\n更新时间: ${conversation.updatedAtText || '-'}\n消息数: ${conversation.messageCount || 0}`;
-            const body = (Array.isArray(conversation.messages) ? conversation.messages : []).map((m, idx) => `\n[${idx + 1}] ${m.role === 'user' ? '用户' : assistantLabel}\n${getDisplayTextForExport(m.text || '')}`).join('\n');
+            const body = (Array.isArray(conversation.messages) ? conversation.messages : [])
+                .map((m) => buildMessageExportSnapshot(m))
+                .map((m, idx) => `\n[${idx + 1}] ${m.role === 'user' ? '用户' : assistantLabel}\n${m.__displayText}`)
+                .join('\n');
             return `${header}\n${body}`.trim();
         }
 
         function buildBatchConversationCsv(conversation, assistantLabel) {
             const rows = ['Index,Role,Content'];
-            const list = Array.isArray(conversation.messages) ? conversation.messages : [];
+            const list = (Array.isArray(conversation.messages) ? conversation.messages : []).map((m) => buildMessageExportSnapshot(m));
             list.forEach((m, idx) => {
                 const role = m.role === 'user' ? '用户' : assistantLabel;
-                const text = String(getDisplayTextForExport(m.text || '')).replace(/"/g, '""');
+                const text = String(m.__displayText || '').replace(/"/g, '""');
                 rows.push(`${idx + 1},"${role}","${text}"`);
             });
             return '\uFEFF' + rows.join('\n');
         }
 
         function buildBatchConversationPrintableHtml(platform, conversation, assistantLabel) {
-            const renderText = (txt) => escapeHtml(getDisplayTextForExport(txt || '')).replace(/\n/g, '<br>');
-            const rows = (Array.isArray(conversation.messages) ? conversation.messages : []).map((m, idx) => `
+            const rows = (Array.isArray(conversation.messages) ? conversation.messages : [])
+                .map((m) => buildMessageExportSnapshot(m))
+                .map((m, idx) => `
                 <div class="msg">
                     <div class="role">${idx + 1}. ${m.role === 'user' ? '用户' : assistantLabel}</div>
-                    <div class="text">${renderText(m.text || '')}</div>
+                    <div class="text">${m.__html}</div>
                 </div>
             `).join('');
             return `
@@ -7975,6 +9174,8 @@
                         .msg { border: 1px solid #e2e8f0; border-radius: 10px; padding: 10px 12px; margin: 10px 0; }
                         .role { font-size: 12px; font-weight: 700; color: #1e40af; margin-bottom: 6px; }
                         .text { font-size: 13px; line-height: 1.7; white-space: normal; word-break: break-word; }
+                        .text pre { font-family: "Consolas", "Monaco", "Courier New", monospace; }
+                        .text code { font-family: "Consolas", "Monaco", "Courier New", monospace; }
                     </style>
                 </head>
                 <body>
@@ -8053,6 +9254,17 @@
 
             const codeBlocks = [];
             const codePlaceholder = '__AI_CHAT_CODE_BLOCK__';
+            const tableBlocks = [];
+            const tablePlaceholder = '__AI_CHAT_TABLE_BLOCK__';
+
+            const parseTableRow = (line) => {
+                const raw = String(line || '').trim();
+                if (!raw.includes('|')) return [];
+                let body = raw;
+                if (body.startsWith('|')) body = body.slice(1);
+                if (body.endsWith('|')) body = body.slice(0, -1);
+                return body.split('|').map((cell) => cell.trim());
+            };
 
             let html = escapeHtml(mdText).replace(/```([a-zA-Z0-9_-]*)\n([\s\S]*?)```/g, (_, lang, code) => {
                 const langLabel = (lang || '').trim();
@@ -8061,15 +9273,41 @@
                 return `${codePlaceholder}${codeBlocks.length - 1}__`;
             });
 
+            html = html.replace(/((?:^\|.*\|\r?\n)+)/gm, (block) => {
+                const lines = String(block || '').trim().split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+                if (lines.length < 2) return block;
+                const header = parseTableRow(lines[0]);
+                const separator = parseTableRow(lines[1]);
+                if (!header.length || separator.length !== header.length) return block;
+                const isSeparator = separator.every((cell) => /^:?-{3,}:?$/.test(cell.replace(/\s+/g, '')));
+                if (!isSeparator) return block;
+                const bodyRows = lines.slice(2).map(parseTableRow).filter((row) => row.length);
+                const tableHtml = `
+                    <table class="m-md-table">
+                        <thead><tr>${header.map((cell) => `<th>${cell}</th>`).join('')}</tr></thead>
+                        <tbody>${bodyRows.map((row) => `<tr>${header.map((_, idx) => `<td>${row[idx] || ''}</td>`).join('')}</tr>`).join('')}</tbody>
+                    </table>
+                `.trim();
+                tableBlocks.push(tableHtml);
+                return `${tablePlaceholder}${tableBlocks.length - 1}__\n`;
+            });
+
             html = html
                 .replace(/^###\s+(.+)$/gm, '<h3>$1</h3>')
                 .replace(/^##\s+(.+)$/gm, '<h2>$1</h2>')
                 .replace(/^#\s+(.+)$/gm, '<h1>$1</h1>')
+                .replace(/^(?:-{3,}|\*{3,}|_{3,})$/gm, '<hr>')
                 .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
                 .replace(/(^|[^`])`([^`]+)`/g, '$1<code>$2</code>')
                 .replace(/\n/g, '<br>');
 
             html = html.replace(new RegExp(`${codePlaceholder}(\\d+)__`, 'g'), (_, idx) => codeBlocks[Number(idx)] || '');
+            html = html.replace(new RegExp(`${tablePlaceholder}(\\d+)__`, 'g'), (_, idx) => tableBlocks[Number(idx)] || '');
+            html = html
+                .replace(/(?:<br>\s*){2,}(?=<(?:h[1-6]|hr|table|pre|blockquote|ul|ol))/g, '')
+                .replace(/(<\/(?:h[1-6]|hr|table|pre|blockquote|ul|ol)>)((?:\s|<br>)+)/g, '$1')
+                .replace(/(<(?:h[1-6]|hr|table|pre|blockquote|ul|ol)\b[^>]*>)(?:\s|<br>)+/g, '$1')
+                .replace(/(?:<br>\s*){3,}/g, '<br><br>');
             return html;
         }
 
@@ -10916,6 +12154,84 @@
             return normalized || (parsed || text);
         }
 
+        function renderMessageMarkdownToPreviewHtml(mdText) {
+            const html = chatMarkdownToHtml(String(mdText || ''));
+            return html || escapeHtml(String(mdText || '')).replace(/\n/g, '<br>');
+        }
+
+        function renderClaudePartsToPreviewHtml(parts, fallbackText) {
+            const list = Array.isArray(parts) ? parts : [];
+            if (!list.length) return renderMessageMarkdownToPreviewHtml(fallbackText);
+            const html = [];
+            let imageSerial = 0;
+            let fileSerial = 0;
+            list.forEach((part) => {
+                if (!part || typeof part !== 'object') return;
+                const type = String(part.type || '').trim().toLowerCase();
+                if (type === 'text' || type === 'tool_use' || type === 'tool_result') {
+                    const t = String(part.text || '').trim();
+                    if (t) html.push(renderMessageMarkdownToPreviewHtml(t));
+                    return;
+                }
+                if (type === 'image') {
+                    imageSerial += 1;
+                    const name = escapeHtml(String(part.fileName || '').trim() || `图片${imageSerial}`);
+                    const url = escapeHtml(resolveClaudeAssetUrl(part.previewUrl || part.url || part.thumbnailUrl || ''));
+                    if (url) {
+                        html.push(`<div class="m-preview-media"><img src="${url}" alt="${name}" style="max-width:100%;max-height:220px;border-radius:10px;display:block;margin-bottom:8px;"><div class="m-preview-caption">图片${imageSerial} · ${name}</div></div>`);
+                    } else {
+                        html.push(`<p>[图片${imageSerial}] ${name}</p>`);
+                    }
+                    return;
+                }
+                if (type === 'file') {
+                    fileSerial += 1;
+                    const name = escapeHtml(String(part.fileName || '').trim() || `附件${fileSerial}`);
+                    const url = escapeHtml(resolveClaudeAssetUrl(part.url || ''));
+                    html.push(url
+                        ? `<p>[附件${fileSerial}] <a href="${url}" target="_blank" rel="noreferrer">${name}</a></p>`
+                        : `<p>[附件${fileSerial}] ${name}</p>`);
+                }
+            });
+            return html.join('') || renderMessageMarkdownToPreviewHtml(fallbackText);
+        }
+
+        function buildMessagePreviewContent(msg) {
+            const rawText = msg?.text == null ? '' : String(msg.text);
+            const displayText = getDisplayTextForExport(rawText);
+            const parts = Array.isArray(msg?.parts) ? msg.parts : [];
+            const markdownText = isClaude && parts.length
+                ? buildClaudeTextFromParts(parts, 'markdown') || displayText
+                : displayText;
+            const html = isClaude && parts.length
+                ? renderClaudePartsToPreviewHtml(parts, displayText)
+                : renderMessageMarkdownToPreviewHtml(markdownText);
+            return {
+                text: markdownText,
+                html
+            };
+        }
+
+        function buildMessageExportSnapshot(msg) {
+            const rawText = msg?.text == null ? '' : String(msg.text).trim();
+            const parts = Array.isArray(msg?.parts) ? msg.parts.map((part) => ({ ...part })) : [];
+            const displayText = getDisplayTextForExport(rawText);
+            const markdownText = isClaude && parts.length
+                ? buildClaudeTextFromParts(parts, 'markdown') || displayText
+                : displayText;
+            const html = isClaude && parts.length
+                ? renderClaudePartsToPreviewHtml(parts, displayText)
+                : renderMessageMarkdownToPreviewHtml(markdownText);
+            return {
+                ...msg,
+                parts,
+                __rawText: rawText,
+                __displayText: displayText,
+                __markdownText: markdownText,
+                __html: html
+            };
+        }
+
         function normalizeDoubaoCompareText(text) {
             return String(text || '')
                 .replace(/[\r\n]+/g, ' ')
@@ -11283,6 +12599,80 @@
 
         async function exportDeepSeekBatchConversations(conversations, format) {
             await exportBatchConversationsAsZip('DeepSeek', conversations, format, 'DeepSeek');
+        }
+
+        async function exportClaudeBatchConversations(conversations, format) {
+            await exportBatchConversationsAsZip('Claude', conversations, format, 'Claude');
+        }
+
+        async function fetchClaudeRecentConversations(limit = 30) {
+            installClaudeCaptureHooks();
+            const orgId = getClaudeOrgIdFromCookie();
+            if (!orgId) throw new Error('未从 cookie 中获取到 lastActiveOrg');
+            const safeLimit = Math.max(1, Math.min(500, Number(limit) || 30));
+            const headers = sanitizeClaudeHeaders(claudeCapturedHeaders || {});
+            const urls = [
+                `https://claude.ai/api/organizations/${encodeURIComponent(orgId)}/chat_conversations_v2?limit=${safeLimit}&starred=false&consistency=eventual`,
+                `https://claude.ai/api/organizations/${encodeURIComponent(orgId)}/chat_conversations_v2?limit=${safeLimit}&starred=true&consistency=eventual`
+            ];
+            const seen = new Set();
+            const out = [];
+            for (const url of urls) {
+                const resp = await fetch(url, { method: 'GET', credentials: 'include', headers });
+                if (!resp.ok) continue;
+                const raw = await resp.text();
+                let json = null;
+                try { json = JSON.parse(raw); } catch (_) { json = null; }
+                const data = Array.isArray(json?.data) ? json.data : [];
+                data.forEach((item) => {
+                    const id = String(item?.uuid || '').trim();
+                    if (!id || seen.has(id)) return;
+                    seen.add(id);
+                    const title = String(item?.name || '').trim() || 'Untitled';
+                    const updatedAtText = String(item?.updated_at || '').trim();
+                    const createdAtText = String(item?.created_at || '').trim();
+                    out.push({
+                        key: id,
+                        id,
+                        title,
+                        updatedAtText,
+                        createdAtText,
+                        updatedAt: Date.parse(updatedAtText || '') || 0,
+                        createdAt: Date.parse(createdAtText || '') || 0,
+                        messageCount: 0,
+                        starred: Boolean(item?.is_starred)
+                    });
+                });
+            }
+            out.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+            return { conversations: out.slice(0, safeLimit), requested: safeLimit, obtained: out.length };
+        }
+
+        async function fetchClaudeConversationMessages(conversationId) {
+            installClaudeCaptureHooks();
+            const orgId = getClaudeOrgIdFromCookie();
+            if (!orgId) throw new Error('未从 cookie 中获取到 lastActiveOrg');
+            const u = new URL(`https://claude.ai/api/organizations/${encodeURIComponent(orgId)}/chat_conversations/${encodeURIComponent(conversationId)}`);
+            u.searchParams.set('tree', 'True');
+            u.searchParams.set('rendering_mode', 'messages');
+            u.searchParams.set('render_all_tools', 'true');
+            u.searchParams.set('consistency', 'strong');
+            const resp = await fetch(u.toString(), {
+                method: 'GET',
+                credentials: 'include',
+                headers: sanitizeClaudeHeaders(claudeCapturedHeaders || {})
+            });
+            if (!resp.ok) throw new Error(`chat_conversations 请求失败: ${resp.status}`);
+            const raw = await resp.text();
+            let json = null;
+            try { json = JSON.parse(raw); } catch (_) { json = null; }
+            if (!json) throw new Error('chat_conversations 返回非 JSON');
+            const messages = parseClaudeMessagesFromResponse(json).map((m) => ({ role: m.role, text: String(m.text || '') }));
+            return {
+                id: String(json?.uuid || conversationId || '').trim() || String(conversationId),
+                title: String(json?.name || '').trim() || `会话 ${conversationId}`,
+                messages
+            };
         }
 
         function getBatchConversationListStyles(listSelector) {
@@ -11708,6 +13098,24 @@
                     .m-view-btn { opacity:0; pointer-events:none; border:none; background:#007bff; padding:5px 12px; border-radius:8px; font-size:11px; font-weight:600; cursor:pointer; color:#fff; transition:all 0.2s; box-shadow:0 4px 12px rgba(0,123,255,0.25); z-index:10; flex-shrink:0; }
                     .m-view-btn:hover { background:#0056b3; transform:scale(1.05); }
                     .m-item-row:hover .m-view-btn { opacity:1; pointer-events:auto; }
+                    .m-row-text { display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; overflow:hidden; text-overflow:ellipsis; word-break:break-word; }
+                    .m-row-text pre, #sub-body pre { margin:8px 0; padding:10px 12px; background:#111827; color:#f9fafb; border-radius:10px; overflow:auto; font-size:12px; line-height:1.55; white-space:pre-wrap; font-family:"Consolas","Monaco","Courier New",monospace; }
+                    .m-row-text code, #sub-body code { background:#eef2ff; color:#3730a3; padding:2px 5px; border-radius:6px; font-size:12px; font-family:"Consolas","Monaco","Courier New",monospace; }
+                    .m-row-text pre code, #sub-body pre code { background:transparent; color:inherit; padding:0; border-radius:0; font-size:inherit; }
+                    .m-row-text h1, .m-row-text h2, .m-row-text h3, #sub-body h1, #sub-body h2, #sub-body h3 { margin:6px 0 4px; line-height:1.4; }
+                    .m-row-text h1, #sub-body h1 { font-size:18px; }
+                    .m-row-text h2, #sub-body h2 { font-size:16px; }
+                    .m-row-text h3, #sub-body h3 { font-size:14px; }
+                    .m-row-text p, .m-row-text ul, .m-row-text ol, .m-row-text blockquote, #sub-body p, #sub-body ul, #sub-body ol, #sub-body blockquote { margin:4px 0; }
+                    .m-row-text ul, .m-row-text ol, #sub-body ul, #sub-body ol { padding-left:20px; }
+                    .m-row-text blockquote, #sub-body blockquote { margin:6px 0; padding-left:12px; border-left:3px solid #cbd5e1; color:#475569; }
+                    .m-row-text hr, #sub-body hr { border:none; border-top:1px solid #dbe4f0; margin:6px 0; }
+                    .m-row-text table, #sub-body table { width:100%; border-collapse:collapse; margin:6px 0; font-size:12px; }
+                    .m-row-text th, .m-row-text td, #sub-body th, #sub-body td { border:1px solid #e5e7eb; padding:6px 8px; text-align:left; vertical-align:top; }
+                    .m-row-text th, #sub-body th { background:#f8fafc; font-weight:700; }
+                    .m-row-text a, #sub-body a { color:#2563eb; text-decoration:none; }
+                    .m-row-text a:hover, #sub-body a:hover { text-decoration:underline; }
+                    .m-preview-caption { font-size:12px; color:#6b7280; }
                     .m-ds-session-panel { margin:8px 24px 0; border:1px solid #e5e7eb; border-radius:10px; background:linear-gradient(180deg,#fbfdff 0%, #f8fafc 100%); }
                     .m-ds-session-title { cursor:pointer; list-style:none; font-size:12px; font-weight:700; color:#1f2937; padding:8px 12px; user-select:none; }
                     .m-ds-session-title::-webkit-details-marker { display:none; }
@@ -11746,7 +13154,7 @@
                 item.className = 'm-item-row';
                 if (m.isThought) item.setAttribute('data-is-thought', 'true');
                 const isU = m.role === 'user';
-                const modalText = getDisplayTextForExport(m.text);
+                const previewContent = buildMessagePreviewContent(m);
                 const displayLabel = getDisplayLabel(m);
 
                 item.style.cssText = `display:flex; gap:10px; padding:15px 20px; border-bottom:1px solid #f8f8f8; position:relative;`;
@@ -11769,14 +13177,14 @@
                             ${isU ? 'align-self:flex-end; background:#e7f3ff; border-bottom-right-radius:4px; color:#2c3e50;' : 'align-self:flex-start; background:#f5f5f5; border-bottom-left-radius:4px; color:#333;'}
                         ">
                             <div style="font-size:10px; font-weight:700; margin-bottom:5px; opacity:0.7;">${displayLabel}</div>
-                            <div class="m-row-text" style="display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; overflow:hidden; text-overflow:ellipsis;"></div>
+                            <div class="m-row-text"></div>
                             </div>
                             ${isU ? '' : '<button class="m-view-btn">查看全文</button>'}
                         </div>
                     </div>
                 `;
 
-                item.querySelector('.m-row-text').textContent = modalText;
+                item.querySelector('.m-row-text').innerHTML = previewContent.html;
 
                 const detailBtn = item.querySelector('.m-view-btn');
                 item.onmouseenter = () => detailBtn.style.opacity = '1';
@@ -11784,22 +13192,25 @@
 
                 detailBtn.onclick = (e) => {
                     e.stopPropagation();
-                    showFullText(modalText, `${displayLabel}全文`);
+                    showFullText(previewContent, `${displayLabel}全文`);
                 };
 
                 listBox.appendChild(item);
             });
 
-            function showFullText(txt, title) {
+            function showFullText(content, title) {
+                const bodyHtml = typeof content === 'string'
+                    ? renderMessageMarkdownToPreviewHtml(content)
+                    : String(content?.html || '').trim() || renderMessageMarkdownToPreviewHtml(content?.text || '');
                 const subOverlay = document.createElement('div');
                 subOverlay.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.4);z-index:1000004;display:flex;align-items:center;justify-content:center;';
                 const subModal = document.createElement('div');
                 subModal.style.cssText = 'background:#fff;width:80%;max-width:600px;max-height:80vh;border-radius:12px;padding:24px;display:flex;flex-direction:column;box-shadow:0 10px 30px rgba(0,0,0,0.2);';
                 subModal.innerHTML = `
                     <div style="display:flex;justify-content:space-between;margin-bottom:15px;align-items:center;"><h4 style="margin:0">${escapeHtml(title)}</h4><button id="sub-x" aria-label="关闭" title="关闭" style="cursor:pointer;border:none;background:#e5e7eb;color:#1f2937;width:32px;height:32px;border-radius:999px;line-height:1;display:flex;align-items:center;justify-content:center;padding:0;transition:background .2s ease;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg></button></div>
-                    <div id="sub-body" style="flex:1;overflow-y:auto;font-size:14px;line-height:1.6;color:#333;white-space:pre-wrap;padding-top:10px;border-top:1px solid #eee;"></div>
+                    <div id="sub-body" style="flex:1;overflow-y:auto;font-size:14px;line-height:1.6;color:#333;padding-top:10px;border-top:1px solid #eee;word-break:break-word;"></div>
                 `;
-                subModal.querySelector('#sub-body').textContent = txt;
+                subModal.querySelector('#sub-body').innerHTML = bodyHtml;
                 subOverlay.appendChild(subModal);
                 document.body.appendChild(subOverlay);
                 const subLifecycle = setupUnifiedModalLifecycle(subOverlay, subModal);
@@ -11893,7 +13304,7 @@
                         }
                         if (m.hasThought && m.textWithoutThought) {
                             m.text = String(m.textWithoutThought || '');
-                            if (rowText) rowText.textContent = getDisplayTextForExport(m.text);
+                            if (rowText) rowText.innerHTML = buildMessagePreviewContent(m).html;
                         }
                     });
                     upCount();
@@ -12233,6 +13644,220 @@
                 updateSelectToggleButton
             );
             modal.querySelectorAll('.gpt-batch-export-item').forEach((btn) => {
+                btn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    runBatchExport(btn.getAttribute('data-format'));
+                });
+            });
+
+            loadRecentConversations();
+        }
+
+        function openClaudeBatchExportModal() {
+            const overlay = document.createElement('div');
+            overlay.style.cssText = 'position:fixed;inset:0;z-index:1000001;background:rgba(2,6,23,0.55);display:flex;align-items:center;justify-content:center;padding:24px;backdrop-filter:blur(3px);';
+
+            const modal = document.createElement('div');
+            modal.style.cssText = 'width:min(980px,94vw);height:min(82vh,860px);background:#fff;border-radius:16px;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 20px 60px rgba(0,0,0,0.25);';
+
+            modal.innerHTML = `
+                <div style="padding:16px 20px;border-bottom:1px solid #e5e7eb;display:flex;justify-content:space-between;align-items:center;background:linear-gradient(180deg,#f8fafc 0%, #ffffff 100%);">
+                    <div><div style="font-size:16px;font-weight:700;color:#0f172a;">Claude 批量导出</div></div>
+                    <button id="cl-batch-close" aria-label="关闭" title="关闭" style="cursor:pointer;border:none;background:#e5e7eb;color:#1f2937;width:32px;height:32px;border-radius:999px;line-height:1;display:flex;align-items:center;justify-content:center;padding:0;transition:background .2s ease;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg></button>
+                </div>
+                <div class="db-batch-scroll" style="padding:16px 20px;overflow:auto;background:#f8fafc;">
+                    <div style="border:1px solid #e2e8f0;border-radius:12px;padding:14px;background:#fff;">
+                        <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">
+                            <div style="font-size:13px;font-weight:700;color:#0f172a;">历史会话</div>
+                            <label style="display:flex;align-items:center;gap:8px;font-size:12px;color:#475569;"><span>获取数量</span><input id="cl-batch-limit" type="text" inputmode="numeric" value="30" style="width:72px;box-sizing:border-box;border:1px solid #d1d5db;border-radius:8px;padding:6px 8px;font-size:12px;background:#fff;color:#0f172a;" /></label>
+                        </div>
+                        <div id="cl-batch-status" style="font-size:11px;color:#64748b;margin-top:8px;">正在加载历史会话...</div>
+                        <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-top:12px;">
+                            <div style="display:flex;align-items:center;gap:8px;"><button id="cl-batch-toggle-select" style="border:1px solid #93c5fd;background:#eff6ff;border-radius:8px;font-size:12px;padding:8px 12px;cursor:pointer;color:#1d4ed8;font-weight:600;">全选</button></div>
+                            <div style="position:relative;display:flex;justify-content:flex-end;align-items:center;">
+                                <button id="cl-batch-export-menu-trigger" style="border:1px solid #2563eb;background:#fff;color:#2563eb;border-radius:8px;font-size:12px;padding:7px 12px;cursor:pointer;font-weight:700;display:flex;align-items:center;gap:6px;"><span>导出</span><span id="cl-batch-export-menu-icon" style="opacity:.9;display:inline-flex;transition:transform .2s ease;transform:rotate(0deg);"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg></span></button>
+                                <div id="cl-batch-export-menu" style="position:absolute;right:0;top:36px;width:100px;background:rgba(255, 255, 255, 0.2);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);border:1px solid rgba(255,255,255,0.35);border-radius:10px;box-shadow:0 10px 30px rgba(15,23,42,.15);padding:0;z-index:7;opacity:0;pointer-events:none;transform:translateY(-8px) scale(0.96);transition:opacity .22s cubic-bezier(0.22,0.61,0.36,1), transform .22s cubic-bezier(0.22,0.61,0.36,1);">
+                                    <button class="cl-batch-export-item" data-format="json" style="display:block;width:100%;margin:0;text-align:center;background:transparent;color:#2563eb;border-radius:0;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;border:none;">JSON</button>
+                                    <button class="cl-batch-export-item" data-format="md" style="display:block;width:100%;margin:0;text-align:center;background:transparent;color:#2563eb;border-radius:0;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;border:none;">Markdown</button>
+                                    <button class="cl-batch-export-item" data-format="txt" style="display:block;width:100%;margin:0;text-align:center;background:transparent;color:#2563eb;border-radius:0;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;border:none;">TXT</button>
+                                    <button class="cl-batch-export-item" data-format="csv" style="display:block;width:100%;margin:0;text-align:center;background:transparent;color:#2563eb;border-radius:0;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;border:none;">CSV</button>
+                                    <button class="cl-batch-export-item" data-format="pdf" style="display:block;width:100%;margin:0;text-align:center;background:transparent;color:#2563eb;border-radius:0;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;border:none;">PDF</button>
+                                </div>
+                            </div>
+                        </div>
+                        <div id="cl-batch-list" style="max-height:520px;overflow:auto;border:1px solid #e5e7eb;border-radius:10px;margin-top:12px;background:#fff;"></div>
+                    </div>
+                </div>
+                <style>${getBatchConversationListStyles('#cl-batch-list')}</style>
+            `;
+
+            overlay.appendChild(modal);
+            document.body.appendChild(overlay);
+            const modalLifecycle = setupUnifiedModalLifecycle(overlay, modal);
+
+            let recentConversations = [];
+            let loading = false;
+            const listEl = modal.querySelector('#cl-batch-list');
+            const statusEl = modal.querySelector('#cl-batch-status');
+            const limitInput = modal.querySelector('#cl-batch-limit');
+            const toggleSelectBtn = modal.querySelector('#cl-batch-toggle-select');
+            const exportMenuTrigger = modal.querySelector('#cl-batch-export-menu-trigger');
+            const exportMenu = modal.querySelector('#cl-batch-export-menu');
+            const exportMenuIcon = modal.querySelector('#cl-batch-export-menu-icon');
+
+            const close = modalLifecycle.close;
+            const hideExportMenu = () => {
+                exportMenu.style.opacity = '0';
+                exportMenu.style.pointerEvents = 'none';
+                exportMenu.style.transform = 'translateY(-8px) scale(0.96)';
+                if (exportMenuIcon) exportMenuIcon.style.transform = 'rotate(0deg)';
+            };
+            const showExportMenu = () => {
+                exportMenu.style.opacity = '1';
+                exportMenu.style.pointerEvents = 'auto';
+                exportMenu.style.transform = 'translateY(0) scale(1)';
+                if (exportMenuIcon) exportMenuIcon.style.transform = 'rotate(180deg)';
+            };
+            const getRecentLimit = () => {
+                const inputRaw = String(limitInput.value || '').trim();
+                const onlyNum = inputRaw.replace(/[^\d]/g, '');
+                const raw = Number(onlyNum || 30);
+                const n = Number.isFinite(raw) ? Math.floor(raw) : 30;
+                const safe = Math.max(1, Math.min(500, n || 30));
+                limitInput.value = String(safe);
+                return safe;
+            };
+            const areAllSelected = () => {
+                const items = Array.from(listEl.querySelectorAll('.db-batch-ck'));
+                return items.length ? items.every((ck) => ck.checked) : false;
+            };
+            const updateSelectToggleButton = () => {
+                const allSelected = areAllSelected();
+                toggleSelectBtn.textContent = allSelected ? '全不选' : '全选';
+                if (allSelected) {
+                    toggleSelectBtn.style.borderColor = '#fecaca';
+                    toggleSelectBtn.style.background = '#fef2f2';
+                    toggleSelectBtn.style.color = '#b91c1c';
+                } else {
+                    toggleSelectBtn.style.borderColor = '#93c5fd';
+                    toggleSelectBtn.style.background = '#eff6ff';
+                    toggleSelectBtn.style.color = '#1d4ed8';
+                }
+            };
+            const renderRecentList = () => {
+                renderBatchConversationList(
+                    listEl,
+                    recentConversations,
+                    (c) => buildUnifiedBatchMetaTags(c, { idLabel: '会话ID' }),
+                    '未获取到历史会话，请稍后重试。'
+                );
+                updateSelectToggleButton();
+            };
+            const loadRecentConversations = async () => {
+                if (loading) return;
+                loading = true;
+                const limit = getRecentLimit();
+                hideExportMenu();
+                listEl.innerHTML = '<div class="db-batch-loading"><div class="db-batch-spinner"></div><div>正在加载历史会话...</div></div>';
+                statusEl.textContent = `正在加载历史会话（数量: ${limit}）...`;
+                try {
+                    const result = await fetchClaudeRecentConversations(limit);
+                    recentConversations = result.conversations;
+                    statusEl.textContent = `已加载 ${Number(result?.obtained || recentConversations.length)}/${Number(result?.requested || limit)} 个会话`;
+                    renderRecentList();
+                } catch (e) {
+                    recentConversations = [];
+                    statusEl.textContent = '加载历史会话失败';
+                    listEl.innerHTML = `<div style="padding:14px;font-size:12px;color:#b91c1c;">加载失败: ${escapeHtml(e.message || String(e))}</div>`;
+                } finally {
+                    loading = false;
+                }
+            };
+            const getSelectedConversations = () => {
+                const map = new Map(recentConversations.map((c) => [c.key, c]));
+                return Array.from(listEl.querySelectorAll('.db-batch-ck:checked'))
+                    .map((el) => map.get(el.getAttribute('data-key')))
+                    .filter(Boolean);
+            };
+            const openConversationPreview = async (conv) => {
+                const previewLoader = async () => {
+                    const info = await fetchClaudeConversationMessages(conv.id);
+                    return {
+                        title: info.title || conv.title || `会话 ${conv.id}`,
+                        messages: (info.messages || []).map((m) => ({ role: m.role, text: String(m.text || '') }))
+                    };
+                };
+                openBatchConversationPreviewModal('Claude', conv.title || conv.id, previewLoader);
+            };
+            const runBatchExport = async (format) => {
+                hideExportMenu();
+                const selected = getSelectedConversations();
+                if (!selected.length) {
+                    alert('请先勾选至少一个历史会话');
+                    return;
+                }
+                const out = [];
+                let failCount = 0;
+                for (let i = 0; i < selected.length; i += 1) {
+                    const conv = selected[i];
+                    statusEl.textContent = `正在导出第 ${i + 1}/${selected.length} 个会话: ${conv.title || conv.id}`;
+                    try {
+                        const info = await fetchClaudeConversationMessages(conv.id);
+                        out.push({
+                            conversationId: conv.id,
+                            title: String(info?.title || conv.title || '').trim() || `会话 ${conv.id}`,
+                            updatedAt: conv.updatedAt || 0,
+                            updatedAtText: conv.updatedAtText || '',
+                            createdAt: conv.createdAt || 0,
+                            createdAtText: conv.createdAtText || '',
+                            messageCount: (info.messages || []).length,
+                            messages: (info.messages || []).map((m) => ({
+                                role: m.role,
+                                text: String(m.text || '')
+                            }))
+                        });
+                    } catch (e) {
+                        failCount += 1;
+                        console.warn('AI-Chat-Helper: Claude 批量导出会话失败', conv?.id, e);
+                    }
+                }
+                if (!out.length) {
+                    alert('无可导出的会话数据');
+                    return;
+                }
+                await exportClaudeBatchConversations(out, format);
+                alert(`批量导出完成：成功 ${out.length} 个会话${failCount ? `，失败 ${failCount} 个` : ''}。已按会话标题分别打包为 ZIP。${format === 'pdf' ? 'PDF 选项导出为可打印 HTML 压缩包。' : ''}`);
+            };
+
+            modal.querySelector('#cl-batch-close').addEventListener('click', close);
+            exportMenuTrigger.addEventListener('click', (e) => {
+                e.stopPropagation();
+                if (exportMenu.style.opacity === '1') hideExportMenu();
+                else showExportMenu();
+            });
+            modal.addEventListener('click', (e) => {
+                const target = e.target;
+                if (target !== exportMenu && target !== exportMenuTrigger && !exportMenu.contains(target)) hideExportMenu();
+            });
+            limitInput.addEventListener('change', () => loadRecentConversations());
+            limitInput.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    loadRecentConversations();
+                }
+            });
+            toggleSelectBtn.addEventListener('click', () => {
+                const allSelected = areAllSelected();
+                listEl.querySelectorAll('.db-batch-ck').forEach((ck) => { ck.checked = !allSelected; });
+                updateSelectToggleButton();
+            });
+            bindBatchConversationListInteractions(
+                listEl,
+                (key) => recentConversations.find((c) => String(c.id) === String(key)) || null,
+                openConversationPreview,
+                updateSelectToggleButton
+            );
+            modal.querySelectorAll('.cl-batch-export-item').forEach((btn) => {
                 btn.addEventListener('click', (e) => {
                     e.stopPropagation();
                     runBatchExport(btn.getAttribute('data-format'));
@@ -13389,6 +15014,16 @@
                     console.warn('AI-Chat-Helper: DeepSeek 导出已禁用 DOM 回退，当前仅支持 API 获取。');
                     return { messages: [], source };
                 }
+            } else if (isClaude) {
+                const apiMsgs = await getClaudeMessagesByApi();
+                source = 'API(/api/organizations/{org}/chat_conversations/{id})';
+                if (apiMsgs.length) {
+                    list.push(...apiMsgs);
+                } else {
+                    source = 'API(/api/organizations/{org}/chat_conversations/{id})-FAILED';
+                    console.warn('AI-Chat-Helper: Claude 导出已禁用 DOM 回退，当前仅支持 API 获取。');
+                    return { messages: [], source };
+                }
             }
             
             // 核心归一化：将连续出现的同角色消息物理合并（解决 DeepSeek 思考与回答分容器的问题）
@@ -13408,6 +15043,10 @@
                 if (shouldMerge) {
                     last.text += "\n\n" + msg.text;
                     if (last.html && msg.html) last.html += msg.html;
+                    if (Array.isArray(msg.parts) && msg.parts.length) {
+                        if (!Array.isArray(last.parts)) last.parts = [];
+                        last.parts.push(...msg.parts);
+                    }
                 } else {
                     normalized.push(msg);
                 }
@@ -13421,15 +15060,7 @@
             let content = '';
             let type = 'text/plain;charset=utf-8';
             let ext = format;
-            const exportData = data.map((m) => {
-                const rawText = m?.text == null ? '' : String(m.text).trim();
-                const displayText = getDisplayTextForExport(rawText);
-                return {
-                    ...m,
-                    __rawText: rawText,
-                    __displayText: displayText
-                };
-            });
+            const exportData = data.map((m) => buildMessageExportSnapshot(m));
 
             const deepSeekExportMeta = (() => {
                 if (!isDeepSeek || !deepseekLastSessionMeta) return null;
@@ -13496,6 +15127,45 @@
                     }
                 });
                 return out;
+            }
+
+            function renderClaudePartsToHtmlForPdf(parts, fallbackText) {
+                const list = Array.isArray(parts) ? parts : [];
+                if (!list.length) return renderMarkdownToHtmlForPdf(fallbackText);
+                const html = [];
+                let imageSerial = 0;
+                list.forEach((part) => {
+                    if (!part || typeof part !== 'object') return;
+                    const type = String(part.type || '').trim().toLowerCase();
+                    if (type === 'text' || type === 'tool_use' || type === 'tool_result') {
+                        const t = String(part.text || '').trim();
+                        if (t) html.push(renderMarkdownToHtmlForPdf(t));
+                        return;
+                    }
+                    if (type === 'image') {
+                        imageSerial += 1;
+                        const name = escapeHtml(String(part.fileName || '').trim() || `图片${imageSerial}`);
+                        const url = escapeHtml(resolveClaudeAssetUrl(part.previewUrl || part.url || part.thumbnailUrl || ''));
+                        const width = Number(part.width || 0);
+                        const height = Number(part.height || 0);
+                        const ratioText = width > 0 && height > 0 ? `${width} × ${height}` : '';
+                        const metaText = [name, ratioText].filter(Boolean).join(' · ');
+                        if (url) {
+                            html.push(`<figure class="claude-image-block"><img src="${url}" alt="${name}" loading="lazy"><figcaption>图片${imageSerial}${metaText ? ` · ${metaText}` : ''}</figcaption></figure>`);
+                        } else {
+                            html.push(`<p>[图片${imageSerial}] ${name}${ratioText ? ` (${ratioText})` : ''}</p>`);
+                        }
+                        return;
+                    }
+                    if (type === 'file') {
+                        const name = escapeHtml(String(part.fileName || '').trim() || '附件');
+                        const url = escapeHtml(resolveClaudeAssetUrl(part.url || ''));
+                        html.push(url
+                            ? `<p>[附件] <a href="${url}" target="_blank" rel="noreferrer">${name}</a></p>`
+                            : `<p>[附件] ${name}</p>`);
+                    }
+                });
+                return html.join('\n').trim() || renderMarkdownToHtmlForPdf(fallbackText);
             }
 
             function renderMarkdownToHtmlForPdf(text) {
@@ -13721,6 +15391,14 @@
                         continue;
                     }
 
+                    if (/^(?:-{3,}|\*{3,}|_{3,})$/.test(trimmed)) {
+                        flushParagraph();
+                        flushList();
+                        flushQuote();
+                        html.push('<hr>');
+                        continue;
+                    }
+
                     const quoteMatch = line.match(/^\s*>\s?(.*)$/);
                     if (quoteMatch) {
                         flushParagraph();
@@ -13817,10 +15495,10 @@
                             thinkingEnabled: deepSeekExportMeta.thinkingEnabled,
                             searchEnabled: deepSeekExportMeta.searchEnabled
                         },
-                        messages: exportData.map(m => ({ role: m.role, text: m.__displayText }))
+                        messages: exportData.map(m => ({ role: m.role, text: m.__displayText, parts: Array.isArray(m.parts) ? m.parts : [] }))
                     }, null, 2);
                 } else {
-                    content = JSON.stringify(exportData.map(m => ({ role: m.role, text: m.__displayText })), null, 2);
+                    content = JSON.stringify(exportData.map(m => ({ role: m.role, text: m.__displayText, parts: Array.isArray(m.parts) ? m.parts : [] })), null, 2);
                 }
                 type = 'application/json';
             } else if (format === 'csv') {
@@ -13835,7 +15513,7 @@
                 const body = exportData.map(m => `----------------------------\n【${m.role === 'user' ? '用户问题' : AI_NAME}】\n----------------------------\n${m.__displayText}`).join('\n\n');
                 content = deepSeekMetaText ? `${deepSeekMetaText}\n\n${body}` : body;
             } else if (format === 'md') {
-                const body = exportData.map(m => `### ${m.role === 'user' ? '🧑 用户问题' : '🤖 ' + AI_NAME + '回答'}\n\n${m.__displayText}`).join('\n\n---\n\n');
+                const body = exportData.map(m => `### ${m.role === 'user' ? '🧑 用户问题' : '🤖 ' + AI_NAME + '回答'}\n\n${m.__markdownText}`).join('\n\n---\n\n');
                 if (deepSeekMetaText) {
                     const mdMeta = [
                         '## DeepSeek 对话信息',
@@ -13898,6 +15576,7 @@
                     .text h4 { font-size: 16px; }
                     .text h5 { font-size: 15px; }
                     .text h6 { font-size: 14px; }
+                    .text hr { border: none; border-top: 1px solid #cbd5e1; margin: 16px 0; }
                     pre, .qk-markdown pre, .markdown-body pre, [class*="code-block"] pre {
                         background: #1e1e1e !important;
                         color: #d4d4d4 !important;
@@ -13910,9 +15589,12 @@
                         display: block;
                         font-size: 13px;
                     }
-                    code { background: #f1f5f9; padding: 2px 5px; border-radius: 4px; font-family: monospace; color: #e11d48; }
+                    code { background: #f1f5f9; padding: 2px 5px; border-radius: 4px; font-family: "Consolas", "Monaco", "Courier New", monospace; color: #e11d48; }
                     pre code { background: none; padding: 0; color: inherit; }
                     .text a { color: #1d4ed8; text-decoration: underline; }
+                    .claude-image-block { margin: 14px 0 18px; padding: 12px; border: 1px solid #dbeafe; border-radius: 12px; background: #f8fbff; }
+                    .claude-image-block img { display: block; max-width: 100%; max-height: 480px; width: auto; height: auto; margin: 0 auto; border-radius: 8px; border: 1px solid #dbeafe; background: #fff; object-fit: contain; }
+                    .claude-image-block figcaption { margin-top: 8px; font-size: 12px; color: #475569; text-align: center; }
                     .math-inline { white-space: normal; max-width: 100%; }
                     .math-display { margin: 14px 0; padding: 8px 10px; background: #f8fafc; border-left: 3px solid #bfdbfe; overflow-x: auto; }
                     td .math-display, th .math-display { margin: 6px 0; padding: 4px 6px; }
@@ -13994,7 +15676,7 @@
                                         <div class="role-badge">
                                             ${m.role === 'user' ? '🧑 USER QUESTION' : '🤖 ' + AI_NAME.toUpperCase() + ' RESPONSE'}
                                         </div>
-                                        <div class="text">${renderMarkdownToHtmlForPdf(m.__displayText)}</div>
+                                        <div class="text">${isClaude ? renderClaudePartsToHtmlForPdf(m.parts, m.__displayText) : renderMarkdownToHtmlForPdf(m.__displayText)}</div>
                                     </div>
                                 `).join('')}
                             </div>
@@ -14067,6 +15749,15 @@
 
         const detectSearchEntryRole = (el) => {
             if (!(el instanceof Element)) return 'unknown';
+            if (isClaude) {
+                const directText = normalizeClaudeMatchText(el.innerText || '');
+                if (directText.includes('you said')) return 'user';
+                const heading = el.querySelector?.('h2, [role="heading"]');
+                const headingText = normalizeClaudeMatchText(heading?.innerText || '');
+                if (headingText.includes('you said')) return 'user';
+                const cls = String(el.className || '').toLowerCase();
+                if (/(assistant|model|response|answer)/.test(cls)) return 'assistant';
+            }
             if (isDoubao) {
                 const row = el.closest?.('[data-testid="send_message"], [data-testid="receive_message"], [data-target-id="message-box-target-id"]') || el;
                 const rowType = getDoubaoRowType(row);
@@ -14093,6 +15784,15 @@
 
         const extractSearchEntryText = (el) => {
             if (!(el instanceof Element)) return '';
+            if (isClaude) {
+                const heading = el.querySelector?.('h2, [role="heading"]');
+                const headingText = normalizeClaudeMatchText(heading?.innerText || '');
+                if (headingText.includes('you said')) {
+                    const userText = extractClaudeBlockUserText(el);
+                    if (userText) return userText;
+                }
+                return String(el.innerText || '').replace(/\s+/g, ' ').trim();
+            }
             if (isDoubao) {
                 const row = el.closest?.('[data-testid="send_message"], [data-testid="receive_message"], [data-target-id="message-box-target-id"]') || el;
                 const rowType = getDoubaoRowType(row);
@@ -14148,6 +15848,32 @@
                 if (!list.length) {
                     document.querySelectorAll('[data-target-id="message-box-target-id"], [data-message-id]').forEach(addEntry);
                 }
+                return list;
+            }
+
+            if (isClaude) {
+                const root = getClaudeMainContentRoot();
+                if (!root) return list;
+                const seenClaude = new Set();
+                const addClaudeEntry = (el) => {
+                    if (!(el instanceof HTMLElement)) return;
+                    if (!root.contains(el)) return;
+                    if (seenClaude.has(el)) return;
+                    seenClaude.add(el);
+                    addEntry(el);
+                };
+
+                Array.from(root.querySelectorAll('h2, [role="heading"]')).forEach((h) => {
+                    if (!(h instanceof HTMLElement)) return;
+                    const ht = normalizeClaudeMatchText(h.innerText || '');
+                    if (!ht.includes('you said')) return;
+                    const block = resolveClaudeMessageContainerFromHeading(h, root) || h.closest('article, section, div');
+                    if (block) addClaudeEntry(block);
+                });
+
+                getClaudeCandidateMessageElements().forEach(addClaudeEntry);
+
+                // Claude 页面优先仅使用主内容区域，避免把侧栏/插件面板文本混入搜索。
                 return list;
             }
 
