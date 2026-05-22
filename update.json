@@ -1,6 +1,17 @@
 {
   "versions": [
     {
+      "version": "2.0.12",
+      "date": "2026-05-22",
+      "changes": [
+        "Claude 导出类型收敛为 HTML / Markdown / TXT，移除 CSV、JSON，并将原 PDF 入口改为直接导出 HTML 文件。",
+        "修复 Claude `visualize:show_widget` 流程可视化在导出预览与全文模态中只显示附件、不显示流程内容的问题。",
+        "增强 Claude HTML Widget 恢复逻辑：支持从工具输入、HTML 附件、附件 URL 与近期下载缓存恢复内联内容。",
+        "Markdown 与 HTML 导出新增 Claude HTML Widget 静态快照，压缩包中的 Markdown 附件链接保持 `files/` 相对路径。",
+        "导出前移除 Claude `sendPrompt(...)` 建议提示词按钮，并保留 Widget 片段中的样式，避免流程卡片样式丢失。"
+      ]
+    },
+    {
       "version": "2.0.11",
       "date": "2026-05-21",
       "changes": [

@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         AI对话助手
 // @namespace    http://tampermonkey.net/
-// @version      2.0.11
-// @description  支持 ChatGPT、通义千问、豆包、DeepSeek：自动生成对话节点导航、一键导出对话（PDF/Markdown/JSON/CSV/TXT）。
+// @version      2.0.12
+// @description  支持 ChatGPT、通义千问、豆包、DeepSeek、Claude：自动生成对话节点导航、一键导出对话（HTML/Markdown/TXT）。
 // @author       xchengb
 // @updateURL    https://github.com/yixing233/AIChat-Helper/raw/master/AIChat-Helper.user.js
 // @downloadURL  https://github.com/yixing233/AIChat-Helper/raw/master/AIChat-Helper.user.js
@@ -45,7 +45,7 @@
     const isDeepSeek = isDeepSeekHost && isDeepSeekPath;
     const isClaude = isClaudeHost && isClaudePath;
     const AI_NAME = isChatGPT ? 'ChatGPT' : (isDeepSeek ? 'DeepSeek' : (isDoubao ? '豆包' : (isQwen ? '通义千问' : (isClaude ? 'Claude' : 'AI 助手'))));
-    const SCRIPT_VERSION = '2.0.11';
+    const SCRIPT_VERSION = '2.0.12';
     const SCRIPT_UPDATE_URL = 'https://raw.githubusercontent.com/yixing233/AIChat-Helper/master/AIChat-Helper.user.js';
     const SCRIPT_DOWNLOAD_URL = 'https://github.com/yixing233/AIChat-Helper/raw/master/AIChat-Helper.user.js';
     const SCRIPT_CHANGELOG_URL = 'https://raw.githubusercontent.com/yixing233/AIChat-Helper/master/update.json';
@@ -187,7 +187,9 @@
     let deepseekLastSessionMeta = null;
     let claudeCapturedHeaders = null;
     let claudeCaptureHooksInstalled = false;
+    let claudeDownloadCaptureHooksInstalled = false;
     let claudeLastConversationMeta = null;
+    const claudeRecentDownloadedHtmlFiles = [];
     let chatgptAccessToken = null;
     const chatgptCapturedWorkspaceIds = new Set();
     const chatgptCapturedDeviceIds = new Set();
@@ -343,6 +345,128 @@
         };
     }
 
+    function rememberClaudeDownloadedHtmlFile(entry) {
+        if (!entry || typeof entry !== 'object') return;
+        const content = String(entry.content || '').trim();
+        if (!content) return;
+        claudeRecentDownloadedHtmlFiles.unshift({
+            fileName: String(entry.fileName || '').trim() || '交互演示.html',
+            content,
+            size: Number(entry.size || content.length || 0) || content.length,
+            createdAt: Date.now()
+        });
+        if (claudeRecentDownloadedHtmlFiles.length > 20) claudeRecentDownloadedHtmlFiles.length = 20;
+    }
+
+    function findClaudeDownloadedHtmlFile(widgetCode = '', suggestedName = '') {
+        const rawWidget = String(widgetCode || '').trim().toLowerCase();
+        const suggest = String(suggestedName || '').trim().toLowerCase();
+        const normalizeHtmlName = (value) => String(value || '')
+            .trim()
+            .toLowerCase()
+            .replace(/[?#].*$/g, '')
+            .split(/[\\/]/)
+            .pop()
+            .replace(/\.html?$/i, '')
+            .replace(/[\s._-]+/g, '');
+        const suggestNorm = normalizeHtmlName(suggest);
+        const hints = [];
+        const isCadHoleWidget = isClaudeCadHoleWidgetHtml(rawWidget, suggestedName);
+        if (isCadHoleWidget) {
+            if (rawWidget.includes('switchhole(')) hints.push('switchhole(');
+            if (rawWidget.includes('id="hole-svg"')) hints.push('id="hole-svg"');
+            if (rawWidget.includes('cad异形孔参数提取交互演示')) hints.push('cad异形孔参数提取交互演示');
+            if (rawWidget.includes('腰形孔') && rawWidget.includes('d形孔')) hints.push('腰形孔');
+        }
+
+        for (const item of claudeRecentDownloadedHtmlFiles) {
+            const nameLower = String(item.fileName || '').toLowerCase();
+            const contentLower = String(item.content || '').toLowerCase();
+            const nameNorm = normalizeHtmlName(nameLower);
+            const sameKind = isCadHoleWidget
+                ? isClaudeCadHoleWidgetHtml(contentLower, nameLower)
+                : !isClaudeCadHoleWidgetHtml(contentLower, nameLower);
+            if (!sameKind) continue;
+            if (suggest && nameLower === suggest) return item;
+            if (suggest && nameLower.includes(suggest) && suggest.length >= 6) return item;
+            if (suggestNorm && nameNorm) {
+                const shortest = Math.min(suggestNorm.length, nameNorm.length);
+                if (shortest >= 4 && (nameNorm === suggestNorm || nameNorm.includes(suggestNorm) || suggestNorm.includes(nameNorm))) {
+                    return item;
+                }
+            }
+            if (isCadHoleWidget && hints.length >= 2 && hints.every((needle) => contentLower.includes(needle))) return item;
+        }
+        return null;
+    }
+
+    function installClaudeDownloadCaptureHooks() {
+        if (!isClaude || claudeDownloadCaptureHooksInstalled) return;
+        claudeDownloadCaptureHooksInstalled = true;
+
+        const NativeBlob = window.Blob;
+        const nativeCreateObjectURL = URL.createObjectURL.bind(URL);
+        const nativeRevokeObjectURL = URL.revokeObjectURL.bind(URL);
+        const nativeAnchorClick = HTMLAnchorElement.prototype.click;
+        const pendingHtmlBlobMeta = new WeakMap();
+        const objectUrlMeta = new Map();
+
+        window.Blob = function AIChatHelperClaudeBlob(parts, options) {
+            const blob = new NativeBlob(parts, options);
+            const mimeType = String(options?.type || blob.type || '').toLowerCase();
+            if (mimeType.includes('text/html')) {
+                Promise.resolve()
+                    .then(() => blob.text())
+                    .then((text) => {
+                        const content = String(text || '').trim();
+                        if (!content) return;
+                        pendingHtmlBlobMeta.set(blob, {
+                            content,
+                            size: Number(blob.size || content.length || 0) || content.length
+                        });
+                    })
+                    .catch(() => {});
+            }
+            return blob;
+        };
+        window.Blob.prototype = NativeBlob.prototype;
+        try {
+            Object.setPrototypeOf(window.Blob, NativeBlob);
+        } catch (_) {}
+
+        URL.createObjectURL = function AIChatHelperClaudeCreateObjectURL(obj) {
+            const url = nativeCreateObjectURL(obj);
+            if (obj instanceof Blob || obj instanceof NativeBlob) {
+                const meta = pendingHtmlBlobMeta.get(obj);
+                if (meta?.content) objectUrlMeta.set(url, meta);
+            }
+            return url;
+        };
+
+        URL.revokeObjectURL = function AIChatHelperClaudeRevokeObjectURL(url) {
+            objectUrlMeta.delete(String(url || ''));
+            return nativeRevokeObjectURL(url);
+        };
+
+        HTMLAnchorElement.prototype.click = function AIChatHelperClaudeAnchorClick() {
+            try {
+                const href = String(this.href || this.getAttribute('href') || '').trim();
+                const downloadName = String(this.download || this.getAttribute('download') || '').trim();
+                if (href.startsWith('blob:') && /\.html?$/i.test(downloadName)) {
+                    const meta = objectUrlMeta.get(href);
+                    if (meta?.content) {
+                        rememberClaudeDownloadedHtmlFile({
+                            fileName: downloadName,
+                            content: meta.content,
+                            size: meta.size
+                        });
+                    }
+                }
+            } catch (_) {}
+            return nativeAnchorClick.call(this);
+        };
+    }
+
     function resolveClaudeAssetUrl(rawUrl) {
         const raw = String(rawUrl || '').trim();
         if (!raw) return '';
@@ -351,6 +475,448 @@
         } catch (_) {
             return raw;
         }
+    }
+
+    function resolveExportAssetUrl(rawUrl) {
+        const raw = String(rawUrl || '').trim();
+        if (!raw) return '';
+        if (/^(?:data:|blob:|images\/|files\/|\.{1,2}\/)/i.test(raw)) return raw;
+        return resolveClaudeAssetUrl(raw);
+    }
+
+    function pruneClaudePromptSuggestionNodes(root) {
+        if (!(root instanceof Element) && !(root instanceof Document)) return;
+        const isPromptSuggestionNode = (el) => {
+            if (!(el instanceof Element)) return false;
+            const onclick = String(el.getAttribute('onclick') || '').trim();
+            if (/\bsendPrompt\s*\(/.test(onclick)) return true;
+            const role = String(el.getAttribute('role') || '').trim().toLowerCase();
+            const href = String(el.getAttribute('href') || '').trim();
+            if ((role === 'button' || href === '#') && /\bsendPrompt\s*\(/i.test(String(el.outerHTML || ''))) return true;
+            return false;
+        };
+        Array.from(root.querySelectorAll('*')).forEach((el) => {
+            if (!isPromptSuggestionNode(el)) return;
+            const parent = el.parentElement;
+            el.remove();
+            let cur = parent;
+            while (cur && cur !== root && cur.children.length === 0 && !String(cur.textContent || '').trim()) {
+                const next = cur.parentElement;
+                cur.remove();
+                cur = next;
+            }
+        });
+    }
+
+    function removeClaudePromptSuggestionsFromHtml(html) {
+        const raw = String(html || '').trim();
+        if (!raw || !/\bsendPrompt\s*\(/.test(raw)) return raw;
+        try {
+            const parser = new DOMParser();
+            const doc = parser.parseFromString(raw, 'text/html');
+            pruneClaudePromptSuggestionNodes(doc);
+            Array.from(doc.querySelectorAll('script')).forEach((el) => {
+                const code = String(el.textContent || '');
+                if (/\bsendPrompt\s*=|\bsendPrompt\s*\(/.test(code) && !/\b(addEventListener|querySelector|querySelectorAll|getElementById)\b/.test(code)) {
+                    el.remove();
+                }
+            });
+            if (/<(?:!doctype\s+html|html|head|body)\b/i.test(raw)) {
+                const doctype = raw.startsWith('<!doctype') || raw.startsWith('<!DOCTYPE') ? '<!doctype html>\n' : '';
+                return doctype + (doc.documentElement?.outerHTML || raw);
+            }
+            const headStyles = Array.from(doc.head?.querySelectorAll('style') || [])
+                .map((el) => el.outerHTML)
+                .join('\n');
+            const bodyHtml = doc.body ? doc.body.innerHTML.trim() : '';
+            return [headStyles, bodyHtml].filter(Boolean).join('\n').trim() || raw;
+        } catch (_) {
+            return raw
+                .replace(/<button\b[^>]*\bonclick=(["'])[^"']*\bsendPrompt\s*\([^"']*\1[^>]*>[\s\S]*?<\/button>/gi, '')
+                .replace(/<a\b[^>]*\bonclick=(["'])[^"']*\bsendPrompt\s*\([^"']*\1[^>]*>[\s\S]*?<\/a>/gi, '')
+                .trim();
+        }
+    }
+
+    function buildClaudeWidgetHtmlDocument(widgetCode, title = 'Claude 交互演示') {
+        const raw = removeClaudePromptSuggestionsFromHtml(widgetCode);
+        if (!raw) return '';
+        if (/<html[\s>]/i.test(raw)) return raw;
+        const safeTitle = String(title || 'Claude 交互演示')
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;');
+        return [
+            '<!doctype html>',
+            '<html lang="zh-CN">',
+            '<head>',
+            '<meta charset="utf-8">',
+            '<meta name="viewport" content="width=device-width, initial-scale=1">',
+            `<title>${safeTitle}</title>`,
+            '<style>',
+            ':root{--color-border-primary:#94a3b8;--color-border-secondary:#cbd5e1;--color-border-tertiary:#e2e8f0;--color-background-primary:#ffffff;--color-background-secondary:#f8fafc;--color-background-info:#dbeafe;--color-text-primary:#0f172a;--color-text-secondary:#475569;--color-text-tertiary:#64748b;--color-text-info:#1d4ed8;--border-radius-md:10px;--border-radius-lg:16px;font-family:"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;}',
+            'body{margin:0;padding:24px;background:#f8fafc;color:#0f172a;}',
+            'button,input,select,textarea{font:inherit;}',
+            '</style>',
+            '</head>',
+            '<body>',
+            raw,
+            '</body>',
+            '</html>'
+        ].join('');
+    }
+
+    function normalizeClaudeInlineHtmlContent(html, title = 'Claude 交互演示') {
+        const raw = removeClaudePromptSuggestionsFromHtml(String(html || '').trim());
+        if (!raw) return '';
+        if (/<(?:!doctype\s+html|html|head|body)\b/i.test(raw)) return raw;
+        return buildClaudeWidgetHtmlDocument(raw, String(title || 'Claude 交互演示').replace(/\.html?$/i, ''));
+    }
+
+    function hashTextForArchiveKey(text) {
+        const src = String(text || '');
+        let hash = 2166136261;
+        for (let i = 0; i < src.length; i += 1) {
+            hash ^= src.charCodeAt(i);
+            hash = Math.imul(hash, 16777619);
+        }
+        return (hash >>> 0).toString(16);
+    }
+
+    function escapeHtmlAttr(str) {
+        return String(str || '')
+            .replace(/&/g, '&amp;')
+            .replace(/"/g, '&quot;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;');
+    }
+
+    const claudeInlinePreviewBlobUrlCache = new Map();
+
+    function getClaudeInlinePreviewBlobUrl(html) {
+        const raw = String(html || '').trim();
+        if (!raw) return '';
+        const key = hashTextForArchiveKey(raw);
+        if (claudeInlinePreviewBlobUrlCache.has(key)) {
+            return claudeInlinePreviewBlobUrlCache.get(key) || '';
+        }
+        const blob = new Blob([raw], { type: 'text/html;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        claudeInlinePreviewBlobUrlCache.set(key, url);
+        return url;
+    }
+
+    function normalizeClaudeWidgetFilePart(widgetCode, index = 0, toolUseId = '') {
+        const raw = String(widgetCode || '').trim();
+        if (!raw) return null;
+        let fileName = `交互演示${index + 1}.html`;
+        try {
+            const parser = new DOMParser();
+            const doc = parser.parseFromString(`<div id="__claude_widget_file_root__">${raw}</div>`, 'text/html');
+            const titleText = String(
+                doc.querySelector('title')?.textContent
+                || doc.querySelector('h1, h2, [id="hole-title"]')?.textContent
+                || ''
+            ).trim();
+            if (titleText) fileName = `${titleText}.html`;
+        } catch (_) {}
+        const canUseCapturedHtml = isClaudeCadHoleWidgetHtml(raw, fileName);
+        const captured = canUseCapturedHtml ? findClaudeDownloadedHtmlFile(raw, fileName) : null;
+        if (captured?.fileName) fileName = String(captured.fileName).trim() || fileName;
+        const inlineContent = removeClaudePromptSuggestionsFromHtml(String(captured?.content || '').trim())
+            || buildClaudeWidgetHtmlDocument(raw, fileName.replace(/\.html$/i, ''));
+        const keySeed = `${toolUseId || index + 1}:${raw}`;
+        const archiveKey = `widget_${hashTextForArchiveKey(keySeed)}`;
+        return {
+            type: 'file',
+            fileName,
+            mimeType: 'text/html',
+            inlineExt: 'html',
+            inlineArchiveKey: archiveKey,
+            inlineContent,
+            url: ''
+        };
+    }
+
+    function getClaudeWidgetPreviewSource(widgetCode, suggestedName = '') {
+        const raw = String(widgetCode || '').trim();
+        if (!raw) return '';
+        const captured = isClaudeCadHoleWidgetHtml(raw, suggestedName)
+            ? findClaudeDownloadedHtmlFile(raw, suggestedName)
+            : null;
+        const capturedContent = String(captured?.content || '').trim();
+        return capturedContent || raw;
+    }
+
+    const claudeWidgetPreviewStore = new Map();
+    let claudeWidgetPreviewSeq = 0;
+
+    function registerClaudeWidgetPreview(widgetHtml, title = '') {
+        const raw = String(widgetHtml || '').trim();
+        if (!raw) return '';
+        const key = `claude_widget_${++claudeWidgetPreviewSeq}_${hashTextForArchiveKey(raw)}`;
+        claudeWidgetPreviewStore.set(key, {
+            html: raw,
+            title: String(title || '').trim()
+        });
+        return key;
+    }
+
+    function parseClaudeWidgetHtmlSource(widgetHtml) {
+        const raw = String(widgetHtml || '').trim();
+        if (!raw) {
+            return { styles: '', bodyHtml: '', scripts: [], bodyClassName: '', bodyStyle: '' };
+        }
+        try {
+            const parser = new DOMParser();
+            const doc = parser.parseFromString(raw, 'text/html');
+            const styles = Array.from(doc.querySelectorAll('style')).map((el) => el.outerHTML).join('\n');
+            const scripts = Array.from(doc.querySelectorAll('script')).map((el) => String(el.textContent || '')).filter(Boolean);
+            pruneClaudePromptSuggestionNodes(doc);
+            const body = doc.body ? doc.body.cloneNode(true) : null;
+            if (body) Array.from(body.querySelectorAll('script')).forEach((el) => el.remove());
+            const bodyHtml = body ? body.innerHTML : raw;
+            const bodyClassName = body ? String(body.getAttribute('class') || '').trim() : '';
+            const bodyStyle = body ? String(body.getAttribute('style') || '').trim() : '';
+            return { styles, bodyHtml, scripts, bodyClassName, bodyStyle };
+        } catch (_) {
+            return { styles: '', bodyHtml: raw, scripts: [], bodyClassName: '', bodyStyle: '' };
+        }
+    }
+
+    function escapeJsString(str) {
+        return String(str || '')
+            .replace(/\\/g, '\\\\')
+            .replace(/`/g, '\\`')
+            .replace(/\$\{/g, '\\${');
+    }
+
+    function normalizeClaudeWidgetStyles(stylesText) {
+        const raw = String(stylesText || '');
+        if (!raw) return '';
+        return raw
+            .replace(/:root\b/g, ':host, .claude-widget-shadow-body')
+            .replace(/\bbody\b/g, '.claude-widget-shadow-body');
+    }
+
+    function buildClaudeWidgetRuntimeBlock(widgetHtml, title = '') {
+        const key = registerClaudeWidgetPreview(widgetHtml, title);
+        if (!key) return '';
+        const safeTitle = escapeHtmlAttr(String(title || '交互演示').trim() || '交互演示');
+        return `<div class="claude-widget-runtime" data-widget-key="${escapeHtmlAttr(key)}" data-widget-title="${safeTitle}"></div>`;
+    }
+
+    function createClaudeWidgetSandboxDocument(rootEl, bodyEl = null) {
+        const root = rootEl instanceof ShadowRoot ? rootEl : null;
+        const doc = root?.ownerDocument || document;
+        const queryRoot = bodyEl || root || doc;
+        const query = (fn) => (...args) => {
+            try {
+                return fn.apply(queryRoot, args);
+            } catch (_) {
+                return null;
+            }
+        };
+        const invokeReadyListener = (listener, type) => {
+            if (!listener) return;
+            const event = new Event(type);
+            Promise.resolve().then(() => {
+                try {
+                    if (typeof listener === 'function') {
+                        listener.call(queryRoot, event);
+                    } else if (typeof listener.handleEvent === 'function') {
+                        listener.handleEvent(event);
+                    }
+                } catch (e) {
+                    console.warn('[AI Chat Helper] widget ready listener failed', e);
+                }
+            });
+        };
+        const sandboxDoc = {
+            getElementById: query((id) => queryRoot.querySelector(`#${CSS.escape(String(id || ''))}`)),
+            querySelector: query((sel) => queryRoot.querySelector(sel)),
+            querySelectorAll: query((sel) => queryRoot.querySelectorAll(sel)),
+            createElement: doc.createElement.bind(doc),
+            createElementNS: doc.createElementNS.bind(doc),
+            addEventListener(type, listener, options) {
+                if (type === 'DOMContentLoaded' || type === 'readystatechange') {
+                    invokeReadyListener(listener, type);
+                    return;
+                }
+                return doc.addEventListener(type, listener, options);
+            },
+            removeEventListener: doc.removeEventListener.bind(doc),
+            fonts: doc.fonts,
+            body: bodyEl || root,
+            documentElement: bodyEl || root?.host || doc.documentElement,
+            defaultView: doc.defaultView,
+            readyState: 'complete'
+        };
+        return sandboxDoc;
+    }
+
+    function bindClaudeWidgetHandlers(rootEl, sandboxWindow, sandboxDocument) {
+        const scope = rootEl instanceof ShadowRoot ? rootEl : null;
+        if (!scope) return;
+        scope.querySelectorAll('[onclick], [oninput], [onchange], [onkeydown], [onkeyup]').forEach((el) => {
+            if (!(el instanceof HTMLElement)) return;
+            Array.from(el.attributes || []).forEach((attr) => {
+                const name = String(attr.name || '').toLowerCase();
+                if (!name.startsWith('on')) return;
+                const eventName = name.slice(2);
+                const code = String(attr.value || '').trim();
+                if (!code) return;
+                el.removeAttribute(attr.name);
+                el.addEventListener(eventName, function (event) {
+                    try {
+                        Function('window', 'document', 'event', `with(window){ ${code} }`).call(this, sandboxWindow, sandboxDocument, event);
+                    } catch (e) {
+                        console.warn('[AI Chat Helper] widget handler failed', e);
+                    }
+                });
+            });
+        });
+    }
+
+    function mountClaudeWidgetPreview(el, widgetHtml, title = '') {
+        if (!(el instanceof HTMLElement)) return;
+        const raw = String(widgetHtml || '').trim();
+        if (!raw) return;
+        if (el.dataset.claudeWidgetMounted === '1') return;
+        el.dataset.claudeWidgetMounted = '1';
+        const shadow = el.attachShadow ? el.attachShadow({ mode: 'open' }) : null;
+        if (!shadow) {
+            el.innerHTML = renderMessageMarkdownToPreviewHtml('交互演示加载失败');
+            return;
+        }
+        const { styles, bodyHtml, scripts, bodyClassName, bodyStyle } = parseClaudeWidgetHtmlSource(raw);
+        const normalizedStyles = normalizeClaudeWidgetStyles(styles);
+        const bodyClassAttr = bodyClassName ? ` ${escapeHtmlAttr(bodyClassName)}` : '';
+        const bodyStyleAttr = bodyStyle ? ` style="${escapeHtmlAttr(bodyStyle)}"` : '';
+        shadow.innerHTML = `
+            <style>
+                :host {
+                    display: block;
+                    width: 100%;
+                    color: inherit;
+                }
+                .claude-widget-shadow-body {
+                    display: block;
+                    width: 100%;
+                    box-sizing: border-box;
+                }
+            </style>
+            ${normalizedStyles ? `${normalizedStyles}\n` : ''}
+            <body class="claude-widget-shadow-body${bodyClassAttr}"${bodyStyleAttr}>${bodyHtml}</body>
+        `;
+        const widgetBodyEl = shadow.querySelector('.claude-widget-shadow-body');
+        const sandboxDocument = createClaudeWidgetSandboxDocument(shadow, widgetBodyEl);
+        const sandboxWindow = {
+            window: null,
+            self: null,
+            globalThis: null,
+            document: sandboxDocument,
+            console,
+            navigator: window.navigator,
+            performance: window.performance,
+            location: window.location,
+            Math,
+            Number,
+            String,
+            Boolean,
+            Array,
+            Object,
+            JSON,
+            Date,
+            RegExp,
+            Promise,
+            Set,
+            Map,
+            WeakMap,
+            WeakSet,
+            Symbol,
+            URL,
+            Event,
+            CustomEvent,
+            Node,
+            Element,
+            HTMLElement,
+            SVGElement,
+            DOMParser,
+            CSS,
+            setTimeout: window.setTimeout.bind(window),
+            clearTimeout: window.clearTimeout.bind(window),
+            requestAnimationFrame: window.requestAnimationFrame ? window.requestAnimationFrame.bind(window) : ((cb) => window.setTimeout(cb, 16)),
+            cancelAnimationFrame: window.cancelAnimationFrame ? window.cancelAnimationFrame.bind(window) : window.clearTimeout.bind(window),
+            getComputedStyle: window.getComputedStyle.bind(window),
+            innerWidth: window.innerWidth,
+            innerHeight: window.innerHeight,
+            sendPrompt: window.sendPrompt || function () {}
+        };
+        sandboxWindow.window = sandboxWindow;
+        sandboxWindow.self = sandboxWindow;
+        sandboxWindow.globalThis = sandboxWindow;
+        sandboxWindow.addEventListener = function (type, listener) {
+            if (type === 'load' || type === 'DOMContentLoaded') {
+                Promise.resolve().then(() => {
+                    try {
+                        if (typeof listener === 'function') {
+                            listener.call(sandboxWindow, new Event(type));
+                        } else if (listener && typeof listener.handleEvent === 'function') {
+                            listener.handleEvent(new Event(type));
+                        }
+                    } catch (e) {
+                        console.warn('[AI Chat Helper] widget window listener failed', e);
+                    }
+                });
+                return;
+            }
+        };
+        sandboxWindow.removeEventListener = function () {};
+        scripts.forEach((script) => {
+            const body = String(script || '').trim();
+            if (!body) return;
+            try {
+                Function('window', 'document', 'sendPrompt', `${body}\n;try{Object.assign(window,{${[
+                    'render',
+                    'buildSliders',
+                    'switchHole',
+                    'setTemp',
+                    'toggleHeat',
+                    'state',
+                    'activeKey',
+                    'currentHole',
+                    'holes'
+                ].map((name) => `...(typeof ${name} !== 'undefined' ? { ${name}: ${name} } : {})`).join(',')}});}catch(_){}`).call(
+                    sandboxWindow,
+                    sandboxWindow,
+                    sandboxDocument,
+                    sandboxWindow.sendPrompt
+                );
+            } catch (e) {
+                console.warn('[AI Chat Helper] widget script failed', e);
+            }
+        });
+        bindClaudeWidgetHandlers(shadow, sandboxWindow, sandboxDocument);
+        const namesToCall = ['buildSliders', 'render'];
+        namesToCall.forEach((name) => {
+            try {
+                if (typeof sandboxWindow[name] === 'function') sandboxWindow[name]();
+            } catch (_) {}
+        });
+        el.classList.add('claude-widget-mounted');
+    }
+
+    function hydrateClaudeWidgetPreviews(rootEl) {
+        if (!(rootEl instanceof Element || rootEl instanceof ShadowRoot)) return;
+        const scope = rootEl instanceof ShadowRoot ? rootEl : rootEl;
+        scope.querySelectorAll?.('.claude-widget-runtime').forEach((el) => {
+            if (!(el instanceof HTMLElement)) return;
+            const key = String(el.getAttribute('data-widget-key') || '').trim();
+            const entry = claudeWidgetPreviewStore.get(key);
+            if (!entry) return;
+            mountClaudeWidgetPreview(el, entry.html, entry.title);
+        });
     }
 
     function normalizeClaudeImagePart(part, index = 0) {
@@ -383,6 +949,441 @@
             height,
             mimeType: String(part.mimeType || part.mime_type || '').trim()
         };
+    }
+
+    const CLAUDE_EXPORT_SVG_STYLE = [
+        '.t{font:400 14px Arial,"Microsoft YaHei",sans-serif;fill:var(--t,#334155)}',
+        '.th{font:600 14px Arial,"Microsoft YaHei",sans-serif;fill:var(--t,#334155)}',
+        '.ts{font:400 12px Arial,"Microsoft YaHei",sans-serif;fill:var(--color-text-tertiary,#64748b)}',
+        '.box{fill:var(--color-background-secondary,#f8fafc);stroke:rgba(148,163,184,.5);stroke-width:.5}',
+        '.arr{stroke:rgba(71,85,105,.82);stroke-width:1.5;fill:none}',
+        '.leader{stroke:rgba(148,163,184,.92);stroke-width:.5;stroke-dasharray:4 3;fill:none}',
+        '.node{cursor:default}',
+        '.c-gray>rect,.c-gray>circle,.c-gray>ellipse,.c-gray>polygon{fill:#F1EFE8;stroke:#5F5E5A}',
+        '.c-gray>.th,.c-gray>.t{fill:#2C2C2A}.c-gray>.ts{fill:#5F5E5A}',
+        '.c-blue>rect,.c-blue>circle,.c-blue>ellipse,.c-blue>polygon{fill:#E6F1FB;stroke:#185FA5}',
+        '.c-blue>.th,.c-blue>.t{fill:#042C53}.c-blue>.ts{fill:#185FA5}',
+        '.c-red>rect,.c-red>circle,.c-red>ellipse,.c-red>polygon{fill:#FCEBEB;stroke:#A32D2D}',
+        '.c-red>.th,.c-red>.t{fill:#501313}.c-red>.ts{fill:#A32D2D}',
+        '.c-amber>rect,.c-amber>circle,.c-amber>ellipse,.c-amber>polygon{fill:#FAEEDA;stroke:#854F0B}',
+        '.c-amber>.th,.c-amber>.t{fill:#412402}.c-amber>.ts{fill:#854F0B}',
+        '.c-green>rect,.c-green>circle,.c-green>ellipse,.c-green>polygon{fill:#EAF3DE;stroke:#3B6D11}',
+        '.c-green>.th,.c-green>.t{fill:#173404}.c-green>.ts{fill:#3B6D11}',
+        '.c-teal>rect,.c-teal>circle,.c-teal>ellipse,.c-teal>polygon{fill:#E1F5EE;stroke:#0F6E56}',
+        '.c-teal>.th,.c-teal>.t{fill:#04342C}.c-teal>.ts{fill:#0F6E56}',
+        '.c-purple>rect,.c-purple>circle,.c-purple>ellipse,.c-purple>polygon{fill:#EEEDFE;stroke:#534AB7}',
+        '.c-purple>.th,.c-purple>.t{fill:#26215C}.c-purple>.ts{fill:#534AB7}',
+        '.c-coral>rect,.c-coral>circle,.c-coral>ellipse,.c-coral>polygon{fill:#FAECE7;stroke:#993C1D}',
+        '.c-coral>.th,.c-coral>.t{fill:#4A1B0C}.c-coral>.ts{fill:#993C1D}',
+        '.c-pink>rect,.c-pink>circle,.c-pink>ellipse,.c-pink>polygon{fill:#FBEAF0;stroke:#993556}',
+        '.c-pink>.th,.c-pink>.t{fill:#4B1528}.c-pink>.ts{fill:#993556}'
+    ].join('');
+
+    function parseClaudeNumericDimension(value) {
+        const raw = String(value || '').trim();
+        if (!raw) return 0;
+        const match = raw.match(/-?\d+(?:\.\d+)?/);
+        return match ? (Number(match[0]) || 0) : 0;
+    }
+
+    function isClaudeExportableSvgElement(svgEl) {
+        if (!(svgEl instanceof SVGElement)) return false;
+        if (svgEl.closest('#vis-container')) return true;
+        if (String(svgEl.getAttribute('role') || '').toLowerCase() === 'img') return true;
+        if (svgEl.querySelector('title, desc')) return true;
+        const textCount = svgEl.querySelectorAll('text').length;
+        if (textCount >= 3) return true;
+        const viewBox = String(svgEl.getAttribute('viewBox') || '').trim().split(/\s+/).map((x) => Number(x) || 0);
+        const vbWidth = viewBox.length === 4 ? viewBox[2] : 0;
+        const vbHeight = viewBox.length === 4 ? viewBox[3] : 0;
+        if (vbWidth >= 160 && vbHeight >= 100) return true;
+        const width = parseClaudeNumericDimension(svgEl.getAttribute('width'));
+        const height = parseClaudeNumericDimension(svgEl.getAttribute('height'));
+        return width >= 160 || height >= 100;
+    }
+
+    function normalizeClaudeSvgPart(svgEl, index = 0) {
+        if (!(svgEl instanceof SVGElement)) return null;
+        const clone = svgEl.cloneNode(true);
+        if (!hasClaudeSvgDrawableContent(clone)) return null;
+        const allNodes = [clone, ...Array.from(clone.querySelectorAll('*'))];
+        allNodes.forEach((el) => {
+            Array.from(el.attributes || []).forEach((attr) => {
+                if (/^on/i.test(String(attr.name || ''))) {
+                    el.removeAttribute(attr.name);
+                }
+            });
+        });
+        Array.from(clone.querySelectorAll('script')).forEach((el) => el.remove());
+        if (!clone.getAttribute('xmlns')) clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+        if (!clone.getAttribute('xmlns:xlink')) clone.setAttribute('xmlns:xlink', 'http://www.w3.org/1999/xlink');
+        if (!clone.getAttribute('role')) clone.setAttribute('role', 'img');
+
+        const titleText = String(clone.querySelector('title')?.textContent || '').trim();
+        const descText = String(clone.querySelector('desc')?.textContent || '').trim();
+        const fileName = titleText || `图像${index + 1}`;
+
+        const styleEl = clone.ownerDocument.createElementNS('http://www.w3.org/2000/svg', 'style');
+        styleEl.setAttribute('data-ai-nodes-export-style', '1');
+        styleEl.textContent = CLAUDE_EXPORT_SVG_STYLE;
+        const firstNonMeta = Array.from(clone.childNodes || []).find((node) => {
+            if (!(node instanceof Element)) return true;
+            const tag = String(node.tagName || '').toLowerCase();
+            return tag !== 'title' && tag !== 'desc';
+        }) || null;
+        clone.insertBefore(styleEl, firstNonMeta);
+
+        const baseStyle = String(clone.getAttribute('style') || '').trim();
+        clone.setAttribute(
+            'style',
+            `${baseStyle ? `${baseStyle};` : ''}max-width:680px;width:100%;height:auto;display:block;margin:0 auto;overflow:visible;--t:#334155;--color-background-primary:#ffffff;--color-background-secondary:#f8fafc;--color-background-info:#dbeafe;--color-border-primary:#94a3b8;--color-border-secondary:#cbd5e1;--color-border-tertiary:#e2e8f0;--color-text-primary:#0f172a;--color-text-secondary:#475569;--color-text-tertiary:#64748b;--color-text-info:#1d4ed8;`
+        );
+
+        const rawWidthAttr = String(clone.getAttribute('width') || '').trim();
+        const rawHeightAttr = String(clone.getAttribute('height') || '').trim();
+        let width = /%/.test(rawWidthAttr) ? 0 : parseClaudeNumericDimension(rawWidthAttr);
+        let height = /%/.test(rawHeightAttr) ? 0 : parseClaudeNumericDimension(rawHeightAttr);
+        const viewBox = String(clone.getAttribute('viewBox') || '').trim().split(/\s+/).map((x) => Number(x) || 0);
+        if ((!width || !height) && viewBox.length === 4) {
+            if (!width) width = viewBox[2] || 0;
+            if (!height) height = viewBox[3] || 0;
+        }
+        if (viewBox.length === 4) {
+            if (!width) width = viewBox[2] || width;
+            if (!height) height = viewBox[3] || height;
+        }
+        if (width > 0 && (!rawWidthAttr || /%/.test(rawWidthAttr))) clone.setAttribute('width', String(width));
+        if (height > 0 && (!rawHeightAttr || /%/.test(rawHeightAttr))) clone.setAttribute('height', String(height));
+        if (!clone.getAttribute('viewBox') && width > 0 && height > 0) {
+            clone.setAttribute('viewBox', `0 0 ${width} ${height}`);
+        }
+        if (!clone.getAttribute('preserveAspectRatio')) {
+            clone.setAttribute('preserveAspectRatio', 'xMidYMid meet');
+        }
+
+        let svgMarkup = '';
+        try {
+            svgMarkup = new XMLSerializer().serializeToString(clone);
+        } catch (_) {
+            svgMarkup = clone.outerHTML || '';
+        }
+        if (!svgMarkup.trim()) return null;
+
+        return {
+            type: 'svg',
+            fileName,
+            title: titleText,
+            description: descText,
+            svg: svgMarkup,
+            width,
+            height,
+            text: [titleText, descText].filter(Boolean).join(' · ')
+        };
+    }
+
+    function buildClaudeSvgDataUrl(svgMarkup) {
+        const raw = String(svgMarkup || '').trim();
+        if (!raw) return '';
+        return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(raw)}`;
+    }
+
+    const claudeInlineSvgPreviewBlobUrlCache = new Map();
+
+    function getClaudeInlineSvgPreviewUrl(svgMarkup) {
+        const raw = String(svgMarkup || '').trim();
+        if (!raw) return '';
+        const key = hashTextForArchiveKey(raw);
+        if (claudeInlineSvgPreviewBlobUrlCache.has(key)) {
+            return claudeInlineSvgPreviewBlobUrlCache.get(key) || '';
+        }
+        const blob = new Blob([raw], { type: 'image/svg+xml;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        claudeInlineSvgPreviewBlobUrlCache.set(key, url);
+        return url;
+    }
+
+    function inferClaudeWidgetShapeKind(html, title = '') {
+        const raw = `${String(title || '')}\n${String(html || '')}`.toLowerCase();
+        const checks = [
+            { kind: 'slot', patterns: [/activekey\s*[:=]\s*['"`]slot/, /currenthole\s*[:=]\s*['"`]slot/, /腰形孔/] },
+            { kind: 'd', patterns: [/activekey\s*[:=]\s*['"`]d\b/, /currenthole\s*[:=]\s*['"`]d\b/, /d形孔/, />\s*d\s*形\s*孔\s*</i, /\bd-shape\b/, /\bd hole\b/] },
+            { kind: 'triangle', patterns: [/activekey\s*[:=]\s*['"`]triangle/, /currenthole\s*[:=]\s*['"`]triangle/, /三角孔/, /\btriangle\b/] },
+            { kind: 'cross', patterns: [/activekey\s*[:=]\s*['"`]cross/, /currenthole\s*[:=]\s*['"`]cross/, /十字孔/, /\bcross\b/] }
+        ];
+        for (const item of checks) {
+            if (item.patterns.some((pattern) => pattern.test(raw))) return item.kind;
+        }
+        return 'slot';
+    }
+
+    function escapeClaudeWidgetText(str) {
+        return String(str || '')
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;');
+    }
+
+    function isClaudeCadHoleWidgetHtml(html, title = '') {
+        const raw = `${String(title || '')}\n${String(html || '')}`.toLowerCase();
+        if (raw.includes('id="hole-svg"') || raw.includes("id='hole-svg'")) return true;
+        if (raw.includes('id="hole-title"') || raw.includes("id='hole-title'")) return true;
+        if (raw.includes('switchhole(')) return true;
+        if (raw.includes('cad异形孔') || raw.includes('cad hole parameter')) return true;
+        const holeLabels = ['腰形孔', 'd形孔', '三角孔', '十字孔'];
+        const hasAllHoleLabels = holeLabels.every((label) => raw.includes(label));
+        const hasInteractiveHoleControls = /(?:onclick|oninput|addeventlistener|data-[\w-]+)=/i.test(raw)
+            && /(?:总长\s*l|半径\s*r|提取参数|面积\s*a|周长\s*c)/i.test(raw);
+        return hasAllHoleLabels && hasInteractiveHoleControls;
+    }
+
+    function buildClaudeWidgetFallbackSvg(kind = 'slot', title = '') {
+        const labelMap = {
+            slot: ['腰形孔', 'Slot'],
+            d: ['D形孔', 'D-shape'],
+            triangle: ['三角孔', 'Triangle'],
+            cross: ['十字孔', 'Cross']
+        };
+        const [cnLabel, enLabel] = labelMap[kind] || labelMap.slot;
+        const safeTitle = escapeClaudeWidgetText(title || `${cnLabel}示意图`);
+        const tabs = [
+            ['slot', '腰形孔'],
+            ['d', 'D形孔'],
+            ['triangle', '三角孔'],
+            ['cross', '十字孔']
+        ].map(([tabKind, label], index) => {
+            const x = 48 + index * 108;
+            const active = tabKind === kind;
+            return `
+                <rect x="${x}" y="28" width="92" height="46" rx="10" fill="${active ? '#f8fbff' : '#ffffff'}" stroke="${active ? '#9eb9df' : '#c9c9c9'}"/>
+                <text x="${x + 46}" y="57" text-anchor="middle" class="tab${active ? ' active-tab' : ''}">${escapeClaudeWidgetText(label)}</text>
+            `;
+        }).join('');
+        const shapeSpecs = {
+            slot: {
+                controls: [['总长 L', '90 mm'], ['半径 R', '20 mm']],
+                rows: [['总长 L', '90.0 mm'], ['宽度 W', '40.0 mm'], ['圆弧半径 R', '20.0 mm'], ['圆心距 d', '50.0 mm'], ['面积 A', '3256.6 mm²'], ['周长 C', '225.7 mm']]
+            },
+            d: {
+                controls: [['半径 R', '55 mm'], ['弦高 h', '35 mm']],
+                rows: [['半径 R', '55.0 mm'], ['弦高 h', '35.0 mm'], ['弦长 c', '87.2 mm'], ['圆心角 θ', '105.0°'], ['弧长 s', '100.8 mm'], ['面积 A', '2605.4 mm²']]
+            },
+            triangle: {
+                controls: [['边长 a', '80 mm'], ['旋转角 θ', '0°']],
+                rows: [['边长 a', '80.0 mm'], ['外接圆 R', '46.2 mm'], ['内切圆 r', '23.1 mm'], ['高度 H', '69.3 mm'], ['面积 A', '2771.3 mm²'], ['周长 C', '240.0 mm']]
+            },
+            cross: {
+                controls: [['臂长 L', '90 mm'], ['臂宽 W', '28 mm']],
+                rows: [['臂长 L', '90.0 mm'], ['臂宽 W', '28.0 mm'], ['总宽 B', '90.0 mm'], ['凹角数', '4'], ['面积 A', '3920.0 mm²'], ['周长 C', '360.0 mm']]
+            }
+        };
+        const spec = shapeSpecs[kind] || shapeSpecs.slot;
+        const controls = spec.controls.map(([label, value], index) => {
+            const y = 140 + index * 34;
+            return `
+                <text x="584" y="${y}" class="label">${escapeClaudeWidgetText(label)}</text>
+                <line x1="716" y1="${y - 6}" x2="916" y2="${y - 6}" stroke="#e5e7eb" stroke-width="4" stroke-linecap="round"/>
+                <circle cx="${index === 0 ? 820 : 808}" cy="${y - 6}" r="11" fill="#ffffff" stroke="#c7c7c7"/>
+                <text x="930" y="${y}" class="value">${escapeClaudeWidgetText(value)}</text>
+            `;
+        }).join('');
+        const rows = spec.rows.map(([label, value], index) => {
+            const y = 250 + index * 39;
+            return `
+                <line x1="584" y1="${y + 13}" x2="956" y2="${y + 13}" stroke="#e5e0d7"/>
+                <text x="584" y="${y}" class="label">${escapeClaudeWidgetText(label)}</text>
+                <text x="956" y="${y}" text-anchor="end" class="row-value">${escapeClaudeWidgetText(value)}</text>
+            `;
+        }).join('');
+        const drawShape = (() => {
+            if (kind === 'd') {
+                return `
+                    <path d="M330 178 A82 82 0 0 1 330 342 L238 342 L238 178 Z" class="hole"/>
+                    <line x1="238" y1="178" x2="238" y2="342" class="construction"/>
+                    <line x1="238" y1="260" x2="330" y2="260" class="construction"/>
+                    <text x="344" y="266" class="orange">R=55</text>
+                    <line x1="204" y1="178" x2="204" y2="342" class="dim green"/>
+                    <polygon points="204,178 198,187 210,187" class="green-fill"/>
+                    <polygon points="204,342 198,333 210,333" class="green-fill"/>
+                    <text x="138" y="266" class="green">弦高 h</text>
+                `;
+            }
+            if (kind === 'triangle') {
+                return `
+                    <polygon points="278,158 174,340 382,340" class="hole"/>
+                    <circle cx="278" cy="279" r="78" class="guide orange-stroke"/>
+                    <circle cx="278" cy="279" r="42" class="guide green-stroke"/>
+                    <text x="364" y="212" class="orange">R</text>
+                    <text x="286" y="282" class="green">r</text>
+                    <line x1="174" y1="374" x2="382" y2="374" class="dim green"/>
+                    <polygon points="174,374 183,368 183,380" class="green-fill"/>
+                    <polygon points="382,374 373,368 373,380" class="green-fill"/>
+                    <text x="244" y="402" class="green">边长 a</text>
+                `;
+            }
+            if (kind === 'cross') {
+                return `
+                    <path d="M234 154 H322 V222 H390 V310 H322 V378 H234 V310 H166 V222 H234 Z" class="hole"/>
+                    <line x1="166" y1="412" x2="390" y2="412" class="dim green"/>
+                    <polygon points="166,412 175,406 175,418" class="green-fill"/>
+                    <polygon points="390,412 381,406 381,418" class="green-fill"/>
+                    <text x="244" y="440" class="green">臂长 L</text>
+                    <line x1="424" y1="222" x2="424" y2="310" class="dim red"/>
+                    <polygon points="424,222 418,231 430,231" class="red-fill"/>
+                    <polygon points="424,310 418,301 430,301" class="red-fill"/>
+                    <text x="438" y="270" class="red">臂宽 W</text>
+                `;
+            }
+            return `
+                <path d="M218 260 A36 36 0 0 1 254 224 H326 A36 36 0 0 1 362 260 A36 36 0 0 1 326 296 H254 A36 36 0 0 1 218 260 Z" class="hole"/>
+                <line x1="254" y1="260" x2="326" y2="260" class="construction"/>
+                <line x1="254" y1="250" x2="254" y2="270" class="crosshair"/>
+                <line x1="244" y1="260" x2="264" y2="260" class="crosshair"/>
+                <line x1="326" y1="250" x2="326" y2="270" class="crosshair"/>
+                <line x1="316" y1="260" x2="336" y2="260" class="crosshair"/>
+                <text x="368" y="268" class="orange">R=20</text>
+                <line x1="254" y1="330" x2="326" y2="330" class="dim red"/>
+                <polygon points="254,330 263,324 263,336" class="red-fill"/>
+                <polygon points="326,330 317,324 317,336" class="red-fill"/>
+                <text x="244" y="356" class="red">间距 d = 50.0 mm</text>
+                <line x1="218" y1="392" x2="362" y2="392" class="dim green"/>
+                <polygon points="218,392 227,386 227,398" class="green-fill"/>
+                <polygon points="362,392 353,386 353,398" class="green-fill"/>
+                <text x="250" y="420" class="green">总长 L = 90 mm</text>
+            `;
+        })();
+        return `
+            <svg xmlns="http://www.w3.org/2000/svg" width="980" height="590" viewBox="0 0 980 590" role="img" aria-label="${escapeHtmlAttr(cnLabel)}">
+                <title>${safeTitle}</title>
+                <defs>
+                    <pattern id="cad-hatch" width="12" height="12" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+                        <line x1="0" y1="0" x2="0" y2="12" stroke="#e8deca" stroke-width="2"/>
+                    </pattern>
+                </defs>
+                <style>
+                    .tab{font:600 17px Arial,"Microsoft YaHei",sans-serif;fill:#222}
+                    .active-tab{fill:#111}
+                    .title{font:700 21px Arial,"Microsoft YaHei",sans-serif;fill:#111}
+                    .pill{font:700 14px Arial,"Microsoft YaHei",sans-serif;fill:#2f6fdc}
+                    .label{font:400 16px Arial,"Microsoft YaHei",sans-serif;fill:#374151}
+                    .value{font:600 16px Arial,"Microsoft YaHei",sans-serif;fill:#374151}
+                    .row-value{font:700 17px Arial,"Microsoft YaHei",sans-serif;fill:#202124}
+                    .button-text{font:700 17px Arial,"Microsoft YaHei",sans-serif;fill:#111}
+                    .hole{fill:#fff;stroke:#2f80ed;stroke-width:3}
+                    .guide{fill:none;stroke-width:2;stroke-dasharray:7 6}
+                    .construction,.crosshair{stroke:#8d99a6;stroke-width:1.4}
+                    .dim{stroke-width:2;fill:none}
+                    .dim.green{stroke:#2f7d16}
+                    .dim.red{stroke:#ff4b4b}
+                    .green{font:600 16px Arial,"Microsoft YaHei",sans-serif;fill:#2f7d16}
+                    .red{font:600 16px Arial,"Microsoft YaHei",sans-serif;fill:#ff4b4b}
+                    .orange{font:600 16px Arial,"Microsoft YaHei",sans-serif;fill:#f97316}
+                    .green-fill{fill:#22a447}
+                    .red-fill{fill:#ff4b4b}
+                    .orange-stroke{stroke:#f97316}
+                    .green-stroke{stroke:#22a447}
+                </style>
+                <rect width="980" height="590" fill="#ffffff"/>
+                ${tabs}
+                <rect x="48" y="104" width="496" height="404" rx="14" fill="#fbfaf6" stroke="#dad2c4"/>
+                <rect x="146" y="166" width="304" height="276" fill="url(#cad-hatch)" opacity=".7"/>
+                ${drawShape}
+                <text x="584" y="122" class="title">${escapeClaudeWidgetText(cnLabel)}</text>
+                <rect x="652" y="100" width="48" height="25" rx="13" fill="#dbeafe"/>
+                <text x="676" y="118" text-anchor="middle" class="pill">${escapeClaudeWidgetText(enLabel)}</text>
+                ${controls}
+                <text x="584" y="222" class="label">提取参数</text>
+                ${rows}
+                <rect x="584" y="514" width="372" height="46" rx="10" fill="#ffffff" stroke="#b9b9b9"/>
+                <text x="770" y="543" text-anchor="middle" class="button-text">生成提取代码 ↗</text>
+            </svg>
+        `.trim();
+    }
+
+    function buildClaudeWidgetFallbackSvgPart(html, title = '') {
+        const kind = inferClaudeWidgetShapeKind(html, title);
+        const labelMap = {
+            slot: '腰形孔',
+            d: 'D形孔',
+            triangle: '三角孔',
+            cross: '十字孔'
+        };
+        const fileLabel = labelMap[kind] || '异形孔';
+        return {
+            type: 'svg',
+            fileName: `${fileLabel}预览图`,
+            title: `${fileLabel}静态预览`,
+            description: '根据 Claude 交互 HTML 生成的静态示意图',
+            svg: buildClaudeWidgetFallbackSvg(kind, title || `${fileLabel}静态预览`),
+            width: 980,
+            height: 590,
+            text: `${fileLabel}静态预览`
+        };
+    }
+
+    function hasClaudeSvgDrawableContent(svgEl) {
+        if (!(svgEl instanceof SVGElement)) return false;
+        const scopedRoot = svgEl.querySelector('#hole-group') || svgEl;
+        const drawables = Array.from(scopedRoot.querySelectorAll('path, rect, circle, ellipse, polygon, polyline, line, text, image'))
+            .filter((el) => !el.closest('defs'));
+        return drawables.length > 0;
+    }
+
+    function parseClaudeHtmlNodeRoot(raw) {
+        const html = String(raw || '').trim();
+        if (!html) return null;
+        try {
+            const parser = new DOMParser();
+            const doc = parser.parseFromString(html, 'text/html');
+            if (/<(?:!doctype\s+html|html|head|body)\b/i.test(html)) {
+                return doc?.body || doc?.documentElement || null;
+            }
+            doc.documentElement.innerHTML = `<head></head><body><div id="__claude_media_root__">${html}</div></body>`;
+            return doc.querySelector('#__claude_media_root__');
+        } catch (_) {
+            return null;
+        }
+    }
+
+    function extractClaudeRenderablePartsFromHtmlFragment(html) {
+        const raw = String(html || '').trim();
+        if (!raw) return [];
+        const root = parseClaudeHtmlNodeRoot(raw);
+        if (!(root instanceof Element)) return [];
+
+        const mediaNodes = [];
+        const seen = new Set();
+        const pushNode = (node) => {
+            if (!node || seen.has(node)) return;
+            seen.add(node);
+            mediaNodes.push(node);
+        };
+
+        root.querySelectorAll('#vis-container svg, svg[role="img"], img').forEach(pushNode);
+        if (!mediaNodes.length) {
+            root.querySelectorAll('svg').forEach((node) => {
+                if (isClaudeExportableSvgElement(node)) pushNode(node);
+            });
+        }
+
+        const out = [];
+        mediaNodes.forEach((node, idx) => {
+            const tag = String(node.tagName || '').toLowerCase();
+            if (tag === 'svg') {
+                const svgPart = normalizeClaudeSvgPart(node, idx);
+                if (svgPart) out.push(svgPart);
+                return;
+            }
+            if (tag === 'img') {
+                const imgPart = normalizeClaudeImagePart({
+                    fileName: node.getAttribute('alt') || `图片${idx + 1}`,
+                    previewUrl: node.getAttribute('src') || '',
+                    width: node.getAttribute('width') || 0,
+                    height: node.getAttribute('height') || 0
+                }, idx);
+                if (imgPart) out.push(imgPart);
+            }
+        });
+        return out;
     }
 
     function extractClaudeToolResultText(content) {
@@ -422,14 +1423,8 @@
     function extractClaudeVisibleTextFromHtmlFragment(html) {
         const raw = String(html || '').trim();
         if (!raw) return '';
-        let doc;
-        try {
-            const parser = new DOMParser();
-            doc = parser.parseFromString(`<div id="__claude_widget_root__">${raw}</div>`, 'text/html');
-        } catch (_) {
-            return raw;
-        }
-        const root = doc?.querySelector('#__claude_widget_root__');
+        const hasRenderableMedia = extractClaudeRenderablePartsFromHtmlFragment(raw).length > 0;
+        const root = parseClaudeHtmlNodeRoot(raw);
         if (!(root instanceof Element)) return raw;
 
         const BLOCK_TAGS = new Set([
@@ -487,6 +1482,7 @@
             }
 
             if (tag === 'svg') {
+                if (hasRenderableMedia && isClaudeExportableSvgElement(node)) return;
                 const svgTexts = Array.from(node.querySelectorAll('title, desc, text'))
                     .map((el) => normalizeLine(el.textContent || ''))
                     .filter(Boolean);
@@ -551,6 +1547,57 @@
         return `【工具调用: ${toolName}】\n${out.join('\n\n')}`.trim();
     }
 
+    function looksLikeClaudeWidgetHtml(value) {
+        const raw = String(value || '').trim();
+        if (!raw) return false;
+        return /<[^>]+>/i.test(raw)
+            && (
+                /id=["']vis-container["']/i.test(raw)
+                || /class=["'][^"']*\bstep-card\b/i.test(raw)
+                || /id=["']hole-svg["']/i.test(raw)
+                || /\bsendPrompt\s*\(/i.test(raw)
+                || /<style[\s\S]*<\/style>/i.test(raw) && /<(?:div|section|article|main|svg|pre)\b/i.test(raw)
+            );
+    }
+
+    function findClaudeWidgetCodeInValue(value, depth = 0, seen = new Set()) {
+        if (depth > 5 || value == null) return '';
+        if (typeof value === 'string') return looksLikeClaudeWidgetHtml(value) ? value : '';
+        if (typeof value !== 'object') return '';
+        if (seen.has(value)) return '';
+        seen.add(value);
+
+        const priorityKeys = [
+            'widget_code',
+            'widgetCode',
+            'html',
+            'html_content',
+            'htmlContent',
+            'content',
+            'code',
+            'text'
+        ];
+        for (const key of priorityKeys) {
+            if (!Object.prototype.hasOwnProperty.call(value, key)) continue;
+            const found = findClaudeWidgetCodeInValue(value[key], depth + 1, seen);
+            if (found) return found;
+        }
+
+        if (Array.isArray(value)) {
+            for (const item of value) {
+                const found = findClaudeWidgetCodeInValue(item, depth + 1, seen);
+                if (found) return found;
+            }
+            return '';
+        }
+
+        for (const item of Object.values(value)) {
+            const found = findClaudeWidgetCodeInValue(item, depth + 1, seen);
+            if (found) return found;
+        }
+        return '';
+    }
+
     function extractClaudePartsFromContent(content) {
         const items = Array.isArray(content) ? content : [];
         const out = [];
@@ -565,8 +1612,38 @@
             if (fragType === 'tool_use') {
                 const toolName = String(frag.name || '').trim();
                 if (shouldIgnoreClaudeToolName(toolName)) return;
+                const widgetCode = findClaudeWidgetCodeInValue(frag.input) || findClaudeWidgetCodeInValue(frag);
+                const widgetFilePart = toolName === 'visualize:show_widget'
+                    ? normalizeClaudeWidgetFilePart(widgetCode, idx, String(frag.id || '').trim())
+                    : null;
+                if (toolName === 'visualize:show_widget') {
+                    if (widgetFilePart) out.push(widgetFilePart);
+                    const widgetPreviewSource = String(widgetFilePart?.inlineContent || '').trim()
+                        || getClaudeWidgetPreviewSource(widgetCode, String(widgetFilePart?.fileName || '').trim());
+                    const widgetText = extractClaudeVisibleTextFromHtmlFragment(widgetPreviewSource);
+                    if (widgetText) {
+                        out.push({
+                            type: 'tool_use',
+                            name: toolName,
+                            toolUseId: String(frag.id || '').trim(),
+                            integrationName: String(frag.integration_name || '').trim(),
+                            isMcpApp: Boolean(frag.is_mcp_app),
+                            input: frag.input && typeof frag.input === 'object' ? JSON.parse(JSON.stringify(frag.input)) : frag.input,
+                            text: widgetText
+                        });
+                    }
+                    return;
+                }
+                const widgetPreviewSource = toolName === 'visualize:show_widget'
+                    ? String(widgetFilePart?.inlineContent || '').trim() || getClaudeWidgetPreviewSource(widgetCode, String(widgetFilePart?.fileName || '').trim())
+                    : '';
+                const mediaParts = toolName === 'visualize:show_widget'
+                    ? extractClaudeRenderablePartsFromHtmlFragment(widgetPreviewSource)
+                    : [];
+                if (mediaParts.length) out.push(...mediaParts);
+                if (widgetFilePart) out.push(widgetFilePart);
                 const widgetText = toolName === 'visualize:show_widget'
-                    ? extractClaudeVisibleTextFromHtmlFragment(frag.input?.widget_code || '')
+                    ? extractClaudeVisibleTextFromHtmlFragment(widgetPreviewSource)
                     : '';
                 const summary = widgetText || summarizeClaudeToolInput(toolName, frag.input);
                 out.push({
@@ -583,6 +1660,25 @@
             if (fragType === 'tool_result') {
                 const toolName = String(frag.name || '').trim();
                 if (shouldIgnoreClaudeToolName(toolName)) return;
+                const widgetCode = findClaudeWidgetCodeInValue(frag.content) || findClaudeWidgetCodeInValue(frag);
+                if (widgetCode) {
+                    const widgetFilePart = normalizeClaudeWidgetFilePart(widgetCode, idx, String(frag.tool_use_id || frag.id || '').trim());
+                    if (widgetFilePart) out.push(widgetFilePart);
+                    const widgetPreviewSource = String(widgetFilePart?.inlineContent || '').trim() || widgetCode;
+                    const widgetText = extractClaudeVisibleTextFromHtmlFragment(widgetPreviewSource);
+                    if (widgetText) {
+                        out.push({
+                            type: 'tool_result',
+                            name: toolName || 'visualize:show_widget',
+                            toolUseId: String(frag.tool_use_id || '').trim(),
+                            integrationName: String(frag.integration_name || '').trim(),
+                            isError: Boolean(frag.is_error),
+                            content: Array.isArray(frag.content) ? JSON.parse(JSON.stringify(frag.content)) : frag.content,
+                            text: widgetText
+                        });
+                    }
+                    return;
+                }
                 const resultText = extractClaudeToolResultText(frag.content);
                 if (isClaudeToolBoilerplateText(resultText)) return;
                 const prefix = `【工具结果: ${String(frag.name || '').trim() || 'tool'}${frag.is_error ? ' / error' : ''}】`;
@@ -613,8 +1709,38 @@
         const out = [];
         list.forEach((file, idx) => {
             if (!file || typeof file !== 'object') return;
+            const fileName = String(file.file_name || file.name || file.filename || '').trim() || `文件${idx + 1}`;
+            const fileUuid = String(file.file_uuid || file.uuid || '').trim();
             const fileKind = String(file.file_kind || file.kind || '').trim().toLowerCase();
             const mimeType = String(file.mime_type || file.mimeType || '').trim().toLowerCase();
+            const url = resolveClaudeAssetUrl(
+                file.preview_url
+                || file.url
+                || file.download_url
+                || file.downloadUrl
+                || file.file_url
+                || file.fileUrl
+                || file.asset?.url
+                || ''
+            );
+            const isHtml = mimeType.includes('html') || /\.html?$/i.test(fileName);
+            if (isHtml) {
+                const directHtml = findClaudeWidgetCodeInValue(file);
+                const cached = findClaudeDownloadedHtmlFile(directHtml, fileName);
+                const inlineContent = normalizeClaudeInlineHtmlContent(directHtml || cached?.content || '', fileName);
+                const archiveSeed = `${fileUuid || fileName}:${inlineContent || url || idx}`;
+                out.push({
+                    type: 'file',
+                    fileName,
+                    fileUuid,
+                    mimeType: mimeType || 'text/html',
+                    url,
+                    inlineExt: 'html',
+                    inlineArchiveKey: `file_${hashTextForArchiveKey(archiveSeed)}`,
+                    inlineContent
+                });
+                return;
+            }
             const isImage = fileKind === 'image'
                 || mimeType.startsWith('image/')
                 || Boolean(file.preview_url || file.thumbnail_url || file.preview_asset?.url || file.thumbnail_asset?.url);
@@ -632,13 +1758,58 @@
             }
             out.push({
                 type: 'file',
-                fileName: String(file.file_name || file.name || file.filename || '').trim() || `文件${idx + 1}`,
-                fileUuid: String(file.file_uuid || file.uuid || '').trim(),
+                fileName,
+                fileUuid,
                 mimeType,
-                url: resolveClaudeAssetUrl(file.preview_url || file.url || '')
+                url
             });
         });
         return out;
+    }
+
+    async function hydrateClaudeHtmlFileParts(messages) {
+        const list = Array.isArray(messages) ? messages : [];
+        const targets = [];
+        list.forEach((msg) => {
+            const parts = Array.isArray(msg?.parts) ? msg.parts : [];
+            parts.forEach((part) => {
+                if (!part || typeof part !== 'object') return;
+                if (String(part.type || '').trim().toLowerCase() !== 'file') return;
+                const fileName = String(part.fileName || '').trim();
+                const mimeType = String(part.mimeType || '').trim().toLowerCase();
+                const isHtml = mimeType.includes('html') || /\.html?$/i.test(fileName);
+                if (!isHtml || String(part.inlineContent || '').trim()) return;
+                const cached = findClaudeDownloadedHtmlFile('', fileName);
+                if (cached?.content) {
+                    part.inlineContent = normalizeClaudeInlineHtmlContent(cached.content, fileName);
+                    part.inlineExt = 'html';
+                    part.inlineArchiveKey = part.inlineArchiveKey || `file_${hashTextForArchiveKey(`${part.fileUuid || fileName}:${part.inlineContent}`)}`;
+                    return;
+                }
+                const url = resolveClaudeAssetUrl(part.url || '');
+                if (url) targets.push({ part, fileName, url });
+            });
+        });
+        for (const target of targets) {
+            try {
+                const resp = await fetch(target.url, { method: 'GET', credentials: 'include', cache: 'no-store' });
+                if (!resp.ok) continue;
+                const contentType = String(resp.headers.get('content-type') || '').toLowerCase();
+                const text = await resp.text();
+                if (!contentType.includes('html') && !looksLikeClaudeWidgetHtml(text) && !/\.html?$/i.test(target.fileName)) continue;
+                const inlineContent = normalizeClaudeInlineHtmlContent(text, target.fileName);
+                if (!inlineContent) continue;
+                target.part.inlineContent = inlineContent;
+                target.part.inlineExt = 'html';
+                target.part.inlineArchiveKey = target.part.inlineArchiveKey || `file_${hashTextForArchiveKey(`${target.part.fileUuid || target.fileName}:${inlineContent}`)}`;
+                rememberClaudeDownloadedHtmlFile({
+                    fileName: target.fileName,
+                    content: inlineContent,
+                    size: inlineContent.length
+                });
+            } catch (_) {}
+        }
+        return list;
     }
 
     function buildClaudeTextFromParts(parts, mode = 'plain') {
@@ -646,6 +1817,106 @@
         const out = [];
         let imageSerial = 0;
         let fileSerial = 0;
+
+        const renderMarkdownImagePart = (mediaPart, fallbackName = '') => {
+            if (!mediaPart || typeof mediaPart !== 'object') return '';
+            const mediaType = String(mediaPart.type || '').trim().toLowerCase();
+            imageSerial += 1;
+            if (mediaType === 'svg') {
+                const name = String(mediaPart.fileName || fallbackName || '').trim() || `图像${imageSerial}`;
+                const svgMarkup = String(mediaPart.svg || '').trim();
+                return svgMarkup
+                    ? `![图像${imageSerial} ${name}](data:image/svg+xml;utf8,${encodeURIComponent(svgMarkup)})`
+                    : `[图像${imageSerial}] ${name}`;
+            }
+            if (mediaType === 'image') {
+                const name = String(mediaPart.fileName || fallbackName || '').trim() || `图片${imageSerial}`;
+                const url = resolveExportAssetUrl(mediaPart.previewUrl || mediaPart.url || mediaPart.thumbnailUrl || '');
+                return url
+                    ? `![图片${imageSerial} ${name}](${url})`
+                    : `[图片${imageSerial}] ${name}`;
+            }
+            imageSerial -= 1;
+            return '';
+        };
+
+        const sanitizeMarkdownWidgetBody = (bodyHtml) => {
+            const raw = String(bodyHtml || '').trim();
+            if (!raw) return '';
+            const root = parseClaudeHtmlNodeRoot(raw);
+            if (!(root instanceof Element)) {
+                return raw
+                    .replace(/<script[\s\S]*?<\/script>/gi, '')
+                    .replace(/<style[\s\S]*?<\/style>/gi, '')
+                    .trim();
+            }
+            root.querySelectorAll('script, style, noscript, template').forEach((el) => el.remove());
+            root.querySelectorAll('*').forEach((el) => {
+                Array.from(el.attributes || []).forEach((attr) => {
+                    const attrName = String(attr.name || '').toLowerCase();
+                    const attrValue = String(attr.value || '').trim();
+                    if (attrName.startsWith('on')) el.removeAttribute(attr.name);
+                    if ((attrName === 'href' || attrName === 'src') && /^javascript:/i.test(attrValue)) {
+                        el.removeAttribute(attr.name);
+                    }
+                });
+            });
+            return root.innerHTML.trim();
+        };
+
+        const scopeMarkdownWidgetStyles = (stylesHtml, className) => {
+            const cssChunks = [];
+            String(stylesHtml || '').replace(/<style[^>]*>([\s\S]*?)<\/style>/gi, (_, css) => {
+                cssChunks.push(String(css || ''));
+                return '';
+            });
+            if (!cssChunks.length || !className) return '';
+            const scope = `.${className}`;
+            const scoped = cssChunks.map((css) => String(css || '').replace(/([^{}]+)\{([^{}]*)\}/g, (rule, selector, body) => {
+                const rawSelector = String(selector || '').trim();
+                if (!rawSelector || rawSelector.startsWith('@')) return rule;
+                const scopedSelector = rawSelector
+                    .split(',')
+                    .map((sel) => {
+                        const s = String(sel || '').trim();
+                        if (!s) return '';
+                        if (/^(?:html|body|:root)\b/i.test(s)) return scope;
+                        if (s.startsWith(scope)) return s;
+                        return `${scope} ${s}`;
+                    })
+                    .filter(Boolean)
+                    .join(', ');
+                return scopedSelector ? `${scopedSelector}{${body}}` : rule;
+            })).join('\n');
+            return scoped.trim() ? `<style>\n${scoped}\n</style>` : '';
+        };
+
+        const renderInlineFileSnapshotForMarkdown = (part, fileName) => {
+            const inlineContent = String(part?.inlineContent || '').trim();
+            if (!inlineContent) return '';
+            const mediaParts = extractClaudeRenderablePartsFromHtmlFragment(inlineContent);
+            const mediaMarkdown = mediaParts
+                .map((mp) => renderMarkdownImagePart(mp, fileName))
+                .filter(Boolean);
+            if (mediaMarkdown.length) return mediaMarkdown.join('\n\n');
+            if (isClaudeCadHoleWidgetHtml(inlineContent, fileName)) {
+                return renderMarkdownImagePart(buildClaudeWidgetFallbackSvgPart(inlineContent, fileName), fileName);
+            }
+            const parsed = parseClaudeWidgetHtmlSource(inlineContent);
+            const bodyHtml = sanitizeMarkdownWidgetBody(parsed.bodyHtml || inlineContent);
+            if (!bodyHtml) return '';
+            const className = `claude-md-widget-${hashTextForArchiveKey(inlineContent)}`;
+            const styleBlock = scopeMarkdownWidgetStyles(parsed.styles || '', className);
+            const caption = escapeClaudeWidgetText(fileName || '交互演示');
+            return [
+                `<div class="${className}" data-ai-chat-helper-snapshot="true">`,
+                `<p><strong>附件快照：${caption}</strong></p>`,
+                styleBlock,
+                bodyHtml,
+                '</div>'
+            ].filter(Boolean).join('\n');
+        };
+
         list.forEach((part) => {
             if (!part || typeof part !== 'object') return;
             const type = String(part.type || '').trim().toLowerCase();
@@ -660,23 +1931,34 @@
                 return;
             }
             if (type === 'image') {
-                imageSerial += 1;
-                const name = String(part.fileName || '').trim() || `图片${imageSerial}`;
-                const url = resolveClaudeAssetUrl(part.previewUrl || part.url || part.thumbnailUrl || '');
-                if (mode === 'markdown' && url) {
-                    out.push(`![图片${imageSerial} ${name}](${url})`);
-                } else {
-                    out.push(`[图片${imageSerial}] ${name}`);
-                    return;
-                }
-                if (mode !== 'markdown') out.push(`[图片${imageSerial}] ${name}`);
+                const nextSerial = imageSerial + 1;
+                const name = String(part.fileName || '').trim() || `图片${nextSerial}`;
+                const url = resolveExportAssetUrl(part.previewUrl || part.url || part.thumbnailUrl || '');
+                out.push(mode === 'markdown'
+                    ? renderMarkdownImagePart(part, name)
+                    : `[图片${++imageSerial}] ${name}`);
+                if (mode === 'archive' && url) out.push(`图片文件: ${url}`);
+                return;
+            }
+            if (type === 'svg') {
+                const nextSerial = imageSerial + 1;
+                const name = String(part.fileName || '').trim() || `图像${nextSerial}`;
+                out.push(mode === 'markdown'
+                    ? renderMarkdownImagePart(part, name)
+                    : `[图像${++imageSerial}] ${name}`);
                 return;
             }
             if (type === 'file') {
                 fileSerial += 1;
                 const name = String(part.fileName || '').trim() || `文件${fileSerial}`;
-                const url = resolveClaudeAssetUrl(part.url || '');
-                out.push(url ? `[附件${fileSerial}] ${name}\n链接: ${url}` : `[附件${fileSerial}] ${name}`);
+                const url = resolveExportAssetUrl(part.archiveUrl || part.url || '');
+                const snapshot = mode === 'markdown' ? renderInlineFileSnapshotForMarkdown(part, name) : '';
+                if (snapshot) out.push(snapshot);
+                if (mode === 'markdown' && url) {
+                    out.push(`[附件${fileSerial} ${name}](${url})`);
+                } else {
+                    out.push(url ? `[附件${fileSerial}] ${name}\n链接: ${url}` : `[附件${fileSerial}] ${name}`);
+                }
             }
         });
         return out.join('\n\n').trim();
@@ -708,6 +1990,7 @@
     async function getClaudeMessagesByApi() {
         if (!isClaude) return [];
         installClaudeCaptureHooks();
+        installClaudeDownloadCaptureHooks();
         const convId = getClaudeConversationIdFromUrl();
         const orgId = getClaudeOrgIdFromCookie() || parseClaudeApiMeta(claudeCapturedHeaders?.__url || '')?.orgId || '';
         if (!convId || !orgId) return [];
@@ -733,7 +2016,9 @@
             title: String(json?.name || '').trim(),
             updatedAt: String(json?.updated_at || '').trim()
         };
-        return parseClaudeMessagesFromResponse(json);
+        const messages = parseClaudeMessagesFromResponse(json);
+        await hydrateClaudeHtmlFileParts(messages);
+        return messages;
     }
 
     // 早期辅助函数：给顶部刷新链/切换保护使用，避免后续实现尚未进入当前作用域时触发 ReferenceError。
@@ -1767,7 +3052,7 @@
                 'color:rgba(0,0,0,0.92)',
                 'border-radius:14px',
                 'border:none',
-                'padding:8px 12px',
+                'padding:8px 40px 8px 12px',
                 'line-height:1.3',
                 'backdrop-filter:blur(14px) saturate(1.12)',
                 '-webkit-backdrop-filter:blur(14px) saturate(1.12)',
@@ -1777,11 +3062,13 @@
                 'display:flex',
                 'align-items:center',
                 'gap:8px',
-                'max-width:min(70vw, 560px)'
+                'max-width:min(70vw, 560px)',
+                'overflow:visible'
             ].join(';');
             document.body.appendChild(jumpToastEl);
         }
         jumpToastEl.innerHTML = '';
+        jumpToastEl.appendChild(createRoundToastCloseButton(removeJumpToastImmediately));
         jumpToastStateEl = document.createElement('span');
         jumpToastStateEl.style.cssText = [
             'flex:none',
@@ -1939,6 +3226,18 @@
         }
     }
 
+    function removeJumpToastImmediately() {
+        hideJumpToast();
+        if (jumpToastEl && jumpToastEl.parentNode) jumpToastEl.parentNode.removeChild(jumpToastEl);
+        if (jumpToastSecondaryEl && jumpToastSecondaryEl.parentNode) jumpToastSecondaryEl.parentNode.removeChild(jumpToastSecondaryEl);
+        jumpToastEl = null;
+        jumpToastStateEl = null;
+        jumpToastNodeEl = null;
+        jumpToastSecondaryEl = null;
+        jumpToastSecondaryStateEl = null;
+        jumpToastSecondaryNodeEl = null;
+    }
+
     function compareVersionParts(a, b) {
         const pa = String(a || '').split('.').map((x) => parseInt(x, 10) || 0);
         const pb = String(b || '').split('.').map((x) => parseInt(x, 10) || 0);
@@ -1957,6 +3256,54 @@
             .replace(/&/g, '&amp;')
             .replace(/</g, '&lt;')
             .replace(/>/g, '&gt;');
+    }
+
+    function createRoundToastCloseButton(onClick) {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.setAttribute('aria-label', '关闭提示');
+        btn.title = '关闭提示';
+        btn.innerHTML = '<svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true" style="display:block"><path d="M2 2L10 10M10 2L2 10" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>';
+        btn.style.cssText = [
+            'position:absolute',
+            'top:50%',
+            'right:8px',
+            'width:24px',
+            'height:24px',
+            'border:none',
+            'border-radius:999px',
+            'background:rgba(15,23,42,0.08)',
+            'color:rgba(15,23,42,0.68)',
+            'display:flex',
+            'align-items:center',
+            'justify-content:center',
+            'padding:0',
+            'line-height:0',
+            'cursor:pointer',
+            'transform:translateY(-50%) scale(1)',
+            'transition:background .15s ease,color .15s ease,transform .15s ease'
+        ].join(';');
+        btn.addEventListener('mouseenter', () => {
+            btn.style.background = 'rgba(15,23,42,0.14)';
+            btn.style.color = 'rgba(15,23,42,0.9)';
+        });
+        btn.addEventListener('mouseleave', () => {
+            btn.style.background = 'rgba(15,23,42,0.08)';
+            btn.style.color = 'rgba(15,23,42,0.68)';
+            btn.style.transform = 'translateY(-50%) scale(1)';
+        });
+        btn.addEventListener('mousedown', () => {
+            btn.style.transform = 'translateY(-50%) scale(0.94)';
+        });
+        btn.addEventListener('mouseup', () => {
+            btn.style.transform = 'translateY(-50%) scale(1)';
+        });
+        btn.addEventListener('click', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            if (typeof onClick === 'function') onClick();
+        });
+        return btn;
     }
 
     function showSimpleToast(message, options = {}) {
@@ -6860,8 +8207,11 @@
 
             const toast = document.createElement('div');
             const toastThemeBlueRgb = { r: 37, g: 99, b: 235 };
-            toast.style.cssText = `position:fixed;bottom:80px;left:50%;transform:translateX(-50%) translateY(-10px);opacity:0;background:rgba(255,255,255,0.5);color:rgba(0,0,0,0.92);font-size:13px;padding:14px 24px;border-radius:20px;border:none;z-index:20000;display:flex;align-items:center;gap:12px;backdrop-filter:blur(14px) saturate(1.12);-webkit-backdrop-filter:blur(14px) saturate(1.12);box-shadow:0 14px 38px rgba(15,23,42,0.12);transition:opacity .28s ease, transform .28s ease;`;
+            toast.style.cssText = `position:fixed;bottom:80px;left:50%;transform:translateX(-50%) translateY(-10px);opacity:0;background:rgba(255,255,255,0.5);color:rgba(0,0,0,0.92);font-size:13px;padding:14px 44px 14px 24px;border-radius:20px;border:none;z-index:20000;display:flex;align-items:center;gap:12px;backdrop-filter:blur(14px) saturate(1.12);-webkit-backdrop-filter:blur(14px) saturate(1.12);box-shadow:0 14px 38px rgba(15,23,42,0.12);transition:opacity .28s ease, transform .28s ease;overflow:visible;`;
             toast.innerHTML = `<div style="width:18px;height:18px;flex:none;border-radius:999px;background:conic-gradient(from 0deg,${rgbToRgbaText(toastThemeBlueRgb, .2)} 0deg,${rgbToRgbaText(toastThemeBlueRgb, .95)} 320deg,${rgbToRgbaText(toastThemeBlueRgb, .2)} 360deg);mask:radial-gradient(farthest-side,transparent calc(100% - 2px),#000 calc(100% - 1px));-webkit-mask:radial-gradient(farthest-side,transparent calc(100% - 2px),#000 calc(100% - 1px));animation:ai-nodes-spin .9s linear infinite;"></div><div style="min-width:340px;"><div id="load-all-toast-msg" style="color:rgba(0,0,0,0.9);">准备导出：正在回溯历史记录...</div><div style="margin-top:8px;height:6px;background:${rgbToRgbaText(toastThemeBlueRgb, 0.14)};border-radius:99px;overflow:hidden;"><div id="load-all-toast-bar" style="height:100%;width:0%;background:${rgbToRgbaText(toastThemeBlueRgb, .86)};transition:width .25s ease;"></div></div><div id="load-all-toast-sub" style="margin-top:6px;font-size:12px;color:rgba(0,0,0,0.85);">轮次: 0 / ${MAX_TICKS} · 已识别消息: 0 · 到顶确认: 0/${STABLE_ZERO_TARGET}</div></div>`;
+            toast.appendChild(createRoundToastCloseButton(() => {
+                if (toast.isConnected) toast.remove();
+            }));
             document.body.appendChild(toast);
             requestAnimationFrame(() => {
                 if (!toast.isConnected) return;
@@ -9479,53 +10829,406 @@
             return candidate;
         }
 
-        function buildBatchConversationJson(platform, conversation) {
-            const messages = Array.isArray(conversation.messages)
-                ? conversation.messages.map((m) => buildMessageExportSnapshot(m))
-                : [];
-            return JSON.stringify({
-                platform,
-                exportedAt: new Date().toISOString(),
-                conversationId: conversation.conversationId || '',
-                title: conversation.title || '',
-                updatedAt: conversation.updatedAtText || '',
-                messageCount: Number(conversation.messageCount || 0),
-                messages: messages.map((m) => ({
-                    role: m.role,
-                    text: m.__displayText,
-                    markdown: m.__markdownText,
-                    parts: Array.isArray(m.parts) ? m.parts : []
-                }))
-            }, null, 2);
+        function replaceTextByUrlMap(text, urlMap) {
+            let out = String(text || '');
+            const entries = Object.entries(urlMap || {}).sort((a, b) => b[0].length - a[0].length);
+            entries.forEach(([from, to]) => {
+                if (!from || !to || !out.includes(from)) return;
+                out = out.split(from).join(to);
+            });
+            return out;
         }
 
-        function buildBatchConversationMarkdown(conversation, assistantLabel) {
+        function replaceImageUrlsInPart(part, urlMap) {
+            if (!part || typeof part !== 'object') return part;
+            const next = { ...part };
+            ['url', 'src', 'previewUrl', 'preview_url', 'thumbnailUrl', 'thumbnail_url', 'thumbUrl', 'thumb_url'].forEach((key) => {
+                const raw = typeof next[key] === 'string' ? next[key].trim() : '';
+                if (!raw) return;
+                const resolved = /^https?:\/\//i.test(raw) ? raw : resolveClaudeAssetUrl(raw);
+                if (urlMap[resolved]) next[key] = urlMap[resolved];
+            });
+            return next;
+        }
+
+        function replaceInlineFileRefsInPart(part, fileMap) {
+            if (!part || typeof part !== 'object') return part;
+            const next = { ...part };
+            const key = String(next.inlineArchiveKey || '').trim();
+            if (key && fileMap[key]) {
+                next.url = fileMap[key];
+                next.archiveUrl = fileMap[key];
+            }
+            return next;
+        }
+
+        function buildArchivedMessageSnapshot(snapshot, urlMap) {
+            const next = {
+                ...snapshot,
+                text: replaceTextByUrlMap(snapshot?.text == null ? '' : String(snapshot.text), urlMap),
+                parts: Array.isArray(snapshot?.parts) ? snapshot.parts.map((part) => replaceImageUrlsInPart(part, urlMap)) : []
+            };
+            next.__rawText = replaceTextByUrlMap(snapshot?.__rawText || '', urlMap);
+            if (isClaude && next.parts.length) {
+                next.__displayText = buildClaudeTextFromParts(next.parts, 'archive') || replaceTextByUrlMap(snapshot?.__displayText || '', urlMap);
+                next.__markdownText = buildClaudeTextFromParts(next.parts, 'markdown') || replaceTextByUrlMap(snapshot?.__markdownText || '', urlMap);
+            } else {
+                next.__displayText = replaceTextByUrlMap(snapshot?.__displayText || '', urlMap);
+                next.__markdownText = replaceTextByUrlMap(snapshot?.__markdownText || '', urlMap);
+            }
+            next.__html = snapshot?.__html || '';
+            return next;
+        }
+
+        function buildArchivedMessageSnapshotWithFiles(snapshot, urlMap, fileMap) {
+            const next = buildArchivedMessageSnapshot(snapshot, urlMap);
+            next.parts = Array.isArray(next.parts)
+                ? next.parts.map((part) => replaceInlineFileRefsInPart(part, fileMap))
+                : [];
+            if (isClaude && next.parts.length) {
+                next.__displayText = buildClaudeTextFromParts(next.parts, 'archive') || next.__displayText;
+                next.__markdownText = buildClaudeTextFromParts(next.parts, 'markdown') || next.__markdownText;
+            }
+            return next;
+        }
+
+        function collectImageUrlsFromText(text) {
+            const src = String(text || '');
+            const out = [];
+            const seen = new Set();
+            const pushUrl = (raw) => {
+                const value = String(raw || '').trim().replace(/[),.;]+$/g, '');
+                if (!/^https?:\/\//i.test(value) || seen.has(value)) return;
+                seen.add(value);
+                out.push(value);
+            };
+            src.replace(/!\[[^\]]*]\((https?:\/\/[^\s)]+)\)/g, (_, url) => {
+                pushUrl(url);
+                return _;
+            });
+            src.replace(/\[图片[^\]]*\]\s+(https?:\/\/\S+)/g, (_, url) => {
+                pushUrl(url);
+                return _;
+            });
+            return out;
+        }
+
+        function collectExportImageUrls(messages) {
+            const out = [];
+            const seen = new Set();
+            const pushUrl = (raw) => {
+                const value = String(raw || '').trim();
+                if (!/^https?:\/\//i.test(value) || seen.has(value)) return;
+                seen.add(value);
+                out.push(value);
+            };
+            (Array.isArray(messages) ? messages : []).forEach((msg) => {
+                const parts = Array.isArray(msg?.parts) ? msg.parts : [];
+                parts.forEach((part) => {
+                    if (!part || typeof part !== 'object') return;
+                    if (String(part.type || '').trim().toLowerCase() !== 'image') return;
+                    pushUrl(resolveClaudeAssetUrl(part.previewUrl || part.url || part.thumbnailUrl || ''));
+                });
+                collectImageUrlsFromText(msg?.__markdownText || '').forEach(pushUrl);
+                collectImageUrlsFromText(msg?.__displayText || '').forEach(pushUrl);
+            });
+            return out;
+        }
+
+        function collectExportInlineFiles(messages) {
+            const out = [];
+            const seen = new Set();
+            (Array.isArray(messages) ? messages : []).forEach((msg) => {
+                const parts = Array.isArray(msg?.parts) ? msg.parts : [];
+                parts.forEach((part) => {
+                    if (!part || typeof part !== 'object') return;
+                    const key = String(part.inlineArchiveKey || '').trim();
+                    const content = typeof part.inlineContent === 'string' ? part.inlineContent : '';
+                    if (!key || !content || seen.has(key)) return;
+                    seen.add(key);
+                    out.push({
+                        key,
+                        fileName: String(part.fileName || '').trim() || '交互演示.html',
+                        ext: String(part.inlineExt || '').trim() || 'html',
+                        content
+                    });
+                });
+            });
+            return out;
+        }
+
+        function getImageExtensionFromUrl(url, contentType = '') {
+            const type = String(contentType || '').toLowerCase().split(';')[0].trim();
+            if (type === 'image/jpeg') return 'jpg';
+            if (type === 'image/png') return 'png';
+            if (type === 'image/gif') return 'gif';
+            if (type === 'image/webp') return 'webp';
+            if (type === 'image/svg+xml') return 'svg';
+            if (type === 'image/bmp') return 'bmp';
+            if (type === 'image/x-icon' || type === 'image/vnd.microsoft.icon') return 'ico';
+            if (type === 'image/avif') return 'avif';
+            try {
+                const pathname = new URL(url, window.location.origin).pathname || '';
+                const match = pathname.match(/\.([a-zA-Z0-9]{2,5})$/);
+                if (match) {
+                    const ext = String(match[1]).toLowerCase();
+                    if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp', 'ico', 'avif'].includes(ext)) {
+                        return ext === 'jpeg' ? 'jpg' : ext;
+                    }
+                }
+            } catch (_) {}
+            return 'png';
+        }
+
+        async function fetchBinaryResource(url) {
+            const attempts = [
+                () => fetch(url, { method: 'GET', credentials: 'include', cache: 'no-store' }),
+                () => fetch(url, { method: 'GET', credentials: 'same-origin', cache: 'no-store' }),
+                () => fetch(url, { method: 'GET', cache: 'no-store' })
+            ];
+            let lastError = null;
+            for (const run of attempts) {
+                try {
+                    const resp = await run();
+                    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+                    return {
+                        bytes: new Uint8Array(await resp.arrayBuffer()),
+                        contentType: resp.headers.get('content-type') || ''
+                    };
+                } catch (e) {
+                    lastError = e;
+                }
+            }
+            throw lastError || new Error('图片下载失败');
+        }
+
+        async function buildImageArchiveBundle(messages) {
+            const urls = collectExportImageUrls(messages);
+            const inlineFiles = collectExportInlineFiles(messages);
+            if (!urls.length && !inlineFiles.length) {
+                return { hasImages: false, urlMap: {}, fileMap: {}, entries: [], readmeLines: [] };
+            }
+
+            const usedImageNames = new Set();
+            const usedFileNames = new Set();
+            const urlMap = {};
+            const fileMap = {};
+            const entries = [];
+            const failed = [];
+
+            for (let i = 0; i < urls.length; i += 1) {
+                const url = urls[i];
+                try {
+                    const { bytes, contentType } = await fetchBinaryResource(url);
+                    const ext = getImageExtensionFromUrl(url, contentType);
+                    const archivePath = `images/${getUniqueBatchFileName(`image-${String(i + 1).padStart(3, '0')}`, ext, usedImageNames)}`;
+                    urlMap[url] = archivePath;
+                    entries.push({ name: archivePath, data: bytes });
+                } catch (e) {
+                    failed.push(`${url} -> ${e?.message || e}`);
+                }
+            }
+
+            inlineFiles.forEach((file, index) => {
+                const baseName = String(file.fileName || '').replace(/\.[a-z0-9]+$/i, '') || `交互演示${index + 1}`;
+                const archivePath = `files/${getUniqueBatchFileName(baseName, file.ext || 'html', usedFileNames)}`;
+                fileMap[file.key] = archivePath;
+                entries.push({ name: archivePath, data: file.content });
+            });
+
+            const readmeLines = failed.length
+                ? ['以下图片下载失败，导出文件中会保留原始图片 URL：', ...failed]
+                : [];
+
+            return { hasImages: true, urlMap, fileMap, entries, readmeLines };
+        }
+
+        function buildBatchConversationMarkdown(conversation, assistantLabel, preparedMessages = null) {
             const header = `# ${conversation.title || `会话 ${conversation.conversationId || '-'}`}\n\n- 会话ID: ${conversation.conversationId || '-'}\n- 更新时间: ${conversation.updatedAtText || '-'}\n- 消息数: ${conversation.messageCount || 0}`;
-            const body = (Array.isArray(conversation.messages) ? conversation.messages : [])
-                .map((m) => buildMessageExportSnapshot(m))
+            const body = (Array.isArray(preparedMessages) ? preparedMessages : (Array.isArray(conversation.messages) ? conversation.messages.map((m) => buildMessageExportSnapshot(m)) : []))
                 .map((m, idx) => `\n## ${idx + 1}. ${m.role === 'user' ? '用户' : assistantLabel}\n\n${m.__markdownText}\n`)
                 .join('\n');
             return `${header}\n${body}`.trim();
         }
 
-        function buildBatchConversationText(conversation, assistantLabel) {
+        function buildBatchConversationText(conversation, assistantLabel, preparedMessages = null) {
             const header = `${conversation.title || `会话 ${conversation.conversationId || '-'}`}\n会话ID: ${conversation.conversationId || '-'}\n更新时间: ${conversation.updatedAtText || '-'}\n消息数: ${conversation.messageCount || 0}`;
-            const body = (Array.isArray(conversation.messages) ? conversation.messages : [])
-                .map((m) => buildMessageExportSnapshot(m))
+            const body = (Array.isArray(preparedMessages) ? preparedMessages : (Array.isArray(conversation.messages) ? conversation.messages.map((m) => buildMessageExportSnapshot(m)) : []))
                 .map((m, idx) => `\n[${idx + 1}] ${m.role === 'user' ? '用户' : assistantLabel}\n${m.__displayText}`)
                 .join('\n');
             return `${header}\n${body}`.trim();
         }
 
-        function buildBatchConversationCsv(conversation, assistantLabel) {
-            const rows = ['Index,Role,Content'];
-            const list = (Array.isArray(conversation.messages) ? conversation.messages : []).map((m) => buildMessageExportSnapshot(m));
-            list.forEach((m, idx) => {
-                const role = m.role === 'user' ? '用户' : assistantLabel;
-                const text = String(m.__displayText || '').replace(/"/g, '""');
-                rows.push(`${idx + 1},"${role}","${text}"`);
+        function extractClaudeHtmlAttachmentNamesFromText(text) {
+            const raw = String(text || '');
+            if (!raw || !/\.html?\b/i.test(raw)) return [];
+            const names = [];
+            const seen = new Set();
+            const pushName = (value) => {
+                const clean = String(value || '')
+                    .trim()
+                    .replace(/^["'“”‘’]+|["'“”‘’.,;，。；、]+$/g, '')
+                    .trim();
+                if (!clean || seen.has(clean)) return;
+                seen.add(clean);
+                names.push(clean);
+            };
+            raw.replace(/\[附件\d*]\s*(?:\[[^\]]*]\()?([^)\]\n\r]+?\.html?)\)?/gi, (_, name) => {
+                pushName(name);
+                return _;
             });
-            return '\uFEFF' + rows.join('\n');
+            raw.replace(/([^\s\[\]()<>"'“”‘’，。；、]+\.html?)\b/gi, (_, name) => {
+                pushName(name);
+                return _;
+            });
+            return names;
+        }
+
+        function renderClaudeCachedAttachmentsToStaticHtml(text) {
+            return extractClaudeHtmlAttachmentNamesFromText(text).map((name, idx) => {
+                const cached = findClaudeDownloadedHtmlFile('', name);
+                const inlineContent = normalizeClaudeInlineHtmlContent(cached?.content || '', name);
+                if (!inlineContent) return '';
+                return renderClaudePartsToStaticHtml([{
+                    type: 'file',
+                    fileName: name,
+                    mimeType: 'text/html',
+                    inlineExt: 'html',
+                    inlineArchiveKey: `cached_${hashTextForArchiveKey(`${name}:${inlineContent}:${idx}`)}`,
+                    inlineContent
+                }], '');
+            }).filter(Boolean).join('\n');
+        }
+
+        function renderClaudePartsToStaticHtml(parts, fallbackText) {
+            const list = Array.isArray(parts) ? parts : [];
+            if (!list.length) {
+                const base = chatMarkdownToHtml(String(fallbackText || '')) || escapeHtml(String(fallbackText || '')).replace(/\n/g, '<br>');
+                const cachedPreview = renderClaudeCachedAttachmentsToStaticHtml(fallbackText);
+                return cachedPreview ? `${base}\n${cachedPreview}` : base;
+            }
+            const html = [];
+            let imageSerial = 0;
+
+            const sanitizeWidgetBody = (bodyHtml) => {
+                const raw = String(bodyHtml || '').trim();
+                if (!raw) return '';
+                const root = parseClaudeHtmlNodeRoot(raw);
+                if (!(root instanceof Element)) {
+                    return raw
+                        .replace(/<script[\s\S]*?<\/script>/gi, '')
+                        .replace(/<style[\s\S]*?<\/style>/gi, '')
+                        .trim();
+                }
+                root.querySelectorAll('script, style, noscript, template').forEach((el) => el.remove());
+                root.querySelectorAll('*').forEach((el) => {
+                    Array.from(el.attributes || []).forEach((attr) => {
+                        const attrName = String(attr.name || '').toLowerCase();
+                        const attrValue = String(attr.value || '').trim();
+                        if (attrName.startsWith('on')) el.removeAttribute(attr.name);
+                        if ((attrName === 'href' || attrName === 'src') && /^javascript:/i.test(attrValue)) {
+                            el.removeAttribute(attr.name);
+                        }
+                    });
+                });
+                return root.innerHTML.trim();
+            };
+
+            const scopeWidgetCss = (stylesHtml) => {
+                const cssChunks = [];
+                String(stylesHtml || '').replace(/<style[^>]*>([\s\S]*?)<\/style>/gi, (_, css) => {
+                    cssChunks.push(String(css || ''));
+                    return '';
+                });
+                if (!cssChunks.length) return '';
+                const scoped = cssChunks.map((css) => String(css || '').replace(/([^{}]+)\{([^{}]*)\}/g, (rule, selector, body) => {
+                    const rawSelector = String(selector || '').trim();
+                    if (!rawSelector || rawSelector.startsWith('@')) return rule;
+                    const scopedSelector = rawSelector
+                        .split(',')
+                        .map((sel) => {
+                            const s = String(sel || '').trim();
+                            if (!s) return '';
+                            if (/^(?:html|body|:root)\b/i.test(s)) return '.claude-html-widget';
+                            if (s.startsWith('.claude-html-widget')) return s;
+                            return `.claude-html-widget ${s}`;
+                        })
+                        .filter(Boolean)
+                        .join(', ');
+                    return scopedSelector ? `${scopedSelector}{${body}}` : rule;
+                })).join('\n');
+                return scoped.trim() ? `<style>${scoped}</style>` : '';
+            };
+
+            const renderInlineFile = (part, rawName) => {
+                const inlineContent = String(part?.inlineContent || '').trim();
+                if (!inlineContent) return '';
+                const mediaParts = extractClaudeRenderablePartsFromHtmlFragment(inlineContent);
+                if (mediaParts.length) return renderClaudePartsToStaticHtml(mediaParts, '');
+                if (isClaudeCadHoleWidgetHtml(inlineContent, rawName)) {
+                    return renderClaudePartsToStaticHtml([buildClaudeWidgetFallbackSvgPart(inlineContent, rawName)], '');
+                }
+                const parsed = parseClaudeWidgetHtmlSource(inlineContent);
+                const bodyHtml = sanitizeWidgetBody(parsed.bodyHtml || inlineContent);
+                if (!bodyHtml) return '';
+                const styleBlock = scopeWidgetCss(parsed.styles || '');
+                const caption = escapeHtml(rawName || '交互演示');
+                return `
+                    <figure class="claude-html-widget-block">
+                        <figcaption>交互内容 · ${caption}</figcaption>
+                        ${styleBlock}
+                        <div class="claude-html-widget">${bodyHtml}</div>
+                    </figure>
+                `.trim();
+            };
+
+            list.forEach((part) => {
+                if (!part || typeof part !== 'object') return;
+                const type = String(part.type || '').trim().toLowerCase();
+                if (type === 'text' || type === 'tool_use' || type === 'tool_result') {
+                    const t = String(part.text || '').trim();
+                    if (t) html.push(chatMarkdownToHtml(t) || escapeHtml(t).replace(/\n/g, '<br>'));
+                    return;
+                }
+                if (type === 'image') {
+                    imageSerial += 1;
+                    const name = escapeHtml(String(part.fileName || '').trim() || `图片${imageSerial}`);
+                    const url = escapeHtml(resolveClaudeAssetUrl(part.previewUrl || part.url || part.thumbnailUrl || ''));
+                    html.push(url
+                        ? `<figure class="claude-image-block"><img src="${url}" alt="${name}" loading="lazy"><figcaption>图片${imageSerial} · ${name}</figcaption></figure>`
+                        : `<p>[图片${imageSerial}] ${name}</p>`);
+                    return;
+                }
+                if (type === 'svg') {
+                    imageSerial += 1;
+                    const name = escapeHtml(String(part.fileName || '').trim() || `图像${imageSerial}`);
+                    const svgMarkup = String(part.svg || '').trim();
+                    html.push(svgMarkup
+                        ? `<figure class="claude-image-block claude-svg-block"><div class="claude-inline-svg">${svgMarkup}</div><figcaption>图像${imageSerial} · ${name}</figcaption></figure>`
+                        : `<p>[图像${imageSerial}] ${name}</p>`);
+                    return;
+                }
+                if (type === 'file') {
+                    const rawName = String(part.fileName || '').trim() || '附件';
+                    const inlineHtml = renderInlineFile(part, rawName);
+                    if (inlineHtml) {
+                        html.push(inlineHtml);
+                        return;
+                    }
+                    const name = escapeHtml(rawName);
+                    const url = escapeHtml(resolveClaudeAssetUrl(part.url || ''));
+                    html.push(url
+                        ? `<p>[附件] <a href="${url}" target="_blank" rel="noreferrer">${name}</a></p>`
+                        : `<p>[附件] ${name}</p>`);
+                }
+            });
+            const rendered = html.join('\n').trim();
+            const base = rendered || (chatMarkdownToHtml(String(fallbackText || '')) || escapeHtml(String(fallbackText || '')).replace(/\n/g, '<br>'));
+            if (!/claude-html-widget-block|claude-image-block|claude-inline-svg|<svg\b|<img\b/i.test(base)) {
+                const cachedPreview = renderClaudeCachedAttachmentsToStaticHtml(fallbackText);
+                if (cachedPreview) return `${base}\n${cachedPreview}`;
+            }
+            return base;
         }
 
         function buildBatchConversationPrintableHtml(platform, conversation, assistantLabel) {
@@ -9534,7 +11237,7 @@
                 .map((m, idx) => `
                 <div class="msg">
                     <div class="role">${idx + 1}. ${m.role === 'user' ? '用户' : assistantLabel}</div>
-                    <div class="text">${m.__html}</div>
+                    <div class="text">${isClaude ? renderClaudePartsToStaticHtml(m.parts, m.__displayText) : m.__html}</div>
                 </div>
             `).join('');
             return `
@@ -9575,56 +11278,58 @@
         }
 
         async function exportBatchConversationsAsZip(platform, conversations, format, assistantLabel) {
+            if (!['md', 'txt', 'html'].includes(String(format || '').trim())) {
+                throw new Error(`不支持的导出类型: ${format || '-'}`);
+            }
             const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '_');
             const usedNames = new Set();
             const entries = [];
+            const snapshotGroups = (Array.isArray(conversations) ? conversations : []).map((conversation) => (
+                Array.isArray(conversation?.messages)
+                    ? conversation.messages.map((m) => buildMessageExportSnapshot(m))
+                    : []
+            ));
+            const archiveBundle = format !== 'html'
+                ? await buildImageArchiveBundle(snapshotGroups.flat())
+                : { hasImages: false, urlMap: {}, entries: [], readmeLines: [] };
 
             conversations.forEach((conversation, index) => {
                 const titleBase = conversation.title || `会话 ${conversation.conversationId || index + 1}`;
-                if (format === 'json') {
-                    entries.push({
-                        name: getUniqueBatchFileName(titleBase, 'json', usedNames),
-                        data: buildBatchConversationJson(platform, conversation)
-                    });
-                    return;
-                }
+                const preparedMessages = archiveBundle.hasImages
+                    ? (snapshotGroups[index] || []).map((m) => buildArchivedMessageSnapshotWithFiles(m, archiveBundle.urlMap, archiveBundle.fileMap || {}))
+                    : (snapshotGroups[index] || []);
                 if (format === 'md') {
                     entries.push({
                         name: getUniqueBatchFileName(titleBase, 'md', usedNames),
-                        data: buildBatchConversationMarkdown(conversation, assistantLabel)
+                        data: buildBatchConversationMarkdown(conversation, assistantLabel, preparedMessages)
                     });
                     return;
                 }
-                if (format === 'pdf') {
+                if (format === 'html') {
                     entries.push({
                         name: getUniqueBatchFileName(titleBase, 'html', usedNames),
                         data: buildBatchConversationPrintableHtml(platform, conversation, assistantLabel)
                     });
                     return;
                 }
-                if (format === 'csv') {
-                    entries.push({
-                        name: getUniqueBatchFileName(titleBase, 'csv', usedNames),
-                        data: buildBatchConversationCsv(conversation, assistantLabel)
-                    });
-                    return;
-                }
                 entries.push({
                     name: getUniqueBatchFileName(titleBase, 'txt', usedNames),
-                    data: buildBatchConversationText(conversation, assistantLabel)
+                    data: buildBatchConversationText(conversation, assistantLabel, preparedMessages)
                 });
             });
 
-            if (format === 'pdf') {
-                entries.push({
-                    name: 'README.txt',
-                    data: '已按单会话导出为可打印 HTML 文件。浏览器原生环境下无法稳定批量直接生成多个 PDF，请解压后分别打开 HTML 文件再打印为 PDF。'
-                });
+            if (archiveBundle.hasImages) {
+                entries.push(...archiveBundle.entries);
+                if (archiveBundle.readmeLines.length) {
+                    entries.push({
+                        name: getUniqueBatchFileName('README', 'txt', usedNames),
+                        data: archiveBundle.readmeLines.join('\n')
+                    });
+                }
             }
 
             const zipBlob = createZipBlob(entries);
-            const suffix = format === 'pdf' ? 'html' : format;
-            downloadBlob(zipBlob, `${platform}_批量导出_${suffix}_${stamp}.zip`);
+            downloadBlob(zipBlob, `${platform}_批量导出_${format}_${stamp}.zip`);
         }
 
         function chatMarkdownToHtml(mdText) {
@@ -12562,16 +14267,95 @@
                     }
                     return;
                 }
+                if (type === 'svg') {
+                    imageSerial += 1;
+                    const name = escapeHtml(String(part.fileName || '').trim() || `图像${imageSerial}`);
+                    const svgMarkup = String(part.svg || '').trim();
+                    const svgPreviewUrl = escapeHtmlAttr(getClaudeInlineSvgPreviewUrl(svgMarkup) || buildClaudeSvgDataUrl(svgMarkup));
+                    const width = Number(part.width || 0);
+                    const height = Number(part.height || 0);
+                    const ratioText = width > 0 && height > 0 ? ` · ${width} × ${height}` : '';
+                    if (svgMarkup) {
+                        html.push(`<div class="m-preview-media"><div class="claude-inline-svg"><img src="${svgPreviewUrl}" alt="${name}" loading="lazy" onerror="this.closest('.claude-inline-svg').setAttribute('data-ai-svg-error','1');this.remove();"></div><div class="m-preview-caption">图像${imageSerial} · ${name}${ratioText}</div></div>`);
+                    } else {
+                        html.push(`<p>[图像${imageSerial}] ${name}${ratioText}</p>`);
+                    }
+                    return;
+                }
                 if (type === 'file') {
                     fileSerial += 1;
                     const name = escapeHtml(String(part.fileName || '').trim() || `附件${fileSerial}`);
                     const url = escapeHtml(resolveClaudeAssetUrl(part.url || ''));
-                    html.push(url
-                        ? `<p>[附件${fileSerial}] <a href="${url}" target="_blank" rel="noreferrer">${name}</a></p>`
-                        : `<p>[附件${fileSerial}] ${name}</p>`);
+                    const inlineContent = removeClaudePromptSuggestionsFromHtml(part.inlineContent || '');
+                    const isHtmlWidget = inlineContent && /(?:<script\b|onclick=|oninput=|id=["']vis-container["']|id=["']hole-svg["'])/i.test(inlineContent);
+                    if (isHtmlWidget) {
+                        const widgetMediaParts = extractClaudeRenderablePartsFromHtmlFragment(inlineContent);
+                        if (widgetMediaParts.length) {
+                            html.push(widgetMediaParts.map((mp) => renderClaudePartsToPreviewHtml([mp], '')).join(''));
+                            return;
+                        }
+                        if (isClaudeCadHoleWidgetHtml(inlineContent, String(part.fileName || '').trim() || name)) {
+                            html.push(renderClaudePartsToPreviewHtml([buildClaudeWidgetFallbackSvgPart(inlineContent, String(part.fileName || '').trim() || name)], ''));
+                            return;
+                        }
+                        const staticHtmlPreview = buildClaudeWidgetRuntimeBlock(inlineContent, String(part.fileName || '').trim() || name);
+                        if (staticHtmlPreview) {
+                            html.push(`<div class="m-preview-media m-preview-widget">${staticHtmlPreview}<div class="m-preview-caption">附件${fileSerial} · ${name}</div></div>`);
+                            return;
+                        }
+                        html.push(url
+                            ? `<p>[附件${fileSerial}] <a href="${url}" target="_blank" rel="noreferrer">${name}</a></p>`
+                            : `<p>[附件${fileSerial}] ${name}</p>`);
+                    } else {
+                        const mediaParts = inlineContent ? extractClaudeRenderablePartsFromHtmlFragment(inlineContent) : [];
+                        if (mediaParts.length) {
+                            html.push(mediaParts.map((mp) => renderClaudePartsToPreviewHtml([mp], '')).join(''));
+                            return;
+                        }
+                        html.push(url
+                            ? `<p>[附件${fileSerial}] <a href="${url}" target="_blank" rel="noreferrer">${name}</a></p>`
+                            : `<p>[附件${fileSerial}] ${name}</p>`);
+                    }
                 }
             });
             return html.join('') || renderMessageMarkdownToPreviewHtml(fallbackText);
+        }
+
+        function renderClaudeCachedAttachmentPreviewFromText(text) {
+            const raw = String(text || '');
+            if (!raw || !/\.html?\b/i.test(raw)) return '';
+            const names = [];
+            const seen = new Set();
+            const pushName = (value) => {
+                const clean = String(value || '')
+                    .trim()
+                    .replace(/^["'“”‘’]+|["'“”‘’.,;，。；、]+$/g, '')
+                    .trim();
+                if (!clean || seen.has(clean)) return;
+                seen.add(clean);
+                names.push(clean);
+            };
+            raw.replace(/\[附件\d*]\s*(?:\[[^\]]*]\()?([^)\]\n\r]+?\.html?)\)?/gi, (_, name) => {
+                pushName(name);
+                return _;
+            });
+            raw.replace(/([^\s\[\]()<>"'“”‘’，。；、]+\.html?)\b/gi, (_, name) => {
+                pushName(name);
+                return _;
+            });
+            return names.map((name, idx) => {
+                const cached = findClaudeDownloadedHtmlFile('', name);
+                const inlineContent = normalizeClaudeInlineHtmlContent(cached?.content || '', name);
+                if (!inlineContent) return '';
+                return renderClaudePartsToPreviewHtml([{
+                    type: 'file',
+                    fileName: name,
+                    mimeType: 'text/html',
+                    inlineExt: 'html',
+                    inlineArchiveKey: `cached_${hashTextForArchiveKey(`${name}:${inlineContent}:${idx}`)}`,
+                    inlineContent
+                }], '');
+            }).filter(Boolean).join('');
         }
 
         function buildMessagePreviewContent(msg) {
@@ -12581,9 +14365,13 @@
             const markdownText = isClaude && parts.length
                 ? buildClaudeTextFromParts(parts, 'markdown') || displayText
                 : displayText;
-            const html = isClaude && parts.length
+            let html = isClaude && parts.length
                 ? renderClaudePartsToPreviewHtml(parts, displayText)
                 : renderMessageMarkdownToPreviewHtml(markdownText);
+            if (isClaude && !/claude-widget-runtime|m-preview-widget|claude-inline-svg|<svg\b|<img\b/i.test(html)) {
+                const cachedPreview = renderClaudeCachedAttachmentPreviewFromText(markdownText || displayText);
+                if (cachedPreview) html = `${html}${cachedPreview}`;
+            }
             return {
                 text: markdownText,
                 html
@@ -12597,9 +14385,13 @@
             const markdownText = isClaude && parts.length
                 ? buildClaudeTextFromParts(parts, 'markdown') || displayText
                 : displayText;
-            const html = isClaude && parts.length
+            let html = isClaude && parts.length
                 ? renderClaudePartsToPreviewHtml(parts, displayText)
                 : renderMessageMarkdownToPreviewHtml(markdownText);
+            if (isClaude && !/claude-widget-runtime|m-preview-widget|claude-inline-svg|<svg\b|<img\b/i.test(html)) {
+                const cachedPreview = renderClaudeCachedAttachmentPreviewFromText(markdownText || displayText);
+                if (cachedPreview) html = `${html}${cachedPreview}`;
+            }
             return {
                 ...msg,
                 parts,
@@ -13045,7 +14837,8 @@
             let json = null;
             try { json = JSON.parse(raw); } catch (_) { json = null; }
             if (!json) throw new Error('chat_conversations 返回非 JSON');
-            const messages = parseClaudeMessagesFromResponse(json).map((m) => ({ role: m.role, text: String(m.text || '') }));
+            const messages = parseClaudeMessagesFromResponse(json);
+            await hydrateClaudeHtmlFileParts(messages);
             return {
                 id: String(json?.uuid || conversationId || '').trim() || String(conversationId),
                 title: String(json?.name || '').trim() || `会话 ${conversationId}`,
@@ -13447,10 +15240,8 @@
                         </button>
                         <div id="m-export-menu" style="position:absolute;right:0;top:36px;width:100px;background:rgba(255, 255, 255, 0.2);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);border:1px solid rgba(255,255,255,0.35);border-radius:10px;box-shadow:0 10px 30px rgba(15,23,42,.15);padding:0;z-index:7;opacity:0;pointer-events:none;transform:translateY(-8px) scale(0.96);transition:opacity .22s cubic-bezier(0.22,0.61,0.36,1), transform .22s cubic-bezier(0.22,0.61,0.36,1);">
                             <button class="m-export-item" data-f="md" style="display:block;width:100%;margin:0;text-align:center;background:transparent;color:#2563eb;border-radius:0;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;transition:border-color .18s ease, box-shadow .18s ease, background-color .18s ease;border:none;">Markdown</button>
-                            <button class="m-export-item" data-f="pdf" style="display:block;width:100%;margin:0;text-align:center;background:transparent;color:#2563eb;border-radius:0;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;transition:border-color .18s ease, box-shadow .18s ease, background-color .18s ease;border:none;">PDF</button>
+                            <button class="m-export-item" data-f="html" style="display:block;width:100%;margin:0;text-align:center;background:transparent;color:#2563eb;border-radius:0;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;transition:border-color .18s ease, box-shadow .18s ease, background-color .18s ease;border:none;">HTML</button>
                             <button class="m-export-item" data-f="txt" style="display:block;width:100%;margin:0;text-align:center;background:transparent;color:#2563eb;border-radius:0;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;transition:border-color .18s ease, box-shadow .18s ease, background-color .18s ease;border:none;">TXT</button>
-                            <button class="m-export-item" data-f="csv" style="display:block;width:100%;margin:0;text-align:center;background:transparent;color:#2563eb;border-radius:0;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;transition:border-color .18s ease, box-shadow .18s ease, background-color .18s ease;border:none;">CSV</button>
-                            <button class="m-export-item" data-f="json" style="display:block;width:100%;margin:0;text-align:center;background:transparent;color:#2563eb;border-radius:0;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;transition:border-color .18s ease, box-shadow .18s ease, background-color .18s ease;border:none;">JSON</button>
                         </div>
                     </div>
                 </div>
@@ -13477,6 +15268,7 @@
                     .m-view-btn:hover { background:#0056b3; transform:scale(1.05); }
                     .m-item-row:hover .m-view-btn { opacity:1; pointer-events:auto; }
                     .m-row-text { display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; overflow:hidden; text-overflow:ellipsis; word-break:break-word; }
+                    .m-row-text.has-widget-preview { display:block; -webkit-line-clamp:unset; max-height:360px; overflow:auto; }
                     .m-row-text pre, #sub-body pre { margin:8px 0; padding:10px 12px; background:#111827; color:#f9fafb; border-radius:10px; overflow:auto; font-size:12px; line-height:1.55; white-space:pre-wrap; font-family:"Consolas","Monaco","Courier New",monospace; }
                     .m-row-text code, #sub-body code { background:#eef2ff; color:#3730a3; padding:2px 5px; border-radius:6px; font-size:12px; font-family:"Consolas","Monaco","Courier New",monospace; }
                     .m-row-text pre code, #sub-body pre code { background:transparent; color:inherit; padding:0; border-radius:0; font-size:inherit; }
@@ -13494,6 +15286,11 @@
                     .m-row-text a, #sub-body a { color:#2563eb; text-decoration:none; }
                     .m-row-text a:hover, #sub-body a:hover { text-decoration:underline; }
                     .m-preview-caption { font-size:12px; color:#6b7280; }
+                    .claude-inline-svg { display:flex; justify-content:center; align-items:center; min-height:120px; padding:8px; border:1px solid #dbeafe; border-radius:10px; background:#fff; overflow:auto; }
+                    .claude-inline-svg > svg, .claude-inline-svg > img { display:block; max-width:100%; height:auto; margin:0 auto; }
+                    .claude-inline-svg[data-ai-svg-error="1"]::after { content:"SVG 预览失败"; color:#ef4444; font-size:12px; padding:12px; }
+                    .m-preview-widget .claude-widget-runtime { display:block; width:100%; min-height:240px; padding:8px 0; }
+                    .m-preview-widget .claude-widget-runtime.claude-widget-mounted { min-height:auto; }
                     .m-ds-session-panel { margin:8px 24px 0; border:1px solid #e5e7eb; border-radius:10px; background:linear-gradient(180deg,#fbfdff 0%, #f8fafc 100%); }
                     .m-ds-session-title { cursor:pointer; list-style:none; font-size:12px; font-weight:700; color:#1f2937; padding:8px 12px; user-select:none; }
                     .m-ds-session-title::-webkit-details-marker { display:none; }
@@ -13562,7 +15359,12 @@
                     </div>
                 `;
 
-                item.querySelector('.m-row-text').innerHTML = previewContent.html;
+                const rowTextEl = item.querySelector('.m-row-text');
+                rowTextEl.innerHTML = previewContent.html;
+                if (rowTextEl.querySelector('.m-preview-widget, .claude-widget-runtime, .claude-inline-svg, svg, img')) {
+                    rowTextEl.classList.add('has-widget-preview');
+                }
+                hydrateClaudeWidgetPreviews(item);
 
                 const detailBtn = item.querySelector('.m-view-btn');
                 item.onmouseenter = () => detailBtn.style.opacity = '1';
@@ -13589,6 +15391,7 @@
                     <div id="sub-body" style="flex:1;overflow-y:auto;font-size:14px;line-height:1.6;color:#333;padding-top:10px;border-top:1px solid #eee;word-break:break-word;"></div>
                 `;
                 subModal.querySelector('#sub-body').innerHTML = bodyHtml;
+                hydrateClaudeWidgetPreviews(subModal);
                 subOverlay.appendChild(subModal);
                 document.body.appendChild(subOverlay);
                 const subLifecycle = setupUnifiedModalLifecycle(subOverlay, subModal);
@@ -13682,7 +15485,11 @@
                         }
                         if (m.hasThought && m.textWithoutThought) {
                             m.text = String(m.textWithoutThought || '');
-                            if (rowText) rowText.innerHTML = buildMessagePreviewContent(m).html;
+                            if (rowText) {
+                                rowText.innerHTML = buildMessagePreviewContent(m).html;
+                                rowText.classList.toggle('has-widget-preview', Boolean(rowText.querySelector('.m-preview-widget, .claude-widget-runtime, .claude-inline-svg, svg, img')));
+                                hydrateClaudeWidgetPreviews(rowText);
+                            }
                         }
                     });
                     upCount();
@@ -13694,12 +15501,17 @@
 
             modal.querySelector('#modal-x').onclick = closeModal;
 
-            modal.querySelectorAll('.m-export-item').forEach(b => b.onclick = () => {
+            modal.querySelectorAll('.m-export-item').forEach(b => b.onclick = async () => {
                 persistSelection();
                 hideExportMenu();
                 const picked = Array.from(modal.querySelectorAll('.m-row-ck:checked')).map(c => allMsgs[parseInt(c.getAttribute('data-i'))]);
                 if (!picked.length) return alert('请至少选择一项');
-                handleExport(picked, b.getAttribute('data-f'));
+                try {
+                    await handleExport(picked, b.getAttribute('data-f'));
+                } catch (e) {
+                    console.error('[AI Chat Helper] export failed', e);
+                    alert(`导出失败: ${e?.message || e}`);
+                }
             });
         }
 
@@ -13811,11 +15623,9 @@
                                     <span>导出</span><span id="gpt-batch-export-menu-icon" style="opacity:.9;display:inline-flex;transition:transform .2s ease;transform:rotate(0deg);"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg></span>
                                 </button>
                                 <div id="gpt-batch-export-menu" style="position:absolute;right:0;top:36px;width:100px;background:rgba(255, 255, 255, 0.2);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);border:1px solid rgba(255,255,255,0.35);border-radius:10px;box-shadow:0 10px 30px rgba(15,23,42,.15);padding:0;z-index:7;opacity:0;pointer-events:none;transform:translateY(-8px) scale(0.96);transition:opacity .22s cubic-bezier(0.22,0.61,0.36,1), transform .22s cubic-bezier(0.22,0.61,0.36,1);">
-                                    <button class="gpt-batch-export-item" data-format="json" style="display:block;width:100%;margin:0;text-align:center;background:transparent;color:#2563eb;border-radius:0;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;transition:border-color .18s ease, box-shadow .18s ease, background-color .18s ease;border:none;">JSON</button>
                                     <button class="gpt-batch-export-item" data-format="md" style="display:block;width:100%;margin:0;text-align:center;background:transparent;color:#2563eb;border-radius:0;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;transition:border-color .18s ease, box-shadow .18s ease, background-color .18s ease;border:none;">Markdown</button>
                                     <button class="gpt-batch-export-item" data-format="txt" style="display:block;width:100%;margin:0;text-align:center;background:transparent;color:#2563eb;border-radius:0;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;transition:border-color .18s ease, box-shadow .18s ease, background-color .18s ease;border:none;">TXT</button>
-                                    <button class="gpt-batch-export-item" data-format="csv" style="display:block;width:100%;margin:0;text-align:center;background:transparent;color:#2563eb;border-radius:0;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;transition:border-color .18s ease, box-shadow .18s ease, background-color .18s ease;border:none;">CSV</button>
-                                    <button class="gpt-batch-export-item" data-format="pdf" style="display:block;width:100%;margin:0;text-align:center;background:transparent;color:#2563eb;border-radius:0;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;transition:border-color .18s ease, box-shadow .18s ease, background-color .18s ease;border:none;">PDF</button>
+                                    <button class="gpt-batch-export-item" data-format="html" style="display:block;width:100%;margin:0;text-align:center;background:transparent;color:#2563eb;border-radius:0;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;transition:border-color .18s ease, box-shadow .18s ease, background-color .18s ease;border:none;">HTML</button>
                                 </div>
                             </div>
                         </div>
@@ -13990,7 +15800,7 @@
 
                 await exportChatGPTBatchConversations(out, format);
                 statusEl.textContent = `批量导出完成，成功 ${out.length} 个会话${failCount ? `，失败 ${failCount} 个` : ''}`;
-                alert(`批量导出完成：成功 ${out.length} 个会话${failCount ? `，失败 ${failCount} 个` : ''}。已按会话标题分别打包为 ZIP。${format === 'pdf' ? 'PDF 选项导出为可打印 HTML 压缩包。' : ''}`);
+                alert(`批量导出完成：成功 ${out.length} 个会话${failCount ? `，失败 ${failCount} 个` : ''}。已按会话标题分别打包为 ZIP。${format === 'html' ? 'HTML 文件可直接打开浏览。' : ''}`);
             };
 
             modal.querySelector('#gpt-batch-close').addEventListener('click', close);
@@ -14055,11 +15865,9 @@
                             <div style="position:relative;display:flex;justify-content:flex-end;align-items:center;">
                                 <button id="cl-batch-export-menu-trigger" style="border:1px solid #2563eb;background:#fff;color:#2563eb;border-radius:8px;font-size:12px;padding:7px 12px;cursor:pointer;font-weight:700;display:flex;align-items:center;gap:6px;"><span>导出</span><span id="cl-batch-export-menu-icon" style="opacity:.9;display:inline-flex;transition:transform .2s ease;transform:rotate(0deg);"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg></span></button>
                                 <div id="cl-batch-export-menu" style="position:absolute;right:0;top:36px;width:100px;background:rgba(255, 255, 255, 0.2);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);border:1px solid rgba(255,255,255,0.35);border-radius:10px;box-shadow:0 10px 30px rgba(15,23,42,.15);padding:0;z-index:7;opacity:0;pointer-events:none;transform:translateY(-8px) scale(0.96);transition:opacity .22s cubic-bezier(0.22,0.61,0.36,1), transform .22s cubic-bezier(0.22,0.61,0.36,1);">
-                                    <button class="cl-batch-export-item" data-format="json" style="display:block;width:100%;margin:0;text-align:center;background:transparent;color:#2563eb;border-radius:0;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;border:none;">JSON</button>
                                     <button class="cl-batch-export-item" data-format="md" style="display:block;width:100%;margin:0;text-align:center;background:transparent;color:#2563eb;border-radius:0;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;border:none;">Markdown</button>
                                     <button class="cl-batch-export-item" data-format="txt" style="display:block;width:100%;margin:0;text-align:center;background:transparent;color:#2563eb;border-radius:0;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;border:none;">TXT</button>
-                                    <button class="cl-batch-export-item" data-format="csv" style="display:block;width:100%;margin:0;text-align:center;background:transparent;color:#2563eb;border-radius:0;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;border:none;">CSV</button>
-                                    <button class="cl-batch-export-item" data-format="pdf" style="display:block;width:100%;margin:0;text-align:center;background:transparent;color:#2563eb;border-radius:0;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;border:none;">PDF</button>
+                                    <button class="cl-batch-export-item" data-format="html" style="display:block;width:100%;margin:0;text-align:center;background:transparent;color:#2563eb;border-radius:0;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;border:none;">HTML</button>
                                 </div>
                             </div>
                         </div>
@@ -14162,7 +15970,7 @@
                     const info = await fetchClaudeConversationMessages(conv.id);
                     return {
                         title: info.title || conv.title || `会话 ${conv.id}`,
-                        messages: (info.messages || []).map((m) => ({ role: m.role, text: String(m.text || '') }))
+                        messages: info.messages || []
                     };
                 };
                 openBatchConversationPreviewModal('Claude', conv.title || conv.id, previewLoader);
@@ -14189,10 +15997,7 @@
                             createdAt: conv.createdAt || 0,
                             createdAtText: conv.createdAtText || '',
                             messageCount: (info.messages || []).length,
-                            messages: (info.messages || []).map((m) => ({
-                                role: m.role,
-                                text: String(m.text || '')
-                            }))
+                            messages: info.messages || []
                         });
                     } catch (e) {
                         failCount += 1;
@@ -14204,7 +16009,7 @@
                     return;
                 }
                 await exportClaudeBatchConversations(out, format);
-                alert(`批量导出完成：成功 ${out.length} 个会话${failCount ? `，失败 ${failCount} 个` : ''}。已按会话标题分别打包为 ZIP。${format === 'pdf' ? 'PDF 选项导出为可打印 HTML 压缩包。' : ''}`);
+                alert(`批量导出完成：成功 ${out.length} 个会话${failCount ? `，失败 ${failCount} 个` : ''}。已按会话标题分别打包为 ZIP。${format === 'html' ? 'HTML 文件可直接打开浏览。' : ''}`);
             };
 
             modal.querySelector('#cl-batch-close').addEventListener('click', close);
@@ -14491,11 +16296,9 @@
                                     <span>导出</span><span id="ds-batch-export-menu-icon" style="opacity:.9;display:inline-flex;transition:transform .2s ease;transform:rotate(0deg);"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg></span>
                                 </button>
                                 <div id="ds-batch-export-menu" style="position:absolute;right:0;top:36px;width:100px;background:rgba(255, 255, 255, 0.2);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);border:1px solid rgba(255,255,255,0.35);border-radius:10px;box-shadow:0 10px 30px rgba(15,23,42,.15);padding:0;z-index:7;opacity:0;pointer-events:none;transform:translateY(-8px) scale(0.96);transition:opacity .22s cubic-bezier(0.22,0.61,0.36,1), transform .22s cubic-bezier(0.22,0.61,0.36,1);">
-                                    <button class="ds-batch-export-item" data-format="json" style="display:block;width:100%;margin:0;text-align:center;background:transparent;color:#2563eb;border-radius:0;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;transition:border-color .18s ease, box-shadow .18s ease, background-color .18s ease;border:none;">JSON</button>
                                     <button class="ds-batch-export-item" data-format="md" style="display:block;width:100%;margin:0;text-align:center;background:transparent;color:#2563eb;border-radius:0;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;transition:border-color .18s ease, box-shadow .18s ease, background-color .18s ease;border:none;">Markdown</button>
                                     <button class="ds-batch-export-item" data-format="txt" style="display:block;width:100%;margin:0;text-align:center;background:transparent;color:#2563eb;border-radius:0;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;transition:border-color .18s ease, box-shadow .18s ease, background-color .18s ease;border:none;">TXT</button>
-                                    <button class="ds-batch-export-item" data-format="csv" style="display:block;width:100%;margin:0;text-align:center;background:transparent;color:#2563eb;border-radius:0;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;transition:border-color .18s ease, box-shadow .18s ease, background-color .18s ease;border:none;">CSV</button>
-                                    <button class="ds-batch-export-item" data-format="pdf" style="display:block;width:100%;margin:0;text-align:center;background:transparent;color:#2563eb;border-radius:0;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;transition:border-color .18s ease, box-shadow .18s ease, background-color .18s ease;border:none;">PDF</button>
+                                    <button class="ds-batch-export-item" data-format="html" style="display:block;width:100%;margin:0;text-align:center;background:transparent;color:#2563eb;border-radius:0;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;transition:border-color .18s ease, box-shadow .18s ease, background-color .18s ease;border:none;">HTML</button>
                                 </div>
                             </div>
                         </div>
@@ -14737,7 +16540,7 @@
 
                 await exportDeepSeekBatchConversations(out, format);
                 statusEl.textContent = `批量导出完成，成功 ${out.length} 个会话${failCount ? `，失败 ${failCount} 个` : ''}`;
-                alert(`批量导出完成：成功 ${out.length} 个会话${failCount ? `，失败 ${failCount} 个` : ''}。已按会话标题分别打包为 ZIP。${format === 'pdf' ? 'PDF 选项导出为可打印 HTML 压缩包。' : ''}`);
+                alert(`批量导出完成：成功 ${out.length} 个会话${failCount ? `，失败 ${failCount} 个` : ''}。已按会话标题分别打包为 ZIP。${format === 'html' ? 'HTML 文件可直接打开浏览。' : ''}`);
             };
 
             modal.querySelector('#ds-batch-close').addEventListener('click', close);
@@ -14811,11 +16614,9 @@
                                     <span>导出</span><span id="db-batch-export-menu-icon" style="opacity:.9;display:inline-flex;transition:transform .2s ease;transform:rotate(0deg);"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg></span>
                                 </button>
                                 <div id="db-batch-export-menu" style="position:absolute;right:0;top:36px;width:100px;background:rgba(255, 255, 255, 0.2);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);border:1px solid rgba(255,255,255,0.35);border-radius:10px;box-shadow:0 10px 30px rgba(15,23,42,.15);padding:0;z-index:7;opacity:0;pointer-events:none;transform:translateY(-8px) scale(0.96);transition:opacity .22s cubic-bezier(0.22,0.61,0.36,1), transform .22s cubic-bezier(0.22,0.61,0.36,1);">
-                                    <button class="db-batch-export-item" data-format="json" style="display:block;width:100%;margin:0;text-align:center;background:transparent;color:#2563eb;border-radius:0;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;transition:border-color .18s ease, box-shadow .18s ease, background-color .18s ease;border:none;">JSON</button>
                                     <button class="db-batch-export-item" data-format="md" style="display:block;width:100%;margin:0;text-align:center;background:transparent;color:#2563eb;border-radius:0;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;transition:border-color .18s ease, box-shadow .18s ease, background-color .18s ease;border:none;">Markdown</button>
                                     <button class="db-batch-export-item" data-format="txt" style="display:block;width:100%;margin:0;text-align:center;background:transparent;color:#2563eb;border-radius:0;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;transition:border-color .18s ease, box-shadow .18s ease, background-color .18s ease;border:none;">TXT</button>
-                                    <button class="db-batch-export-item" data-format="csv" style="display:block;width:100%;margin:0;text-align:center;background:transparent;color:#2563eb;border-radius:0;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;transition:border-color .18s ease, box-shadow .18s ease, background-color .18s ease;border:none;">CSV</button>
-                                    <button class="db-batch-export-item" data-format="pdf" style="display:block;width:100%;margin:0;text-align:center;background:transparent;color:#2563eb;border-radius:0;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;transition:border-color .18s ease, box-shadow .18s ease, background-color .18s ease;border:none;">PDF</button>
+                                    <button class="db-batch-export-item" data-format="html" style="display:block;width:100%;margin:0;text-align:center;background:transparent;color:#2563eb;border-radius:0;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;transition:border-color .18s ease, box-shadow .18s ease, background-color .18s ease;border:none;">HTML</button>
                                 </div>
                             </div>
                         </div>
@@ -15007,7 +16808,7 @@
                 }
 
                 await exportDoubaoBatchConversations(out, format);
-                alert(`批量导出完成：成功 ${out.length} 个会话${failCount ? `，失败 ${failCount} 个` : ''}。已按会话标题分别打包为 ZIP。${format === 'pdf' ? 'PDF 选项导出为可打印 HTML 压缩包。' : ''}`);
+                alert(`批量导出完成：成功 ${out.length} 个会话${failCount ? `，失败 ${failCount} 个` : ''}。已按会话标题分别打包为 ZIP。${format === 'html' ? 'HTML 文件可直接打开浏览。' : ''}`);
             };
 
             modal.querySelector('#db-batch-close').addEventListener('click', close);
@@ -15093,11 +16894,9 @@
                                     <span>导出</span><span id="qw-batch-export-menu-icon" style="opacity:.9;display:inline-flex;transition:transform .2s ease;transform:rotate(0deg);"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg></span>
                                 </button>
                                 <div id="qw-batch-export-menu" style="position:absolute;right:0;top:40px;width:140px;background:#fff;border:1px solid #dbe3ee;border-radius:10px;box-shadow:0 10px 30px rgba(15,23,42,.15);padding:8px;z-index:5;opacity:0;pointer-events:none;transform:translateY(-8px) scale(0.96);transition:opacity .22s cubic-bezier(0.22, 0.61, 0.36, 1), transform .22s cubic-bezier(0.22, 0.61, 0.36, 1);">
-                                    <button class="qw-batch-export-item" data-format="json" style="display:block;width:100%;margin:0;text-align:center;background:#ffffff;color:#2563eb;border-radius:0;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;transition:border-color .18s ease, box-shadow .18s ease, background-color .18s ease;border:none;">JSON</button>
                                     <button class="qw-batch-export-item" data-format="md" style="display:block;width:100%;margin:0;text-align:center;background:#ffffff;color:#2563eb;border-radius:0;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;transition:border-color .18s ease, box-shadow .18s ease, background-color .18s ease;border:none;">Markdown</button>
                                     <button class="qw-batch-export-item" data-format="txt" style="display:block;width:100%;margin:0;text-align:center;background:#ffffff;color:#2563eb;border-radius:0;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;transition:border-color .18s ease, box-shadow .18s ease, background-color .18s ease;border:none;">TXT</button>
-                                    <button class="qw-batch-export-item" data-format="csv" style="display:block;width:100%;margin:0;text-align:center;background:#ffffff;color:#2563eb;border-radius:0;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;transition:border-color .18s ease, box-shadow .18s ease, background-color .18s ease;border:none;">CSV</button>
-                                    <button class="qw-batch-export-item" data-format="pdf" style="display:block;width:100%;margin:0;text-align:center;background:#ffffff;color:#2563eb;border-radius:0;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;transition:border-color .18s ease, box-shadow .18s ease, background-color .18s ease;border:none;">PDF</button>
+                                    <button class="qw-batch-export-item" data-format="html" style="display:block;width:100%;margin:0;text-align:center;background:#ffffff;color:#2563eb;border-radius:0;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;transition:border-color .18s ease, box-shadow .18s ease, background-color .18s ease;border:none;">HTML</button>
                                 </div>
                             </div>
                         </div>
@@ -15291,7 +17090,7 @@
                     return;
                 }
                 await exportQwenBatchConversations(out, format);
-                alert(`批量导出完成：成功 ${out.length} 个会话${failCount ? `，失败 ${failCount} 个` : ''}。已按会话标题分别打包为 ZIP。${format === 'pdf' ? 'PDF 选项导出为可打印 HTML 压缩包。' : ''}`);
+                alert(`批量导出完成：成功 ${out.length} 个会话${failCount ? `，失败 ${failCount} 个` : ''}。已按会话标题分别打包为 ZIP。${format === 'html' ? 'HTML 文件可直接打开浏览。' : ''}`);
             };
 
             modal.querySelector('#qw-batch-close').addEventListener('click', close);
@@ -15433,12 +17232,21 @@
         }
 
         // 处理文件保存逻辑
-        function handleExport(data, format) {
+        async function handleExport(data, format) {
+            if (!['md', 'txt', 'html'].includes(String(format || '').trim())) {
+                throw new Error(`不支持的导出类型: ${format || '-'}`);
+            }
             const fileName = `${AI_NAME}_Export_${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '_')}`;
             let content = '';
             let type = 'text/plain;charset=utf-8';
             let ext = format;
             const exportData = data.map((m) => buildMessageExportSnapshot(m));
+            const archiveBundle = format !== 'html'
+                ? await buildImageArchiveBundle(exportData)
+                : { hasImages: false, urlMap: {}, fileMap: {}, entries: [], readmeLines: [] };
+            const preparedExportData = archiveBundle.hasImages
+                ? exportData.map((m) => buildArchivedMessageSnapshotWithFiles(m, archiveBundle.urlMap, archiveBundle.fileMap || {}))
+                : exportData;
 
             const deepSeekExportMeta = (() => {
                 if (!isDeepSeek || !deepseekLastSessionMeta) return null;
@@ -15509,9 +17317,86 @@
 
             function renderClaudePartsToHtmlForPdf(parts, fallbackText) {
                 const list = Array.isArray(parts) ? parts : [];
-                if (!list.length) return renderMarkdownToHtmlForPdf(fallbackText);
+                if (!list.length) {
+                    const base = renderMarkdownToHtmlForPdf(fallbackText);
+                    const cachedPreview = renderClaudeCachedAttachmentsToStaticHtml(fallbackText);
+                    return cachedPreview ? `${base}\n${cachedPreview}` : base;
+                }
                 const html = [];
                 let imageSerial = 0;
+
+                const sanitizeClaudeWidgetBodyHtmlForPdf = (bodyHtml) => {
+                    const raw = String(bodyHtml || '').trim();
+                    if (!raw) return '';
+                    const root = parseClaudeHtmlNodeRoot(raw);
+                    if (!(root instanceof Element)) {
+                        return raw
+                            .replace(/<script[\s\S]*?<\/script>/gi, '')
+                            .replace(/<style[\s\S]*?<\/style>/gi, '')
+                            .trim();
+                    }
+                    root.querySelectorAll('script, style, noscript, template').forEach((el) => el.remove());
+                    root.querySelectorAll('*').forEach((el) => {
+                        Array.from(el.attributes || []).forEach((attr) => {
+                            const attrName = String(attr.name || '').toLowerCase();
+                            const attrValue = String(attr.value || '').trim();
+                            if (attrName.startsWith('on')) el.removeAttribute(attr.name);
+                            if ((attrName === 'href' || attrName === 'src') && /^javascript:/i.test(attrValue)) {
+                                el.removeAttribute(attr.name);
+                            }
+                        });
+                    });
+                    return root.innerHTML.trim();
+                };
+
+                const scopeClaudeWidgetCssForPdf = (stylesHtml) => {
+                    const cssChunks = [];
+                    String(stylesHtml || '').replace(/<style[^>]*>([\s\S]*?)<\/style>/gi, (_, css) => {
+                        cssChunks.push(String(css || ''));
+                        return '';
+                    });
+                    if (!cssChunks.length) return '';
+                    const scoped = cssChunks.map((css) => String(css || '').replace(/([^{}]+)\{([^{}]*)\}/g, (rule, selector, body) => {
+                        const rawSelector = String(selector || '').trim();
+                        if (!rawSelector || rawSelector.startsWith('@')) return rule;
+                        const scopedSelector = rawSelector
+                            .split(',')
+                            .map((sel) => {
+                                const s = String(sel || '').trim();
+                                if (!s) return '';
+                                if (/^(?:html|body|:root)\b/i.test(s)) return '.claude-html-widget';
+                                if (s.startsWith('.claude-html-widget')) return s;
+                                return `.claude-html-widget ${s}`;
+                            })
+                            .filter(Boolean)
+                            .join(', ');
+                        return scopedSelector ? `${scopedSelector}{${body}}` : rule;
+                    })).join('\n');
+                    return scoped.trim() ? `<style>${scoped}</style>` : '';
+                };
+
+                const renderInlineClaudeFileForPdf = (part, rawName) => {
+                    const inlineContent = String(part?.inlineContent || '').trim();
+                    if (!inlineContent) return '';
+                    const mediaParts = extractClaudeRenderablePartsFromHtmlFragment(inlineContent);
+                    if (mediaParts.length) return renderClaudePartsToHtmlForPdf(mediaParts, '');
+                    if (isClaudeCadHoleWidgetHtml(inlineContent, rawName)) {
+                        return renderClaudePartsToHtmlForPdf([buildClaudeWidgetFallbackSvgPart(inlineContent, rawName)], '');
+                    }
+                    const parsed = parseClaudeWidgetHtmlSource(inlineContent);
+                    const bodyHtml = sanitizeClaudeWidgetBodyHtmlForPdf(parsed.bodyHtml || inlineContent);
+                    if (!bodyHtml) return '';
+                    const styleBlock = scopeClaudeWidgetCssForPdf(parsed.styles || '');
+                    const caption = escapeHtml(rawName || '交互演示');
+                    return `
+                        <figure class="claude-html-widget-block">
+                            <figcaption>交互内容 · ${caption}</figcaption>
+                            ${styleBlock}
+                            <div class="claude-html-widget">${bodyHtml}</div>
+                        </figure>
+                    `.trim();
+                };
+
                 list.forEach((part) => {
                     if (!part || typeof part !== 'object') return;
                     const type = String(part.type || '').trim().toLowerCase();
@@ -15535,15 +17420,41 @@
                         }
                         return;
                     }
+                    if (type === 'svg') {
+                        imageSerial += 1;
+                        const name = escapeHtml(String(part.fileName || '').trim() || `图像${imageSerial}`);
+                        const svgMarkup = String(part.svg || '').trim();
+                        const width = Number(part.width || 0);
+                        const height = Number(part.height || 0);
+                        const ratioText = width > 0 && height > 0 ? `${width} × ${height}` : '';
+                        if (svgMarkup) {
+                            html.push(`<figure class="claude-image-block claude-svg-block"><div class="claude-inline-svg">${svgMarkup}</div><figcaption>图像${imageSerial}${name ? ` · ${name}` : ''}${ratioText ? ` · ${ratioText}` : ''}</figcaption></figure>`);
+                        } else {
+                            html.push(`<p>[图像${imageSerial}] ${name}${ratioText ? ` (${ratioText})` : ''}</p>`);
+                        }
+                        return;
+                    }
                     if (type === 'file') {
-                        const name = escapeHtml(String(part.fileName || '').trim() || '附件');
+                        const rawName = String(part.fileName || '').trim() || '附件';
+                        const inlineHtml = renderInlineClaudeFileForPdf(part, rawName);
+                        if (inlineHtml) {
+                            html.push(inlineHtml);
+                            return;
+                        }
+                        const name = escapeHtml(rawName);
                         const url = escapeHtml(resolveClaudeAssetUrl(part.url || ''));
                         html.push(url
                             ? `<p>[附件] <a href="${url}" target="_blank" rel="noreferrer">${name}</a></p>`
                             : `<p>[附件] ${name}</p>`);
                     }
                 });
-                return html.join('\n').trim() || renderMarkdownToHtmlForPdf(fallbackText);
+                const rendered = html.join('\n').trim();
+                const base = rendered || renderMarkdownToHtmlForPdf(fallbackText);
+                if (!/claude-html-widget-block|claude-image-block|claude-inline-svg|<svg\b|<img\b/i.test(base)) {
+                    const cachedPreview = renderClaudeCachedAttachmentsToStaticHtml(fallbackText);
+                    if (cachedPreview) return `${base}\n${cachedPreview}`;
+                }
+                return base;
             }
 
             function renderMarkdownToHtmlForPdf(text) {
@@ -15860,38 +17771,11 @@
                 return html.join('\n');
             }
 
-            if (format === 'json') {
-                if (deepSeekExportMeta) {
-                    content = JSON.stringify({
-                        platform: 'DeepSeek',
-                        sessionInfo: {
-                            id: deepSeekExportMeta.sessionId,
-                            title: deepSeekExportMeta.title,
-                            pinned: deepSeekExportMeta.pinned,
-                            createdAt: deepSeekExportMeta.createdAt,
-                            updatedAt: deepSeekExportMeta.updatedAt,
-                            thinkingEnabled: deepSeekExportMeta.thinkingEnabled,
-                            searchEnabled: deepSeekExportMeta.searchEnabled
-                        },
-                        messages: exportData.map(m => ({ role: m.role, text: m.__displayText, parts: Array.isArray(m.parts) ? m.parts : [] }))
-                    }, null, 2);
-                } else {
-                    content = JSON.stringify(exportData.map(m => ({ role: m.role, text: m.__displayText, parts: Array.isArray(m.parts) ? m.parts : [] })), null, 2);
-                }
-                type = 'application/json';
-            } else if (format === 'csv') {
-                const rows = [];
-                if (deepSeekExportMeta) {
-                    rows.push(`Meta,"${deepSeekMetaText.replace(/"/g, '""').replace(/\n/g, ' ; ')}"`);
-                }
-                rows.push(...exportData.map(m => `${m.role === 'user' ? 'User' : AI_NAME},"${m.__displayText.replace(/"/g, '""')}"`));
-                content = '\uFEFFRole,Content\n' + rows.join('\n');
-                type = 'text/csv';
-            } else if (format === 'txt') {
-                const body = exportData.map(m => `----------------------------\n【${m.role === 'user' ? '用户问题' : AI_NAME}】\n----------------------------\n${m.__displayText}`).join('\n\n');
+            if (format === 'txt') {
+                const body = preparedExportData.map(m => `----------------------------\n【${m.role === 'user' ? '用户问题' : AI_NAME}】\n----------------------------\n${m.__displayText}`).join('\n\n');
                 content = deepSeekMetaText ? `${deepSeekMetaText}\n\n${body}` : body;
             } else if (format === 'md') {
-                const body = exportData.map(m => `### ${m.role === 'user' ? '🧑 用户问题' : '🤖 ' + AI_NAME + '回答'}\n\n${m.__markdownText}`).join('\n\n---\n\n');
+                const body = preparedExportData.map(m => `### ${m.role === 'user' ? '🧑 用户问题' : '🤖 ' + AI_NAME + '回答'}\n\n${m.__markdownText}`).join('\n\n---\n\n');
                 if (deepSeekMetaText) {
                     const mdMeta = [
                         '## DeepSeek 对话信息',
@@ -15909,12 +17793,7 @@
                 } else {
                     content = body;
                 }
-            } else if (format === 'pdf') {
-                const win = window.open('', '_blank');
-                if (!win) {
-                    alert('PDF 导出窗口被浏览器拦截，请允许弹窗后重试。');
-                    return;
-                }
+            } else if (format === 'html') {
                 // 聚合逻辑：将 User 发起及随后跟随的所有连续 Assistant 回复视为一个对话组（1 轮）
                 const groups = [];
                 for (let i = 0; i < exportData.length; i++) {
@@ -15929,7 +17808,7 @@
                     groups.push(turn);
                 }
 
-                const html = `<html><head><title>对话记录导导出 - ${AI_NAME}</title>
+                const html = `<html><head><title>对话记录导出 - ${AI_NAME}</title>
                 <style>
                     body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; padding: 0; margin: 0; color: #1a202c; background: #f8fafc; }
                     .page { padding: 50px 60px; page-break-after: always; min-height: 90vh; display: flex; flex-direction: column; max-width: 900px; margin: 0 auto; background: #fff; box-shadow: 0 0 40px rgba(0,0,0,0.05); }
@@ -15973,6 +17852,8 @@
                     .claude-image-block { margin: 14px 0 18px; padding: 12px; border: 1px solid #dbeafe; border-radius: 12px; background: #f8fbff; }
                     .claude-image-block img { display: block; max-width: 100%; max-height: 480px; width: auto; height: auto; margin: 0 auto; border-radius: 8px; border: 1px solid #dbeafe; background: #fff; object-fit: contain; }
                     .claude-image-block figcaption { margin-top: 8px; font-size: 12px; color: #475569; text-align: center; }
+                    .claude-inline-svg { display:flex; justify-content:center; align-items:center; padding:8px; border:1px solid #dbeafe; border-radius:10px; background:#fff; overflow:auto; }
+                    .claude-inline-svg > svg { display:block; max-width:100%; height:auto; margin:0 auto; }
                     .math-inline { white-space: normal; max-width: 100%; }
                     .math-display { margin: 14px 0; padding: 8px 10px; background: #f8fafc; border-left: 3px solid #bfdbfe; overflow-x: auto; }
                     td .math-display, th .math-display { margin: 6px 0; padding: 4px 6px; }
@@ -16070,30 +17951,26 @@
                         };
                     </script>
                     <script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
-                    <script>
-                        (function () {
-                            // 避免浏览器打印页脚显示 about:blank
-                            try {
-                                var openerHref = window.opener && window.opener.location ? window.opener.location.href : '';
-                                if (openerHref) window.history.replaceState(null, document.title, openerHref);
-                            } catch (e) {}
-                            function safePrint() {
-                                setTimeout(function () { window.print(); }, 160);
-                            }
-                            function run() {
-                                if (window.MathJax && typeof window.MathJax.typesetPromise === 'function') {
-                                    window.MathJax.typesetPromise().then(safePrint).catch(safePrint);
-                                } else {
-                                    safePrint();
-                                }
-                            }
-                            if (document.readyState === 'complete') run();
-                            else window.addEventListener('load', run, { once: true });
-                        })();
-                    </script>
                 </body></html>`;
-                win.document.write(html);
-                win.document.close();
+                content = html;
+                type = 'text/html;charset=utf-8';
+                ext = 'html';
+            }
+
+            if (archiveBundle.hasImages) {
+                const usedNames = new Set();
+                const zipEntries = [{
+                    name: getUniqueBatchFileName(fileName, ext, usedNames),
+                    data: content
+                }];
+                zipEntries.push(...archiveBundle.entries);
+                if (archiveBundle.readmeLines.length) {
+                    zipEntries.push({
+                        name: getUniqueBatchFileName('README', 'txt', usedNames),
+                        data: archiveBundle.readmeLines.join('\n')
+                    });
+                }
+                downloadBlob(createZipBlob(zipEntries), `${fileName}.zip`);
                 return;
             }
 
