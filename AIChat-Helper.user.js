@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AI对话助手
 // @namespace    http://tampermonkey.net/
-// @version      2.0.12
+// @version      2.0.13
 // @description  支持 ChatGPT、通义千问、豆包、DeepSeek、Claude：自动生成对话节点导航、一键导出对话（HTML/Markdown/TXT）。
 // @author       xchengb
 // @updateURL    https://github.com/yixing233/AIChat-Helper/raw/master/AIChat-Helper.user.js
@@ -16,6 +16,8 @@
 // @grant        GM_getValue
 // @grant        GM_setValue
 // @grant        GM_xmlhttpRequest
+// @grant        unsafeWindow
+// @require      https://cdn.jsdelivr.net/npm/markdown-it@14.1.0/dist/markdown-it.min.js
 // @connect      github.com
 // @connect      raw.githubusercontent.com
 // @run-at       document-start
@@ -45,7 +47,7 @@
     const isDeepSeek = isDeepSeekHost && isDeepSeekPath;
     const isClaude = isClaudeHost && isClaudePath;
     const AI_NAME = isChatGPT ? 'ChatGPT' : (isDeepSeek ? 'DeepSeek' : (isDoubao ? '豆包' : (isQwen ? '通义千问' : (isClaude ? 'Claude' : 'AI 助手'))));
-    const SCRIPT_VERSION = '2.0.12';
+    const SCRIPT_VERSION = '2.0.13';
     const SCRIPT_UPDATE_URL = 'https://raw.githubusercontent.com/yixing233/AIChat-Helper/master/AIChat-Helper.user.js';
     const SCRIPT_DOWNLOAD_URL = 'https://github.com/yixing233/AIChat-Helper/raw/master/AIChat-Helper.user.js';
     const SCRIPT_CHANGELOG_URL = 'https://raw.githubusercontent.com/yixing233/AIChat-Helper/master/update.json';
@@ -10299,10 +10301,20 @@
             return m ? m[1] : '';
         }
 
+        function chatGPTPageFetch(url, options = {}) {
+            const fetchFn = (typeof unsafeWindow !== 'undefined' && unsafeWindow?.fetch)
+                ? unsafeWindow.fetch.bind(unsafeWindow)
+                : window.fetch.bind(window);
+            return fetchFn(url, {
+                credentials: 'include',
+                ...options
+            });
+        }
+
         async function getChatGPTAccessToken() {
             if (chatgptAccessToken) return chatgptAccessToken;
             try {
-                const sessionResp = await fetch('/api/auth/session?unstable_client=true');
+                const sessionResp = await chatGPTPageFetch('/api/auth/session?unstable_client=true');
                 if (!sessionResp.ok) return null;
                 const session = await sessionResp.json();
                 chatgptAccessToken = session?.accessToken || null;
@@ -10579,7 +10591,7 @@
             const token = await getChatGPTAccessToken();
             if (!token) throw new Error('未能获取 ChatGPT access token');
 
-            const resp = await fetch(`/backend-api/conversation/${conversationId}`, {
+            const resp = await chatGPTPageFetch(`/backend-api/conversation/${conversationId}`, {
                 headers: buildChatGPTApiHeaders(token, workspaceId)
             });
             if (!resp.ok) {
@@ -10592,15 +10604,108 @@
             await exportBatchConversationsAsZip('ChatGPT', conversations, format, 'ChatGPT');
         }
 
+        function isChatGPTToolCallJsonLine(line) {
+            const text = String(line || '').trim();
+            if (!text || text[0] !== '{' || text[text.length - 1] !== '}') return false;
+            return /"(?:search_query|image_query|open|click|find|screenshot|finance|weather|sports|time|response_length)"\s*:/.test(text);
+        }
+
         function cleanChatGPTText(text) {
             if (!text) return '';
-            return text
+            const cleaned = String(text || '')
                 .replace(/\uE200cite(?:\uE202turn\d+(?:search|view)\d+)+\uE201/gi, '')
+                .replace(/\uE200filecite(?:\uE202turn\d+file\d+)+\uE201/gi, '')
                 .replace(/cite(?:turn\d+(?:search|view)\d+)+/gi, '')
-                .replace(/[“"]\s*[“"](?=\s|$)/g, '')
-                .replace(/\s{2,}/g, ' ')
-                .replace(/\n[ \t]+\n/g, '\n\n')
+                .replace(/filecite(?:turn\d+file\d+)+/gi, '')
+                .replace(/\[引用\]/g, ' ')
+                .replace(/\[\s*文件引用\s*\]/g, '')
+                .replace(/【引用来源】[\s\S]*$/g, '')
+                .replace(/已思考几秒/g, '')
+                .replace(/\r\n/g, '\n');
+
+            return cleaned
+                .split('\n')
+                .filter((line) => !isChatGPTToolCallJsonLine(line))
+                .map((line) => String(line || '').trimEnd())
+                .join('\n')
+                .replace(/\n{3,}/g, '\n\n')
                 .trim();
+        }
+
+        function repairSplitMarkdownMarkers(line) {
+            let out = String(line || '');
+            out = out.replace(/^(\s*)((?:#\s+){1,6})(?=\S)/, (_, indent, marks) => {
+                const level = Math.min((marks.match(/#/g) || []).length, 6);
+                return `${indent}${'#'.repeat(level)} `;
+            });
+            out = out.replace(/^\s*(?:-\s*){2,}\s*$/g, '---');
+            return out;
+        }
+
+        function restoreChatGPTImplicitLists(text) {
+            const lines = String(text || '').split('\n');
+            const out = [];
+            const isMarkdownLine = (line) => /^\s*(?:#{1,6}\s+|[-*+]\s+|\d+[.)]\s+|```|~~~|---+|\|)/.test(line);
+            const listIntroPattern = /(?:分析|包括|包含|如下|参数|流程|步骤|指标|例如|分为|提取|判断|寻找|识别|输出|输入|类型|关系|结构|模块|功能|能力|字段|类别|清单)[：:]\s*$/;
+            const isIntroLine = (line) => {
+                const t = String(line || '').trim();
+                return listIntroPattern.test(t) && !isMarkdownLine(t);
+            };
+            const isLikelyListItem = (line) => {
+                const t = String(line || '').trim();
+                if (!t || isMarkdownLine(t)) return false;
+                if (isIntroLine(t)) return false;
+                if (/^<\/?[\w-]+/i.test(t)) return false;
+                if (/[。！？.!?；;]\s*$/.test(t)) return false;
+                if (/^[（(]?\d+[）)]/.test(t)) return true;
+                if (/^[\u4e00-\u9fa5A-Za-z0-9_ /+()（）-]+[：:]/.test(t)) return true;
+                return t.length <= 28;
+            };
+
+            for (let i = 0; i < lines.length; i += 1) {
+                out.push(lines[i]);
+                if (!isIntroLine(lines[i])) continue;
+
+                let j = i + 1;
+                const pending = [];
+                while (j < lines.length) {
+                    const raw = lines[j];
+                    const t = String(raw || '').trim();
+                    if (!t) break;
+                    if (!isLikelyListItem(raw)) break;
+                    pending.push(raw);
+                    j += 1;
+                }
+
+                if (pending.length >= 2) {
+                    pending.forEach((item) => {
+                        out.push(`- ${String(item || '').trim()}`);
+                    });
+                    i = j - 1;
+                }
+            }
+
+            return out.join('\n');
+        }
+
+        function isExportableChatGPTMessage(msg) {
+            if (!msg || typeof msg !== 'object') return false;
+            const author = String(msg.author?.role || '').trim();
+            if (author !== 'user' && author !== 'assistant') return false;
+
+            const metadata = msg.metadata || {};
+            if (metadata.is_visually_hidden_from_conversation || metadata.is_contextual_answers_system_message) return false;
+
+            const contentType = String(msg.content?.content_type || msg.content?.type || '').trim().toLowerCase();
+            if (contentType && contentType !== 'text') return false;
+
+            if (author === 'assistant') {
+                const channel = String(msg.channel || '').trim().toLowerCase();
+                if (channel && channel !== 'final' && channel !== 'commentary') return false;
+                if (channel === 'final' && msg.end_turn === false) return false;
+            }
+
+            return true;
         }
 
         function normalizeChatGPTReferenceName(reference) {
@@ -11332,13 +11437,97 @@
             downloadBlob(zipBlob, `${platform}_批量导出_${format}_${stamp}.zip`);
         }
 
-        function chatMarkdownToHtml(mdText) {
-            if (!mdText) return '';
+        function normalizeMarkdownForPreview(mdText) {
+            const rawText = String(mdText || '');
+            if (isChatGPT) {
+                return rawText
+                    .replace(/\r\n/g, '\n')
+                    .split('\n')
+                    .map((line) => String(line || '').replace(/[ \t]+$/g, ''))
+                    .join('\n')
+                    .replace(/\n{3,}/g, '\n\n')
+                    .trim();
+            }
+            return rawText
+                .replace(/\r\n/g, '\n')
+                .split('\n')
+                .map((line) => repairSplitMarkdownMarkers(String(line || '')
+                    .replace(/[ \t]+$/g, '')
+                )
+                    .replace(/^\s*(?:-\s+--+|--+)\s*$/g, '---')
+                    .replace(/^(\s*#{1,6})(?=\S)/, '$1 ')
+                    .replace(/^(\s*[-*+])(?=\S)/, '$1 ')
+                    .replace(/^(\s*\d+[.)])(?=\S)/, '$1 '))
+                .join('\n')
+                .replace(/\n{3,}/g, '\n\n')
+                .trim();
+        }
 
-            const codeBlocks = [];
-            const codePlaceholder = '__AI_CHAT_CODE_BLOCK__';
-            const tableBlocks = [];
-            const tablePlaceholder = '__AI_CHAT_TABLE_BLOCK__';
+        let aiNodesMarkdownRenderer = null;
+        function getAiNodesMarkdownRenderer() {
+            if (aiNodesMarkdownRenderer) return aiNodesMarkdownRenderer;
+            const factory = (typeof markdownit === 'function')
+                ? markdownit
+                : (typeof window !== 'undefined' && typeof window.markdownit === 'function')
+                    ? window.markdownit
+                    : (typeof unsafeWindow !== 'undefined' && typeof unsafeWindow.markdownit === 'function')
+                        ? unsafeWindow.markdownit
+                        : null;
+            if (!factory) return null;
+
+            const md = factory({
+                html: false,
+                linkify: true,
+                breaks: true,
+                typographer: false
+            });
+            const defaultValidateLink = md.validateLink.bind(md);
+            md.validateLink = (url) => {
+                const value = String(url || '').trim();
+                if (/^(?:javascript|data|vbscript):/i.test(value)) return false;
+                return defaultValidateLink(value);
+            };
+
+            const defaultLinkOpen = md.renderer.rules.link_open || ((tokens, idx, options, env, self) => self.renderToken(tokens, idx, options));
+            md.renderer.rules.link_open = (tokens, idx, options, env, self) => {
+                const token = tokens[idx];
+                token.attrSet('target', '_blank');
+                token.attrSet('rel', 'noreferrer');
+                return defaultLinkOpen(tokens, idx, options, env, self);
+            };
+
+            const defaultTableOpen = md.renderer.rules.table_open || ((tokens, idx, options, env, self) => self.renderToken(tokens, idx, options));
+            md.renderer.rules.table_open = (tokens, idx, options, env, self) => {
+                tokens[idx].attrJoin('class', 'm-md-table');
+                return defaultTableOpen(tokens, idx, options, env, self);
+            };
+
+            const defaultImage = md.renderer.rules.image || ((tokens, idx, options, env, self) => self.renderToken(tokens, idx, options));
+            md.renderer.rules.image = (tokens, idx, options, env, self) => {
+                tokens[idx].attrSet('loading', 'lazy');
+                return defaultImage(tokens, idx, options, env, self);
+            };
+
+            aiNodesMarkdownRenderer = md;
+            return aiNodesMarkdownRenderer;
+        }
+
+        function renderMarkdownWithLibrary(mdText) {
+            const renderer = getAiNodesMarkdownRenderer();
+            if (!renderer) return '';
+            try {
+                return String(renderer.render(String(mdText || '')) || '').trim();
+            } catch (err) {
+                console.warn('AI-Chat-Helper: markdown-it 渲染失败，回退内置渲染器', err);
+                return '';
+            }
+        }
+
+        function chatMarkdownToHtml(mdText) {
+            const normalizedMd = normalizeMarkdownForPreview(mdText);
+            if (!normalizedMd) return '';
+            const libraryHtml = isChatGPT ? renderMarkdownWithLibrary(normalizedMd) : '';
+            if (libraryHtml) return libraryHtml;
 
             const parseTableRow = (line) => {
                 const raw = String(line || '').trim();
@@ -11349,49 +11538,165 @@
                 return body.split('|').map((cell) => cell.trim());
             };
 
-            let html = escapeHtml(mdText).replace(/```([a-zA-Z0-9_-]*)\n([\s\S]*?)```/g, (_, lang, code) => {
-                const langLabel = (lang || '').trim();
-                const block = `<pre><code class="lang-${langLabel}">${code}</code></pre>`;
-                codeBlocks.push(block);
-                return `${codePlaceholder}${codeBlocks.length - 1}__`;
-            });
+            const isTableSeparator = (line, width) => {
+                const cells = parseTableRow(line);
+                return cells.length === width && cells.every((cell) => /^:?-{3,}:?$/.test(cell.replace(/\s+/g, '')));
+            };
 
-            html = html.replace(/((?:^\|.*\|\r?\n)+)/gm, (block) => {
-                const lines = String(block || '').trim().split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
-                if (lines.length < 2) return block;
-                const header = parseTableRow(lines[0]);
-                const separator = parseTableRow(lines[1]);
-                if (!header.length || separator.length !== header.length) return block;
-                const isSeparator = separator.every((cell) => /^:?-{3,}:?$/.test(cell.replace(/\s+/g, '')));
-                if (!isSeparator) return block;
-                const bodyRows = lines.slice(2).map(parseTableRow).filter((row) => row.length);
-                const tableHtml = `
+            const renderInline = (text) => {
+                const tokens = [];
+                const token = (html) => {
+                    const key = `@@AI_INLINE_${tokens.length}@@`;
+                    tokens.push({ key, html });
+                    return key;
+                };
+
+                let out = String(text || '').replace(/`([^`\n]+)`/g, (_, code) => token(`<code>${escapeHtml(code)}</code>`));
+                out = escapeHtml(out)
+                    .replace(/!\[([^\]]*)]\((https?:\/\/[^\s)]+)\)/g, '<img src="$2" alt="$1" loading="lazy">')
+                    .replace(/\[([^\]]+)]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noreferrer">$1</a>')
+                    .replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>')
+                    .replace(/__([^_\n]+)__/g, '<strong>$1</strong>')
+                    .replace(/~~([^~\n]+)~~/g, '<del>$1</del>');
+
+                tokens.forEach((item) => {
+                    out = out.replaceAll(escapeHtml(item.key), item.html);
+                });
+                return out;
+            };
+
+            const renderTable = (tableLines) => {
+                const header = parseTableRow(tableLines[0]);
+                const bodyRows = tableLines.slice(2)
+                    .map(parseTableRow)
+                    .filter((row) => row.length);
+                return `
                     <table class="m-md-table">
-                        <thead><tr>${header.map((cell) => `<th>${cell}</th>`).join('')}</tr></thead>
-                        <tbody>${bodyRows.map((row) => `<tr>${header.map((_, idx) => `<td>${row[idx] || ''}</td>`).join('')}</tr>`).join('')}</tbody>
+                        <thead><tr>${header.map((cell) => `<th>${renderInline(cell)}</th>`).join('')}</tr></thead>
+                        <tbody>${bodyRows.map((row) => `<tr>${header.map((_, idx) => `<td>${renderInline(row[idx] || '')}</td>`).join('')}</tr>`).join('')}</tbody>
                     </table>
                 `.trim();
-                tableBlocks.push(tableHtml);
-                return `${tablePlaceholder}${tableBlocks.length - 1}__\n`;
-            });
+            };
 
-            html = html
-                .replace(/^###\s+(.+)$/gm, '<h3>$1</h3>')
-                .replace(/^##\s+(.+)$/gm, '<h2>$1</h2>')
-                .replace(/^#\s+(.+)$/gm, '<h1>$1</h1>')
-                .replace(/^(?:-{3,}|\*{3,}|_{3,})$/gm, '<hr>')
-                .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
-                .replace(/(^|[^`])`([^`]+)`/g, '$1<code>$2</code>')
-                .replace(/\n/g, '<br>');
+            const lines = normalizedMd.split('\n');
+            const blocks = [];
+            let i = 0;
 
-            html = html.replace(new RegExp(`${codePlaceholder}(\\d+)__`, 'g'), (_, idx) => codeBlocks[Number(idx)] || '');
-            html = html.replace(new RegExp(`${tablePlaceholder}(\\d+)__`, 'g'), (_, idx) => tableBlocks[Number(idx)] || '');
-            html = html
-                .replace(/(?:<br>\s*){2,}(?=<(?:h[1-6]|hr|table|pre|blockquote|ul|ol))/g, '')
-                .replace(/(<\/(?:h[1-6]|hr|table|pre|blockquote|ul|ol)>)((?:\s|<br>)+)/g, '$1')
-                .replace(/(<(?:h[1-6]|hr|table|pre|blockquote|ul|ol)\b[^>]*>)(?:\s|<br>)+/g, '$1')
-                .replace(/(?:<br>\s*){3,}/g, '<br><br>');
-            return html;
+            const isListLine = (line) => /^\s*(?:[-*+]\s+|\d+[.)]\s+)/.test(line);
+            const listTypeOf = (line) => (/^\s*\d+[.)]\s+/.test(line) ? 'ol' : 'ul');
+
+            while (i < lines.length) {
+                const line = lines[i] || '';
+                const trimmed = line.trim();
+
+                if (!trimmed) {
+                    i += 1;
+                    continue;
+                }
+
+                const fence = trimmed.match(/^```([A-Za-z0-9_-]*)\s*$/);
+                if (fence) {
+                    const lang = fence[1] || '';
+                    const codeLines = [];
+                    i += 1;
+                    while (i < lines.length && !/^```\s*$/.test((lines[i] || '').trim())) {
+                        codeLines.push(lines[i] || '');
+                        i += 1;
+                    }
+                    if (i < lines.length) i += 1;
+                    blocks.push(`<pre><code class="lang-${escapeHtmlAttr(lang)}">${escapeHtml(codeLines.join('\n'))}</code></pre>`);
+                    continue;
+                }
+
+                if (/^\s{0,3}(#{1,6})\s+(.+?)\s*#*\s*$/.test(line)) {
+                    const m = line.match(/^\s{0,3}(#{1,6})\s+(.+?)\s*#*\s*$/);
+                    const level = Math.min(m[1].length, 6);
+                    blocks.push(`<h${level}>${renderInline(m[2])}</h${level}>`);
+                    i += 1;
+                    continue;
+                }
+
+                if (/^\s{0,3}([-*_])(?:\s*\1){2,}\s*$/.test(line)) {
+                    blocks.push('<hr>');
+                    i += 1;
+                    continue;
+                }
+
+                if (i + 1 < lines.length) {
+                    const header = parseTableRow(line);
+                    if (header.length > 0 && isTableSeparator(lines[i + 1] || '', header.length)) {
+                        const tableLines = [line, lines[i + 1]];
+                        i += 2;
+                        while (i < lines.length) {
+                            const row = lines[i] || '';
+                            if (!row.trim() || parseTableRow(row).length === 0) break;
+                            tableLines.push(row);
+                            i += 1;
+                        }
+                        blocks.push(renderTable(tableLines));
+                        continue;
+                    }
+                }
+
+                if (/^\s*>/.test(line)) {
+                    const quoteLines = [];
+                    while (i < lines.length && /^\s*>/.test(lines[i] || '')) {
+                        quoteLines.push((lines[i] || '').replace(/^\s*>\s?/, ''));
+                        i += 1;
+                    }
+                    blocks.push(`<blockquote>${quoteLines.map(renderInline).join('<br>')}</blockquote>`);
+                    continue;
+                }
+
+                if (isListLine(line)) {
+                    const type = listTypeOf(line);
+                    const items = [];
+                    while (i < lines.length) {
+                        const current = lines[i] || '';
+                        if (!current.trim()) {
+                            i += 1;
+                            break;
+                        }
+                        if (!isListLine(current) || listTypeOf(current) !== type) break;
+                        const itemLines = [current.replace(/^\s*(?:[-*+]\s+|\d+[.)]\s+)/, '')];
+                        i += 1;
+                        while (i < lines.length) {
+                            const next = lines[i] || '';
+                            if (!next.trim()) {
+                                i += 1;
+                                break;
+                            }
+                            if (isListLine(next)) break;
+                            if (/^\s{2,}\S/.test(next)) {
+                                itemLines.push(next.trim());
+                                i += 1;
+                                continue;
+                            }
+                            break;
+                        }
+                        items.push(`<li>${itemLines.map(renderInline).join('<br>')}</li>`);
+                    }
+                    blocks.push(`<${type}>${items.join('')}</${type}>`);
+                    continue;
+                }
+
+                const paragraph = [line];
+                i += 1;
+                while (i < lines.length) {
+                    const next = lines[i] || '';
+                    if (!next.trim()) break;
+                    if (/^```/.test(next.trim())) break;
+                    if (/^\s{0,3}(?:#{1,6}\s+|[-*_](?:\s*[-*_]){2,}\s*$|>)/.test(next)) break;
+                    if (isListLine(next)) break;
+                    const row = parseTableRow(next);
+                    if (row.length && i + 1 < lines.length && isTableSeparator(lines[i + 1] || '', row.length)) break;
+                    paragraph.push(next);
+                    i += 1;
+                }
+                blocks.push(`<p>${paragraph.map((x) => renderInline(x.trim())).join('<br>')}</p>`);
+            }
+
+            return blocks.join('\n');
         }
 
         function partToMarkdown(part) {
@@ -11402,11 +11707,30 @@
             }
             if (typeof part !== 'object') return String(part);
 
-            const partType = part.content_type || part.type || '';
+            const partType = String(part.content_type || part.type || '').toLowerCase();
             const lang = (part.language || part.lang || '').trim();
             const rawText = typeof part.text === 'string'
                 ? part.text
                 : (typeof part.content === 'string' ? part.content : '');
+
+            if (
+                partType.includes('tool')
+                || partType.includes('execution')
+                || partType.includes('browser')
+                || partType.includes('search')
+                || partType.includes('citation')
+                || partType.includes('metadata')
+            ) {
+                return '';
+            }
+
+            if (typeof part.recipient === 'string' && /^(?:browser|python|web|search|image|finance|weather|sports|time)\b/i.test(part.recipient.trim())) {
+                return '';
+            }
+
+            if (rawText && isChatGPTToolCallJsonLine(rawText)) {
+                return '';
+            }
 
             if (partType === 'code' || partType === 'program' || (lang && rawText)) {
                 return `\n\`\`\`${lang}\n${rawText}\n\`\`\`\n`;
@@ -11484,11 +11808,8 @@
             const pushMessageFromNode = (node) => {
                 if (!node || !node.message) return;
                 const msg = node.message;
+                if (!isExportableChatGPTMessage(msg)) return;
                 const author = msg.author?.role;
-                const isHidden = msg.metadata?.is_visually_hidden_from_conversation ||
-                    msg.metadata?.is_contextual_answers_system_message;
-
-                if ((author !== 'user' && author !== 'assistant') || isHidden) return;
 
                 const text = extractChatGPTMessageText(msg);
                 const attachmentText = author === 'user' ? extractChatGPTUserAttachmentText(msg) : '';
@@ -14188,6 +14509,8 @@
             const text = String(rawText).trim();
             if (!text) return '';
 
+            if (isChatGPT) return cleanChatGPTText(text);
+
             // 豆包以外平台不做豆包专属清洗，避免影响 ChatGPT / 千问 的原始导出逻辑。
             if (!isDoubao) return text;
 
@@ -14240,6 +14563,10 @@
         function renderMessageMarkdownToPreviewHtml(mdText) {
             const html = chatMarkdownToHtml(String(mdText || ''));
             return html || escapeHtml(String(mdText || '')).replace(/\n/g, '<br>');
+        }
+
+        function renderRawTextToPreviewHtml(text) {
+            return escapeHtml(String(text || '')).replace(/\n/g, '<br>');
         }
 
         function renderClaudePartsToPreviewHtml(parts, fallbackText) {
@@ -15277,7 +15604,9 @@
                     .m-row-text h2, #sub-body h2 { font-size:16px; }
                     .m-row-text h3, #sub-body h3 { font-size:14px; }
                     .m-row-text p, .m-row-text ul, .m-row-text ol, .m-row-text blockquote, #sub-body p, #sub-body ul, #sub-body ol, #sub-body blockquote { margin:4px 0; }
-                    .m-row-text ul, .m-row-text ol, #sub-body ul, #sub-body ol { padding-left:20px; }
+                    .m-row-text ul, #sub-body ul { padding-left:24px; list-style:disc outside !important; }
+                    .m-row-text ol, #sub-body ol { padding-left:24px; list-style:decimal outside !important; }
+                    .m-row-text li, #sub-body li { display:list-item !important; list-style:inherit !important; margin:2px 0; padding-left:2px; }
                     .m-row-text blockquote, #sub-body blockquote { margin:6px 0; padding-left:12px; border-left:3px solid #cbd5e1; color:#475569; }
                     .m-row-text hr, #sub-body hr { border:none; border-top:1px solid #dbe4f0; margin:6px 0; }
                     .m-row-text table, #sub-body table { width:100%; border-collapse:collapse; margin:6px 0; font-size:12px; }
@@ -15379,9 +15708,12 @@
             });
 
             function showFullText(content, title) {
-                const bodyHtml = typeof content === 'string'
-                    ? renderMessageMarkdownToPreviewHtml(content)
-                    : String(content?.html || '').trim() || renderMessageMarkdownToPreviewHtml(content?.text || '');
+                const contentText = typeof content === 'string' ? content : String(content?.text || '');
+                const contentHtml = typeof content === 'string' ? '' : String(content?.html || '').trim();
+                const hasRichPreview = /m-preview-widget|claude-widget-runtime|claude-inline-svg|claude-image-block|<svg\b|<img\b|<figure\b/i.test(contentHtml);
+                const bodyHtml = hasRichPreview
+                    ? contentHtml
+                    : renderMessageMarkdownToPreviewHtml(contentText || contentHtml);
                 const subOverlay = document.createElement('div');
                 subOverlay.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.4);z-index:1000004;display:flex;align-items:center;justify-content:center;';
                 const subModal = document.createElement('div');
@@ -17138,28 +17470,13 @@
             if (isChatGPT) {
                 // 优先使用 ChatGPT 官方会话接口，尽可能保留消息原始结构
                 const apiMsgs = await getChatGPTMessagesByApi();
+                source = 'API(/backend-api/conversation/{id})';
                 if (apiMsgs.length) {
                     list.push(...apiMsgs);
-                    source = 'API';
                 } else {
-                    // API 不可用时回退 DOM 抽取
-                    const turns = document.querySelectorAll('article, section[data-turn]');
-                    turns.forEach(turn => {
-                        const role = turn.getAttribute('data-turn') ||
-                            turn.querySelector('[data-message-author-role]')?.getAttribute('data-message-author-role');
-                        if (!role) return;
-
-                        let text = '';
-                        if (role === 'user') {
-                            const userEl = turn.querySelector('.whitespace-pre-wrap');
-                            text = userEl ? userEl.innerText.trim() : '';
-                        } else if (role === 'assistant') {
-                            const aiEl = turn.querySelector('.markdown');
-                            text = aiEl ? aiEl.innerText.trim() : '';
-                        }
-
-                        if (text) list.push({ role: role === 'user' ? 'user' : 'assistant', text });
-                    });
+                    source = 'API(/backend-api/conversation/{id})-FAILED';
+                    console.warn('AI-Chat-Helper: ChatGPT 导出已禁用 DOM 回退，当前仅支持 API 获取，避免虚拟列表导致内容缺失。');
+                    return { messages: [], source };
                 }
             } else if (isQwen) {
                 const apiMsgs = await getQwenMessagesForExport();
@@ -17458,6 +17775,8 @@
             }
 
             function renderMarkdownToHtmlForPdf(text) {
+                if (isChatGPT) return chatMarkdownToHtml(text);
+
                 const lines = String(text || '').replace(/\r\n/g, '\n').split('\n');
                 const html = [];
 
