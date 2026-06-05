@@ -1,6 +1,17 @@
 {
   "versions": [
     {
+      "version": "2.0.14",
+      "date": "2026-06-05",
+      "changes": [
+        "重做 ChatGPT 对话导出适配，支持识别图片消息、图文混合消息与图片生成工具消息。",
+        "ChatGPT HTML/Markdown/TXT 导出统一接入图片导出逻辑，修复图片消息丢失、误判为文本或文本丢失的问题。",
+        "HTML 导出改为在存在图片时自动打包 ZIP，并将导出页中的图片链接改写为本地 images/ 相对路径，修复 file:// 打开时图片无法加载的问题。",
+        "清理 ChatGPT 图片生成消息中的内部策略文本，避免 `GPT-4o returned 1 images...` 等内容泄露到导出结果。",
+        "修复导出页 MathJax 无效 `linebreaks` 配置引发的控制台警告。"
+      ]
+    },
+    {
       "version": "2.0.13",
       "date": "2026-05-22",
       "changes": [

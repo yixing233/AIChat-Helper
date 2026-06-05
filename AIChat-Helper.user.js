@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AI对话助手
 // @namespace    http://tampermonkey.net/
-// @version      2.0.13
+// @version      2.0.14
 // @description  支持 ChatGPT、通义千问、豆包、DeepSeek、Claude：自动生成对话节点导航、一键导出对话（HTML/Markdown/TXT）。
 // @author       xchengb
 // @updateURL    https://github.com/yixing233/AIChat-Helper/raw/master/AIChat-Helper.user.js
@@ -47,7 +47,7 @@
     const isDeepSeek = isDeepSeekHost && isDeepSeekPath;
     const isClaude = isClaudeHost && isClaudePath;
     const AI_NAME = isChatGPT ? 'ChatGPT' : (isDeepSeek ? 'DeepSeek' : (isDoubao ? '豆包' : (isQwen ? '通义千问' : (isClaude ? 'Claude' : 'AI 助手'))));
-    const SCRIPT_VERSION = '2.0.13';
+    const SCRIPT_VERSION = '2.0.14';
     const SCRIPT_UPDATE_URL = 'https://raw.githubusercontent.com/yixing233/AIChat-Helper/master/AIChat-Helper.user.js';
     const SCRIPT_DOWNLOAD_URL = 'https://github.com/yixing233/AIChat-Helper/raw/master/AIChat-Helper.user.js';
     const SCRIPT_CHANGELOG_URL = 'https://raw.githubusercontent.com/yixing233/AIChat-Helper/master/update.json';
@@ -10621,6 +10621,9 @@
                 .replace(/\[\s*文件引用\s*\]/g, '')
                 .replace(/【引用来源】[\s\S]*$/g, '')
                 .replace(/已思考几秒/g, '')
+                .replace(/GPT-4o returned \d+ images?\.[\s\S]*?(?=$|\n{2,})/gi, '')
+                .replace(/Do not summarize the image\.[\s\S]*?(?=$|\n{2,})/gi, '')
+                .replace(/Do not give the user a link to download the image\.[\s\S]*?(?=$|\n{2,})/gi, '')
                 .replace(/\r\n/g, '\n');
 
             return cleaned
@@ -10630,6 +10633,14 @@
                 .join('\n')
                 .replace(/\n{3,}/g, '\n\n')
                 .trim();
+        }
+
+        function isChatGPTInternalImagePolicyText(text) {
+            const value = String(text || '').trim();
+            if (!value) return false;
+            return /GPT-4o returned \d+ images?/i.test(value)
+                || /Do not summarize the image\./i.test(value)
+                || /Do not give the user a link to download the image\./i.test(value);
         }
 
         function repairSplitMarkdownMarkers(line) {
@@ -10691,13 +10702,28 @@
         function isExportableChatGPTMessage(msg) {
             if (!msg || typeof msg !== 'object') return false;
             const author = String(msg.author?.role || '').trim();
-            if (author !== 'user' && author !== 'assistant') return false;
+            if (author !== 'user' && author !== 'assistant' && author !== 'tool') return false;
 
             const metadata = msg.metadata || {};
             if (metadata.is_visually_hidden_from_conversation || metadata.is_contextual_answers_system_message) return false;
 
             const contentType = String(msg.content?.content_type || msg.content?.type || '').trim().toLowerCase();
-            if (contentType && contentType !== 'text') return false;
+            if (contentType && contentType !== 'text' && contentType !== 'multimodal_text') return false;
+
+            if (author === 'tool') {
+                if (metadata.ui_card || metadata.image_gen_async) return false;
+                const hasImageTitle = String(metadata.image_gen_title || '').trim();
+                const hasVisibleParts = Array.isArray(msg.content?.parts)
+                    ? msg.content.parts.some((part) => {
+                        const partType = String(part?.content_type || part?.type || '').toLowerCase();
+                        return typeof part === 'string'
+                            || partType === 'image_asset_pointer'
+                            || partType === 'image'
+                            || (typeof part?.text === 'string' && part.text.trim());
+                    })
+                    : false;
+                if (!hasImageTitle && !hasVisibleParts) return false;
+            }
 
             if (author === 'assistant') {
                 const channel = String(msg.channel || '').trim().toLowerCase();
@@ -10938,8 +10964,12 @@
             let out = String(text || '');
             const entries = Object.entries(urlMap || {}).sort((a, b) => b[0].length - a[0].length);
             entries.forEach(([from, to]) => {
-                if (!from || !to || !out.includes(from)) return;
-                out = out.split(from).join(to);
+                if (!from || !to) return;
+                if (out.includes(from)) out = out.split(from).join(to);
+                const escapedFrom = escapeHtmlAttr(from);
+                if (escapedFrom && escapedFrom !== from && out.includes(escapedFrom)) {
+                    out = out.split(escapedFrom).join(escapeHtmlAttr(to));
+                }
             });
             return out;
         }
@@ -10981,7 +11011,7 @@
                 next.__displayText = replaceTextByUrlMap(snapshot?.__displayText || '', urlMap);
                 next.__markdownText = replaceTextByUrlMap(snapshot?.__markdownText || '', urlMap);
             }
-            next.__html = snapshot?.__html || '';
+            next.__html = replaceTextByUrlMap(snapshot?.__html || '', urlMap);
             return next;
         }
 
@@ -11034,10 +11064,31 @@
                     if (String(part.type || '').trim().toLowerCase() !== 'image') return;
                     pushUrl(resolveClaudeAssetUrl(part.previewUrl || part.url || part.thumbnailUrl || ''));
                 });
+                if (isChatGPT) {
+                    const chatgptImageUrl = getChatGPTImageAssetUrlFromMsg(msg);
+                    if (chatgptImageUrl) pushUrl(chatgptImageUrl);
+                }
                 collectImageUrlsFromText(msg?.__markdownText || '').forEach(pushUrl);
                 collectImageUrlsFromText(msg?.__displayText || '').forEach(pushUrl);
             });
             return out;
+        }
+
+        function buildChatGPTExportText(msg, mode = 'txt') {
+            if (!isChatGPT || !hasChatGPTImageEvidence(msg)) {
+                return mode === 'md' ? String(msg?.__markdownText || '') : String(msg?.__displayText || '');
+            }
+            const role = String(msg?.role || '').trim().toLowerCase();
+            const text = String(mode === 'md' ? (msg?.__markdownText || '') : (msg?.__displayText || '')).trim();
+            const imageUrl = getChatGPTImageAssetUrlFromMsg(msg);
+            const title = String(msg?.sourceMetadata?.image_gen_title || msg?.metadata?.image_gen_title || '').trim();
+            const imageLine = imageUrl
+                ? (mode === 'md' ? `![图片](${imageUrl})` : `[图片] ${imageUrl}`)
+                : (mode === 'md' ? '[图片地址缺失]' : '[图片]');
+            const parts = [imageLine];
+            if (role === 'user' && text) parts.push(text);
+            if (role === 'assistant' && !imageUrl && title) parts.push(title);
+            return parts.filter(Boolean).join(mode === 'md' ? '\n\n' : '\n');
         }
 
         function collectExportInlineFiles(messages) {
@@ -11151,7 +11202,7 @@
         function buildBatchConversationMarkdown(conversation, assistantLabel, preparedMessages = null) {
             const header = `# ${conversation.title || `会话 ${conversation.conversationId || '-'}`}\n\n- 会话ID: ${conversation.conversationId || '-'}\n- 更新时间: ${conversation.updatedAtText || '-'}\n- 消息数: ${conversation.messageCount || 0}`;
             const body = (Array.isArray(preparedMessages) ? preparedMessages : (Array.isArray(conversation.messages) ? conversation.messages.map((m) => buildMessageExportSnapshot(m)) : []))
-                .map((m, idx) => `\n## ${idx + 1}. ${m.role === 'user' ? '用户' : assistantLabel}\n\n${m.__markdownText}\n`)
+                .map((m, idx) => `\n## ${idx + 1}. ${m.role === 'user' ? '用户' : assistantLabel}\n\n${buildChatGPTExportText(m, 'md')}\n`)
                 .join('\n');
             return `${header}\n${body}`.trim();
         }
@@ -11159,7 +11210,7 @@
         function buildBatchConversationText(conversation, assistantLabel, preparedMessages = null) {
             const header = `${conversation.title || `会话 ${conversation.conversationId || '-'}`}\n会话ID: ${conversation.conversationId || '-'}\n更新时间: ${conversation.updatedAtText || '-'}\n消息数: ${conversation.messageCount || 0}`;
             const body = (Array.isArray(preparedMessages) ? preparedMessages : (Array.isArray(conversation.messages) ? conversation.messages.map((m) => buildMessageExportSnapshot(m)) : []))
-                .map((m, idx) => `\n[${idx + 1}] ${m.role === 'user' ? '用户' : assistantLabel}\n${m.__displayText}`)
+                .map((m, idx) => `\n[${idx + 1}] ${m.role === 'user' ? '用户' : assistantLabel}\n${buildChatGPTExportText(m, 'txt')}`)
                 .join('\n');
             return `${header}\n${body}`.trim();
         }
@@ -11394,9 +11445,7 @@
                     ? conversation.messages.map((m) => buildMessageExportSnapshot(m))
                     : []
             ));
-            const archiveBundle = format !== 'html'
-                ? await buildImageArchiveBundle(snapshotGroups.flat())
-                : { hasImages: false, urlMap: {}, entries: [], readmeLines: [] };
+            const archiveBundle = await buildImageArchiveBundle(snapshotGroups.flat());
 
             conversations.forEach((conversation, index) => {
                 const titleBase = conversation.title || `会话 ${conversation.conversationId || index + 1}`;
@@ -11413,7 +11462,7 @@
                 if (format === 'html') {
                     entries.push({
                         name: getUniqueBatchFileName(titleBase, 'html', usedNames),
-                        data: buildBatchConversationPrintableHtml(platform, conversation, assistantLabel)
+                        data: buildBatchConversationPrintableHtml(platform, { ...conversation, messages: preparedMessages }, assistantLabel)
                     });
                     return;
                 }
@@ -11732,12 +11781,16 @@
                 return '';
             }
 
+            if (rawText && isChatGPT && isChatGPTInternalImagePolicyText(rawText)) {
+                return '';
+            }
+
             if (partType === 'code' || partType === 'program' || (lang && rawText)) {
                 return `\n\`\`\`${lang}\n${rawText}\n\`\`\`\n`;
             }
 
             if (partType === 'image' || partType === 'image_asset_pointer') {
-                return '[图片内容已省略]';
+                return '';
             }
 
             const nestedCandidates = [
@@ -11798,6 +11851,26 @@
             return lines.join('\n');
         }
 
+        function extractChatGPTToolSupplementText(msg) {
+            const title = String(msg?.metadata?.image_gen_title || '').trim();
+            if (!title) return '';
+            return '';
+        }
+
+        function hasChatGPTApiImageEvidence(msg) {
+            const imageGenTitle = String(msg?.metadata?.image_gen_title || '').trim();
+            if (imageGenTitle) return true;
+            const parts = Array.isArray(msg?.content?.parts) ? msg.content.parts : [];
+            if (parts.some((part) => {
+                const partType = String(part?.content_type || part?.type || '').trim().toLowerCase();
+                return partType === 'image_asset_pointer' || partType === 'image';
+            })) {
+                return true;
+            }
+            const attachments = Array.isArray(msg?.metadata?.attachments) ? msg.metadata.attachments : [];
+            return attachments.some((item) => /^image\//i.test(String(item?.mime_type || item?.mimeType || '').trim()));
+        }
+
         function extractChatGPTMessagesFromMapping(convData) {
             const mapping = convData?.mapping;
             if (!mapping) return [];
@@ -11810,16 +11883,24 @@
                 const msg = node.message;
                 if (!isExportableChatGPTMessage(msg)) return;
                 const author = msg.author?.role;
+                const exportRole = author === 'tool' ? 'assistant' : author;
 
                 const text = extractChatGPTMessageText(msg);
                 const attachmentText = author === 'user' ? extractChatGPTUserAttachmentText(msg) : '';
-                const mergedText = [text, attachmentText].filter(Boolean).join(text && attachmentText ? '\n\n' : '');
-                if (!mergedText) return;
+                const toolSupplementText = author === 'tool' ? extractChatGPTToolSupplementText(msg) : '';
+                const mergedText = [toolSupplementText, text, attachmentText].filter(Boolean).join('\n\n');
+                const hasImageEvidence = hasChatGPTApiImageEvidence(msg);
+                if (!mergedText && !hasImageEvidence) return;
 
                 messages.push({
-                    role: author,
+                    role: exportRole,
                     text: mergedText,
                     html: chatMarkdownToHtml(mergedText),
+                    sourceMessageId: String(msg?.id || node?.id || '').trim(),
+                    sourceParts: Array.isArray(msg?.content?.parts)
+                        ? msg.content.parts.map((part) => (part && typeof part === 'object' ? { ...part } : part))
+                        : [],
+                    sourceMetadata: msg?.metadata && typeof msg.metadata === 'object' ? { ...msg.metadata } : null,
                     createTime: msg.create_time || 0
                 });
             };
@@ -11878,6 +11959,60 @@
                 console.warn('AI-Chat-Helper: ChatGPT 会话 API 解析失败', e);
                 return [];
             }
+        }
+
+        function getChatGPTMessageImagesFromDomByMessageId(messageId, role = '') {
+            const id = String(messageId || '').trim();
+            if (!id) return [];
+            const normalizedRole = String(role || '').trim().toLowerCase();
+            let candidates = [];
+
+            if (normalizedRole === 'assistant') {
+                const container = document.getElementById(`image-${id}`);
+                if (!container) return [];
+                const preferred = Array.from(container.querySelectorAll('img[alt^="已生成图片"]'));
+                const fallback = Array.from(container.querySelectorAll('img'));
+                candidates = preferred.length ? preferred : fallback;
+            } else if (normalizedRole === 'user') {
+                const container = document.querySelector(`[data-message-id="${CSS.escape(id)}"]`);
+                if (!container) return [];
+                candidates = Array.from(container.querySelectorAll('img'));
+            } else {
+                return [];
+            }
+
+            return candidates
+                .map((img) => String(img.currentSrc || img.src || '').trim())
+                .filter((src) => src && !/^data:image\/svg/i.test(src))
+                .filter((src, index, arr) => arr.indexOf(src) === index);
+        }
+
+        function hydrateChatGPTMessagesWithDomImages(messages) {
+            const list = Array.isArray(messages) ? messages : [];
+            if (!list.length) return list;
+
+            return list.map((msg) => {
+                const hasImageTitle = String(msg?.sourceMetadata?.image_gen_title || '').trim();
+                const hasImagePart = (
+                    Array.isArray(msg?.sourceParts)
+                    && msg.sourceParts.some((part) => {
+                        const type = String(part?.content_type || part?.type || '').trim().toLowerCase();
+                        return type === 'image_asset_pointer' || type === 'image';
+                    })
+                );
+                const hasImageAttachment = Array.isArray(msg?.sourceMetadata?.attachments)
+                    && msg.sourceMetadata.attachments.some((item) => /^image\//i.test(String(item?.mime_type || item?.mimeType || '').trim()));
+                const needsImage = !!hasImageTitle || hasImagePart || hasImageAttachment;
+
+                if (!needsImage) return msg;
+                const domImageUrls = getChatGPTMessageImagesFromDomByMessageId(msg?.sourceMessageId, msg?.role);
+                if (!domImageUrls.length) return msg;
+
+                return {
+                    ...msg,
+                    domImageUrls
+                };
+            });
         }
 
         const QWEN_MSG_LIST_PATH = '/api/v1/session/msg/list';
@@ -14569,6 +14704,82 @@
             return escapeHtml(String(text || '')).replace(/\n/g, '<br>');
         }
 
+        function normalizeChatGPTImageAssetUrl(rawUrl) {
+            const raw = String(rawUrl || '').trim();
+            if (!raw) return '';
+            if (/^(?:data:|blob:)/i.test(raw)) return raw;
+            if (/^sediment:\/\//i.test(raw)) return '';
+            return resolveClaudeAssetUrl(raw);
+        }
+
+        function getChatGPTImageAssetUrlFromMsg(msg) {
+            const domUrls = Array.isArray(msg?.domImageUrls)
+                ? msg.domImageUrls.map((url) => String(url || '').trim()).filter(Boolean)
+                : [];
+            if (domUrls.length) return domUrls[0];
+            const parts = Array.isArray(msg?.sourceParts)
+                ? msg.sourceParts
+                : (Array.isArray(msg?.content?.parts) ? msg.content.parts : []);
+            for (const part of parts) {
+                if (!part || typeof part !== 'object') continue;
+                const partType = String(part.content_type || part.type || '').trim().toLowerCase();
+                if (partType !== 'image_asset_pointer' && partType !== 'image') continue;
+                const assetPointer = String(part.asset_pointer || part.url || part.src || '').trim();
+                const metadataUrl = part.metadata?.asset_pointer_link
+                    || part.metadata?.watermarked_asset_pointer
+                    || part.metadata?.preview_url
+                    || part.previewUrl
+                    || part.preview_url
+                    || part.url
+                    || part.src
+                    || '';
+                return normalizeChatGPTImageAssetUrl(metadataUrl || assetPointer);
+            }
+            return '';
+        }
+
+        function hasChatGPTImageEvidence(msg) {
+            const hasImageTitle = String(msg?.sourceMetadata?.image_gen_title || msg?.metadata?.image_gen_title || '').trim();
+            if (hasImageTitle) return true;
+            const domUrls = Array.isArray(msg?.domImageUrls)
+                ? msg.domImageUrls.map((url) => String(url || '').trim()).filter(Boolean)
+                : [];
+            if (domUrls.length) return true;
+
+            const parts = Array.isArray(msg?.sourceParts)
+                ? msg.sourceParts
+                : (Array.isArray(msg?.content?.parts) ? msg.content.parts : []);
+            if (parts.some((part) => {
+                const partType = String(part?.content_type || part?.type || '').trim().toLowerCase();
+                return partType === 'image_asset_pointer' || partType === 'image';
+            })) {
+                return true;
+            }
+
+            const attachments = Array.isArray(msg?.sourceMetadata?.attachments)
+                ? msg.sourceMetadata.attachments
+                : [];
+            return attachments.some((item) => /^image\//i.test(String(item?.mime_type || item?.mimeType || '').trim()));
+        }
+
+        function renderChatGPTImagePreviewHtml(msg, fallbackText) {
+            const title = String(msg?.sourceMetadata?.image_gen_title || msg?.metadata?.image_gen_title || '').trim();
+            const role = String(msg?.role || '').trim().toLowerCase();
+            const url = getChatGPTImageAssetUrlFromMsg(msg);
+            if (!url) return '';
+            const cleanedText = String(fallbackText || '')
+                .replace(/\[附件\d+:[^\]]+\]/g, ' ')
+                .replace(/\s+/g, ' ')
+                .trim();
+            if (role === 'assistant') {
+                return `<div class="m-preview-media"><img src="${escapeHtmlAttr(url)}" alt="${escapeHtmlAttr(title || '图片')}" style="max-width:100%;max-height:320px;border-radius:12px;display:block;margin-bottom:8px;"></div>`;
+            }
+            const textBlock = cleanedText
+                ? `<div style="margin-top:8px;font-size:13px;line-height:1.6;color:#334155;">${renderMessageMarkdownToPreviewHtml(cleanedText)}</div>`
+                : '';
+            return `<div class="m-preview-media"><img src="${escapeHtmlAttr(url)}" alt="${escapeHtmlAttr(cleanedText || '图片')}" style="max-width:100%;max-height:320px;border-radius:12px;display:block;margin-bottom:8px;">${textBlock}</div>`;
+        }
+
         function renderClaudePartsToPreviewHtml(parts, fallbackText) {
             const list = Array.isArray(parts) ? parts : [];
             if (!list.length) return renderMessageMarkdownToPreviewHtml(fallbackText);
@@ -14689,6 +14900,15 @@
             const rawText = msg?.text == null ? '' : String(msg.text);
             const displayText = getDisplayTextForExport(rawText);
             const parts = Array.isArray(msg?.parts) ? msg.parts : [];
+            if (isChatGPT && (msg?.role === 'assistant' || msg?.role === 'user') && hasChatGPTImageEvidence(msg)) {
+                const imagePreviewHtml = renderChatGPTImagePreviewHtml(msg, displayText);
+                if (imagePreviewHtml) {
+                    return {
+                        text: displayText,
+                        html: imagePreviewHtml
+                    };
+                }
+            }
             const markdownText = isClaude && parts.length
                 ? buildClaudeTextFromParts(parts, 'markdown') || displayText
                 : displayText;
@@ -14709,6 +14929,19 @@
             const rawText = msg?.text == null ? '' : String(msg.text).trim();
             const parts = Array.isArray(msg?.parts) ? msg.parts.map((part) => ({ ...part })) : [];
             const displayText = getDisplayTextForExport(rawText);
+            if (isChatGPT && (msg?.role === 'assistant' || msg?.role === 'user') && hasChatGPTImageEvidence(msg)) {
+                const imagePreviewHtml = renderChatGPTImagePreviewHtml(msg, displayText);
+                if (imagePreviewHtml) {
+                    return {
+                        ...msg,
+                        parts,
+                        __rawText: rawText,
+                        __displayText: displayText,
+                        __markdownText: displayText,
+                        __html: imagePreviewHtml
+                    };
+                }
+            }
             const markdownText = isClaude && parts.length
                 ? buildClaudeTextFromParts(parts, 'markdown') || displayText
                 : displayText;
@@ -15690,9 +15923,9 @@
 
                 const rowTextEl = item.querySelector('.m-row-text');
                 rowTextEl.innerHTML = previewContent.html;
-                if (rowTextEl.querySelector('.m-preview-widget, .claude-widget-runtime, .claude-inline-svg, svg, img')) {
-                    rowTextEl.classList.add('has-widget-preview');
-                }
+        if (rowTextEl.querySelector('.m-preview-widget, .claude-widget-runtime, .claude-inline-svg, svg')) {
+          rowTextEl.classList.add('has-widget-preview');
+        }
                 hydrateClaudeWidgetPreviews(item);
 
                 const detailBtn = item.querySelector('.m-view-btn');
@@ -15819,7 +16052,7 @@
                             m.text = String(m.textWithoutThought || '');
                             if (rowText) {
                                 rowText.innerHTML = buildMessagePreviewContent(m).html;
-                                rowText.classList.toggle('has-widget-preview', Boolean(rowText.querySelector('.m-preview-widget, .claude-widget-runtime, .claude-inline-svg, svg, img')));
+                                rowText.classList.toggle('has-widget-preview', Boolean(rowText.querySelector('.m-preview-widget, .claude-widget-runtime, .claude-inline-svg, svg')));
                                 hydrateClaudeWidgetPreviews(rowText);
                             }
                         }
@@ -17469,7 +17702,7 @@
             let source = 'DOM';
             if (isChatGPT) {
                 // 优先使用 ChatGPT 官方会话接口，尽可能保留消息原始结构
-                const apiMsgs = await getChatGPTMessagesByApi();
+                const apiMsgs = hydrateChatGPTMessagesWithDomImages(await getChatGPTMessagesByApi());
                 source = 'API(/backend-api/conversation/{id})';
                 if (apiMsgs.length) {
                     list.push(...apiMsgs);
@@ -17526,6 +17759,7 @@
                 const last = normalized[normalized.length - 1];
                 const shouldMerge = last
                     && last.role === msg.role
+                    && String(last.sourceMessageId || '') === String(msg.sourceMessageId || '')
                     && Boolean(last.isArtifact) === Boolean(msg.isArtifact)
                     // DeepSeek 需要严格区分 THINK / RESPONSE / SEARCH，禁止跨类型合并
                     && (!isDeepSeek || (
@@ -17558,9 +17792,7 @@
             let type = 'text/plain;charset=utf-8';
             let ext = format;
             const exportData = data.map((m) => buildMessageExportSnapshot(m));
-            const archiveBundle = format !== 'html'
-                ? await buildImageArchiveBundle(exportData)
-                : { hasImages: false, urlMap: {}, fileMap: {}, entries: [], readmeLines: [] };
+            const archiveBundle = await buildImageArchiveBundle(exportData);
             const preparedExportData = archiveBundle.hasImages
                 ? exportData.map((m) => buildArchivedMessageSnapshotWithFiles(m, archiveBundle.urlMap, archiveBundle.fileMap || {}))
                 : exportData;
@@ -18091,10 +18323,10 @@
             }
 
             if (format === 'txt') {
-                const body = preparedExportData.map(m => `----------------------------\n【${m.role === 'user' ? '用户问题' : AI_NAME}】\n----------------------------\n${m.__displayText}`).join('\n\n');
+                const body = preparedExportData.map(m => `----------------------------\n【${m.role === 'user' ? '用户问题' : AI_NAME}】\n----------------------------\n${buildChatGPTExportText(m, 'txt')}`).join('\n\n');
                 content = deepSeekMetaText ? `${deepSeekMetaText}\n\n${body}` : body;
             } else if (format === 'md') {
-                const body = preparedExportData.map(m => `### ${m.role === 'user' ? '🧑 用户问题' : '🤖 ' + AI_NAME + '回答'}\n\n${m.__markdownText}`).join('\n\n---\n\n');
+                const body = preparedExportData.map(m => `### ${m.role === 'user' ? '🧑 用户问题' : '🤖 ' + AI_NAME + '回答'}\n\n${buildChatGPTExportText(m, 'md')}`).join('\n\n---\n\n');
                 if (deepSeekMetaText) {
                     const mdMeta = [
                         '## DeepSeek 对话信息',
@@ -18115,12 +18347,12 @@
             } else if (format === 'html') {
                 // 聚合逻辑：将 User 发起及随后跟随的所有连续 Assistant 回复视为一个对话组（1 轮）
                 const groups = [];
-                for (let i = 0; i < exportData.length; i++) {
-                    const turn = [exportData[i]];
+                for (let i = 0; i < preparedExportData.length; i++) {
+                    const turn = [preparedExportData[i]];
                     // 如果当前是用户且后续有助手消息，则把后续所有连续的助手消息全部卷进来
-                    if (exportData[i].role === 'user') {
-                        while (i + 1 < exportData.length && exportData[i + 1].role === 'assistant') {
-                            turn.push(exportData[i + 1]);
+                    if (preparedExportData[i].role === 'user') {
+                        while (i + 1 < preparedExportData.length && preparedExportData[i + 1].role === 'assistant') {
+                            turn.push(preparedExportData[i + 1]);
                             i++;
                         }
                     }
@@ -18237,7 +18469,7 @@
                             <div class="header">
                                 <div class="title">第 ${idx + 1} 轮对话</div>
                                 <div class="platform">${AI_NAME}</div>
-                                <div class="ver">AI Chat Helper Exporter v1.6.0</div>
+                                <div class="ver">AI Chat Helper Exporter v2.0.14</div>
                             </div>
                             ${deepSeekExportMeta && idx === 0 ? `
                                 <div style="margin:-12px 0 20px;padding:12px 14px;border:1px solid #dbeafe;border-radius:10px;background:#eff6ff;font-size:12px;color:#1e3a8a;line-height:1.7;">
@@ -18254,7 +18486,7 @@
                                         <div class="role-badge">
                                             ${m.role === 'user' ? '🧑 USER QUESTION' : '🤖 ' + AI_NAME.toUpperCase() + ' RESPONSE'}
                                         </div>
-                                        <div class="text">${isClaude ? renderClaudePartsToHtmlForPdf(m.parts, m.__displayText) : renderMarkdownToHtmlForPdf(m.__displayText)}</div>
+                                        <div class="text">${isClaude ? renderClaudePartsToHtmlForPdf(m.parts, m.__displayText) : m.__html}</div>
                                     </div>
                                 `).join('')}
                             </div>
@@ -18264,8 +18496,8 @@
                     <script>
                         window.MathJax = {
                             tex: { inlineMath: [['\\\\(', '\\\\)'], ['$', '$']], displayMath: [['\\\\[', '\\\\]'], ['$$', '$$']] },
-                            chtml: { linebreaks: { automatic: true, width: 'container' } },
-                            svg: { linebreaks: { automatic: true, width: 'container' } },
+                            chtml: {},
+                            svg: {},
                             options: { skipHtmlTags: ['script', 'noscript', 'style', 'textarea', 'pre', 'code'] }
                         };
                     </script>
