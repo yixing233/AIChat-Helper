@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AI对话助手
 // @namespace    http://tampermonkey.net/
-// @version      2.0.14
+// @version      2.0.15
 // @description  支持 ChatGPT、通义千问、豆包、DeepSeek、Claude：自动生成对话节点导航、一键导出对话（HTML/Markdown/TXT）。
 // @author       xchengb
 // @updateURL    https://github.com/yixing233/AIChat-Helper/raw/master/AIChat-Helper.user.js
@@ -47,7 +47,7 @@
     const isDeepSeek = isDeepSeekHost && isDeepSeekPath;
     const isClaude = isClaudeHost && isClaudePath;
     const AI_NAME = isChatGPT ? 'ChatGPT' : (isDeepSeek ? 'DeepSeek' : (isDoubao ? '豆包' : (isQwen ? '通义千问' : (isClaude ? 'Claude' : 'AI 助手'))));
-    const SCRIPT_VERSION = '2.0.14';
+    const SCRIPT_VERSION = '2.0.15';
     const SCRIPT_UPDATE_URL = 'https://raw.githubusercontent.com/yixing233/AIChat-Helper/master/AIChat-Helper.user.js';
     const SCRIPT_DOWNLOAD_URL = 'https://github.com/yixing233/AIChat-Helper/raw/master/AIChat-Helper.user.js';
     const SCRIPT_CHANGELOG_URL = 'https://raw.githubusercontent.com/yixing233/AIChat-Helper/master/update.json';
@@ -11561,6 +11561,38 @@
             return aiNodesMarkdownRenderer;
         }
 
+        let aiNodesMathJaxLoadPromise = null;
+        function ensureMathJaxLoaded() {
+            if (window.MathJax?.typesetPromise || window.MathJax?.typeset) {
+                return Promise.resolve(window.MathJax);
+            }
+            if (aiNodesMathJaxLoadPromise) return aiNodesMathJaxLoadPromise;
+            aiNodesMathJaxLoadPromise = new Promise((resolve, reject) => {
+                window.MathJax = window.MathJax || {
+                    tex: { inlineMath: [['\\(', '\\)'], ['$', '$']], displayMath: [['\\[', '\\]'], ['$$', '$$']] },
+                    chtml: {},
+                    svg: {},
+                    options: { skipHtmlTags: ['script', 'noscript', 'style', 'textarea', 'pre', 'code'] }
+                };
+                const existing = document.querySelector('script[data-ai-nodes-mathjax="1"]');
+                if (existing) {
+                    existing.addEventListener('load', () => resolve(window.MathJax), { once: true });
+                    existing.addEventListener('error', (e) => reject(e), { once: true });
+                    return;
+                }
+                const script = document.createElement('script');
+                script.src = 'https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js';
+                script.async = true;
+                script.setAttribute('data-ai-nodes-mathjax', '1');
+                script.onload = () => resolve(window.MathJax);
+                script.onerror = (e) => reject(e);
+                document.head.appendChild(script);
+            }).catch((err) => {
+                aiNodesMathJaxLoadPromise = null;
+                throw err;
+            });
+            return aiNodesMathJaxLoadPromise;
+        }
         function renderMarkdownWithLibrary(mdText) {
             const renderer = getAiNodesMarkdownRenderer();
             if (!renderer) return '';
@@ -11572,11 +11604,23 @@
             }
         }
 
+        function normalizeChatGPTMathText(text) {
+            return String(text || '')
+                .replace(/\\\\\\\(/g, '\\(')
+                .replace(/\\\\\\\)/g, '\\)')
+                .replace(/\\\\\\\[/g, '\\[')
+                .replace(/\\\\\\\]/g, '\\]')
+                .replace(/\$\$\s*\n/g, '$$\n')
+                .replace(/\n\s*\$\$/g, '\n$$');
+        }
+
         function chatMarkdownToHtml(mdText) {
-            const normalizedMd = normalizeMarkdownForPreview(mdText);
+            const normalizedMd = isChatGPT ? normalizeChatGPTMathText(normalizeMarkdownForPreview(mdText)) : normalizeMarkdownForPreview(mdText);
             if (!normalizedMd) return '';
-            const libraryHtml = isChatGPT ? renderMarkdownWithLibrary(normalizedMd) : '';
-            if (libraryHtml) return libraryHtml;
+            if (!isChatGPT) {
+                const libraryHtml = renderMarkdownWithLibrary(normalizedMd);
+                if (libraryHtml) return libraryHtml;
+            }
 
             const parseTableRow = (line) => {
                 const raw = String(line || '').trim();
@@ -11600,7 +11644,9 @@
                     return key;
                 };
 
-                let out = String(text || '').replace(/`([^`\n]+)`/g, (_, code) => token(`<code>${escapeHtml(code)}</code>`));
+                let out = String(text || '')
+                    .replace(/`([^`\n]+)`/g, (_, code) => token(`<code>${escapeHtml(code)}</code>`))
+                    .replace(/\\\(([\s\S]+?)\\\)/g, (_, expr) => token(`<span class="math-inline">\\(${escapeHtml(expr)}\\)</span>`));
                 out = escapeHtml(out)
                     .replace(/!\[([^\]]*)]\((https?:\/\/[^\s)]+)\)/g, '<img src="$2" alt="$1" loading="lazy">')
                     .replace(/\[([^\]]+)]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noreferrer">$1</a>')
@@ -11664,10 +11710,26 @@
                     i += 1;
                     continue;
                 }
-
                 if (/^\s{0,3}([-*_])(?:\s*\1){2,}\s*$/.test(line)) {
                     blocks.push('<hr>');
                     i += 1;
+                    continue;
+                }
+
+                if (/^\\\[/.test(trimmed)) {
+                    const mathLines = [trimmed];
+                    i += 1;
+                    while (i < lines.length && !/\\\]$/.test((lines[i] || '').trim())) {
+                        mathLines.push((lines[i] || '').trim());
+                        i += 1;
+                    }
+                    if (i < lines.length) {
+                        mathLines.push((lines[i] || '').trim());
+                        i += 1;
+                    }
+                    const joined = mathLines.join('\n');
+                    const match = joined.match(/^\\\[([\s\S]*?)\\\]$/);
+                    blocks.push(`<div class="math-display">\\[${escapeHtml(match?.[1] || joined)}\\]</div>`);
                     continue;
                 }
 
@@ -11748,6 +11810,25 @@
             return blocks.join('\n');
         }
 
+        function applyChatGPTMathReferences(text, msg) {
+            let out = String(text || '');
+            const refs = Array.isArray(msg?.metadata?.content_references)
+                ? msg.metadata.content_references
+                : (Array.isArray(msg?.metadata?.serialization_metadata?.content_references)
+                    ? msg.metadata.serialization_metadata.content_references
+                    : []);
+            refs.forEach((ref) => {
+                if (!ref || String(ref.render_as || '').trim().toLowerCase() !== 'latex') return;
+                const matchedText = String(ref.matched_text || '').trim();
+                const alt = String(ref.alt || '').trim();
+                if (!matchedText || !alt) return;
+                const replacement = `\n\n$$\n${alt}\n$$\n\n`;
+                if (out.includes(matchedText)) {
+                    out = out.split(matchedText).join(replacement);
+                }
+            });
+            return out;
+        }
         function partToMarkdown(part) {
             if (part == null) return '';
             if (typeof part === 'string') return part;
@@ -11836,6 +11917,7 @@
                 raw = partToMarkdown(content);
             }
 
+            raw = applyChatGPTMathReferences(String(raw), msg);
             return cleanChatGPTText(applyChatGPTMessageReferences(String(raw).replace(/\n{3,}/g, '\n\n'), msg));
         }
 
@@ -15845,6 +15927,12 @@
                     .m-row-text table, #sub-body table { width:100%; border-collapse:collapse; margin:6px 0; font-size:12px; }
                     .m-row-text th, .m-row-text td, #sub-body th, #sub-body td { border:1px solid #e5e7eb; padding:6px 8px; text-align:left; vertical-align:top; }
                     .m-row-text th, #sub-body th { background:#f8fafc; font-weight:700; }
+                    .m-row-text .math-inline, #sub-body .math-inline { white-space: normal; max-width: 100%; }
+                    .m-row-text .math-display, #sub-body .math-display { margin: 8px 0; padding: 0; background: transparent; border-left: none; overflow-x: auto; text-align: left; }
+                    .m-row-text .math-display mjx-container[display="true"], #sub-body .math-display mjx-container[display="true"] { display:block; text-align:left !important; margin:0; }
+                    .m-row-text .math-inline mjx-container, #sub-body .math-inline mjx-container,
+                    .m-row-text mjx-container[display="false"], #sub-body mjx-container[display="false"] { white-space: normal !important; max-width: 100%; overflow-wrap: anywhere; }
+                    .m-row-text mjx-container, #sub-body mjx-container { font-size: 1em !important; }
                     .m-row-text a, #sub-body a { color:#2563eb; text-decoration:none; }
                     .m-row-text a:hover, #sub-body a:hover { text-decoration:underline; }
                     .m-preview-caption { font-size:12px; color:#6b7280; }
@@ -15955,8 +16043,14 @@
                     <div style="display:flex;justify-content:space-between;margin-bottom:15px;align-items:center;"><h4 style="margin:0">${escapeHtml(title)}</h4><button id="sub-x" aria-label="关闭" title="关闭" style="cursor:pointer;border:none;background:#e5e7eb;color:#1f2937;width:32px;height:32px;border-radius:999px;line-height:1;display:flex;align-items:center;justify-content:center;padding:0;transition:background .2s ease;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg></button></div>
                     <div id="sub-body" style="flex:1;overflow-y:auto;font-size:14px;line-height:1.6;color:#333;padding-top:10px;border-top:1px solid #eee;word-break:break-word;"></div>
                 `;
-                subModal.querySelector('#sub-body').innerHTML = bodyHtml;
+                const subBody = subModal.querySelector('#sub-body');
+                subBody.innerHTML = bodyHtml;
                 hydrateClaudeWidgetPreviews(subModal);
+                if (window.MathJax?.typesetPromise) {
+                    Promise.resolve().then(() => window.MathJax.typesetPromise([subBody])).catch(() => {});
+                } else if (window.MathJax?.typeset) {
+                    try { window.MathJax.typeset([subBody]); } catch (_) {}
+                }
                 subOverlay.appendChild(subModal);
                 document.body.appendChild(subOverlay);
                 const subLifecycle = setupUnifiedModalLifecycle(subOverlay, subModal);
@@ -17839,6 +17933,8 @@
                 // 先提取代码和数学公式，避免后续转义破坏内容
                 let mixed = src
                     .replace(/`([^`\n]+)`/g, (_, code) => toToken('code', code))
+                    .replace(/\\\[([\\s\\S]+?)\\\]/g, (_, expr) => toToken('math-display', expr))
+                    .replace(/\\\(([\\s\\S]+?)\\\)/g, (_, expr) => toToken('math-inline', expr))
                     .replace(/\$\$([\s\S]+?)\$\$/g, (_, expr) => toToken('math-display', expr))
                     .replace(/\$([^$\n]+)\$/g, (_, expr) => toToken('math-inline', expr));
 
@@ -18212,7 +18308,7 @@
                         continue;
                     }
 
-                    const displayMathMatch = trimmed.match(/^\$\$([\s\S]+)\$\$$/);
+                    const displayMathMatch = trimmed.match(/^\$\$([\s\S]+)\$\$$/) || trimmed.match(/^\\\[([\s\S]+)\\\]$/);
                     if (displayMathMatch) {
                         flushParagraph();
                         flushList();
@@ -18406,8 +18502,8 @@
                     .claude-inline-svg { display:flex; justify-content:center; align-items:center; padding:8px; border:1px solid #dbeafe; border-radius:10px; background:#fff; overflow:auto; }
                     .claude-inline-svg > svg { display:block; max-width:100%; height:auto; margin:0 auto; }
                     .math-inline { white-space: normal; max-width: 100%; }
-                    .math-display { margin: 14px 0; padding: 8px 10px; background: #f8fafc; border-left: 3px solid #bfdbfe; overflow-x: auto; }
-                    td .math-display, th .math-display { margin: 6px 0; padding: 4px 6px; }
+                    .math-display { margin: 8px 0; padding: 0; background: transparent; border-left: none; overflow-x: auto; text-align: left; }
+                    td .math-display, th .math-display { margin: 4px 0; padding: 0; }
                     td .math-inline mjx-container, th .math-inline mjx-container,
                     td mjx-container[display="false"], th mjx-container[display="false"] {
                         white-space: normal !important;
@@ -18469,7 +18565,7 @@
                             <div class="header">
                                 <div class="title">第 ${idx + 1} 轮对话</div>
                                 <div class="platform">${AI_NAME}</div>
-                                <div class="ver">AI Chat Helper Exporter v2.0.14</div>
+                                <div class="ver">AI Chat Helper Exporter v2.0.15</div>
                             </div>
                             ${deepSeekExportMeta && idx === 0 ? `
                                 <div style="margin:-12px 0 20px;padding:12px 14px;border:1px solid #dbeafe;border-radius:10px;background:#eff6ff;font-size:12px;color:#1e3a8a;line-height:1.7;">
