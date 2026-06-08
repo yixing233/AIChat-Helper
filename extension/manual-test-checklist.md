@@ -10,6 +10,8 @@ Build the extension with `npm run build`, then load `E:\Code\AI-Chat-Nodes\exten
 - [ ] Doubao page shows the AI Chat Helper panel.
 - [ ] DeepSeek page shows the AI Chat Helper panel.
 - [ ] Node list renders on a loaded conversation page.
+- [ ] Clicking a node scrolls the matching conversation message into view.
+- [ ] Search filters the node list by typed text.
 - [ ] Refresh updates the node list.
 - [ ] Export HTML triggers a browser download.
 - [ ] Export Markdown triggers a browser download.

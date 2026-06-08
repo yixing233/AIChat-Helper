@@ -14,6 +14,10 @@ export function createPanel(options: PanelOptions): HTMLElement {
       <strong>AI Chat Helper</strong>
       <span>${escapeHtml(options.platformName)}</span>
     </header>
+    <label class="ai-chat-helper-panel__search">
+      <span>Search</span>
+      <input type="search" data-ai-chat-helper-search placeholder="Search nodes" />
+    </label>
     <div class="ai-chat-helper-panel__nodes" data-ai-chat-helper-nodes></div>
     <div class="ai-chat-helper-panel__status" data-ai-chat-helper-status aria-live="polite"></div>
     <footer class="ai-chat-helper-panel__actions">

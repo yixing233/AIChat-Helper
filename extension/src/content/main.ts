@@ -4,9 +4,10 @@ import { getPlatformAdapter } from "../platforms";
 import { createCapturedEventBuffer } from "./captured-event-buffer";
 import { createConversationSnapshot } from "./conversation-snapshot";
 import { exportBatchSnapshots, exportSnapshot, type SnapshotExportFormat } from "../exporters/snapshot-export";
-import { renderNodeList } from "../ui/controls/node-list";
+import { filterConversationNodes, renderNodeList } from "../ui/controls/node-list";
 import { openExportModal } from "../ui/modals/export-modal";
 import { createPanel, setPanelStatus } from "../ui/panel/panel";
+import type { ConversationNode } from "../shared/types";
 
 function injectPageHooks(): void {
   const script = document.createElement("script");
@@ -28,12 +29,22 @@ function mountPanel(): void {
   document.body.appendChild(panel);
 
   const nodesContainer = panel.querySelector<HTMLElement>("[data-ai-chat-helper-nodes]");
+  const searchInput = panel.querySelector<HTMLInputElement>("[data-ai-chat-helper-search]");
+  let currentNodes: ConversationNode[] = [];
+
+  const renderCurrentNodes = () => {
+    if (!nodesContainer) return;
+    renderNodeList(nodesContainer, filterConversationNodes(currentNodes, searchInput?.value || ""));
+  };
+
   const refreshNodes = () => {
-    if (nodesContainer) renderNodeList(nodesContainer, adapter.scanDomNodes(document));
+    currentNodes = adapter.scanDomNodes(document);
+    renderCurrentNodes();
   };
 
   refreshNodes();
   panel.querySelector("[data-ai-chat-helper-refresh]")?.addEventListener("click", refreshNodes);
+  searchInput?.addEventListener("input", renderCurrentNodes);
   panel.querySelector("[data-ai-chat-helper-export]")?.addEventListener("click", () => {
     openExportModal((format) => {
       void exportCurrentConversation(format, panel);

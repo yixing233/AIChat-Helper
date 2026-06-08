@@ -1,5 +1,15 @@
 import type { ConversationNode } from "../../shared/types";
 
+export function filterConversationNodes(nodes: ConversationNode[], query: string): ConversationNode[] {
+  const normalizedQuery = query.trim().toLowerCase();
+  if (!normalizedQuery) return nodes;
+
+  return nodes.filter((node) => {
+    const haystack = `${node.title} ${node.role || ""}`.toLowerCase();
+    return haystack.includes(normalizedQuery);
+  });
+}
+
 export function renderNodeList(container: HTMLElement, nodes: ConversationNode[]): void {
   if (nodes.length === 0) {
     const empty = document.createElement("p");
