@@ -55,6 +55,7 @@ async function main() {
       console.warn(`[page:error] ${error.message}`);
     });
     await installMockRoutes(page);
+    await installQwenApiRoutes(page);
 
     for (const platformCase of platformCases) {
       await page.goto(platformCase.url, { waitUntil: "domcontentloaded" });
@@ -67,12 +68,18 @@ async function main() {
       if (platformCase.id === "claude") {
         await assertBatchZipExport(page, context, 2);
       }
+      if (platformCase.id === "qwen") {
+        await assertBatchZipExport(page, context, 2);
+      }
+      if (platformCase.id === "doubao") {
+        await assertBatchZipExport(page, context, 2);
+      }
       if (platformCase.id === "deepseek") {
         await assertBatchZipExport(page, context, 2);
       }
     }
 
-    console.log(`Extension smoke passed: ${platformCases.map((item) => item.id).join(", ")} panels rendered; ChatGPT HTML plus ChatGPT/Claude/DeepSeek batch ZIP exports verified`);
+    console.log(`Extension smoke passed: ${platformCases.map((item) => item.id).join(", ")} panels rendered; ChatGPT HTML plus all supported batch ZIP exports verified`);
   } finally {
     await context.close();
     rmSync(userDataDir, { recursive: true, force: true });
@@ -150,6 +157,7 @@ async function installMockRoutes(page) {
     await page.route(platformCase.route, async (route) => {
       if (platformCase.id === "chatgpt" && await fulfillChatGptApiRoute(route)) return;
       if (platformCase.id === "claude" && await fulfillClaudeApiRoute(route)) return;
+      if (platformCase.id === "doubao" && await fulfillDoubaoApiRoute(route)) return;
       if (platformCase.id === "deepseek" && await fulfillDeepSeekApiRoute(route)) return;
 
       await route.fulfill({
@@ -160,6 +168,124 @@ async function installMockRoutes(page) {
       });
     });
   }
+}
+
+async function installQwenApiRoutes(page) {
+  await page.route("https://chat2-api.qianwen.com/**", async (route) => {
+    if (await fulfillQwenApiRoute(route)) return;
+    await route.fulfill({
+      status: 404,
+      contentType: "application/json",
+      headers: qwenCorsHeaders(),
+      body: JSON.stringify({ error: "Unhandled Qwen smoke route" })
+    });
+  });
+}
+
+async function fulfillQwenApiRoute(route) {
+  const request = route.request();
+  const url = new URL(request.url());
+
+  if (request.method() === "OPTIONS") {
+    await route.fulfill({
+      status: 204,
+      headers: qwenCorsHeaders()
+    });
+    return true;
+  }
+
+  if (url.pathname === "/api/v2/session/page/list") {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      headers: qwenCorsHeaders(),
+      body: JSON.stringify({
+        data: {
+          list: [
+            {
+              session_id: "qwen-batch-1",
+              title: "Qwen Smoke One",
+              modifiedTime: "2026-06-08T03:00:00Z",
+              message_count: 2
+            },
+            {
+              session_id: "qwen-batch-2",
+              title: "Qwen Smoke Two",
+              modifiedTime: "2026-06-08T03:00:01Z",
+              message_count: 2
+            }
+          ]
+        }
+      })
+    });
+    return true;
+  }
+
+  if (url.pathname === "/api/v1/session/msg/list") {
+    const id = url.searchParams.get("session_id") || "qwen-batch-1";
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      headers: qwenCorsHeaders(),
+      body: JSON.stringify(qwenConversationPayload(id, id === "qwen-batch-2" ? "Qwen Smoke Two" : "Qwen Smoke One"))
+    });
+    return true;
+  }
+
+  return false;
+}
+
+function qwenCorsHeaders() {
+  return {
+    "access-control-allow-origin": "https://www.qianwen.com",
+    "access-control-allow-credentials": "true",
+    "access-control-allow-methods": "GET,POST,OPTIONS",
+    "access-control-allow-headers": "content-type,x-platform"
+  };
+}
+
+async function fulfillDoubaoApiRoute(route) {
+  const url = new URL(route.request().url());
+
+  if (url.pathname === "/im/chain/recent_conv") {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        downlink_body: {
+          pull_recent_conv_chain_downlink_body: {
+            conversation_list: [
+              {
+                conversation_id: "doubao-batch-1",
+                title: "Doubao Smoke One",
+                updated_at: 1780000001000,
+                message_count: 2
+              },
+              {
+                conversation_id: "doubao-batch-2",
+                title: "Doubao Smoke Two",
+                updated_at: 1780000002000,
+                message_count: 2
+              }
+            ]
+          }
+        }
+      })
+    });
+    return true;
+  }
+
+  if (url.pathname === "/im/chain/single") {
+    const id = extractJsonConversationId(route.request().postData()) || "doubao-batch-1";
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(doubaoConversationPayload(id, id === "doubao-batch-2" ? "Doubao Smoke Two" : "Doubao Smoke One"))
+    });
+    return true;
+  }
+
+  return false;
 }
 
 async function fulfillDeepSeekApiRoute(route) {
@@ -467,6 +593,63 @@ function chatGptConversationPayload(id, title) {
   };
 }
 
+function qwenConversationPayload(id, title) {
+  return {
+    data: {
+      list: [
+        {
+          req_id: `${id}-request`,
+          session_id: id,
+          request_messages: [
+            {
+              content: `[(think_1)] Question for ${title}`,
+              resource_infos: [{ file_name: `${id}.txt` }]
+            }
+          ],
+          response_messages: [
+            { mime_type: "text/plain", content: `Answer for ${title}` },
+            { mime_type: "bar/progress", content: "ignore me" }
+          ]
+        }
+      ]
+    }
+  };
+}
+
+function doubaoConversationPayload(id, title) {
+  return {
+    status_code: 0,
+    downlink_body: {
+      pull_singe_chain_downlink_body: {
+        messages: [
+          {
+            message_id: `${id}-user`,
+            user_type: 1,
+            index_in_conv: 1,
+            create_time: 1780000000,
+            tts_content: `Question for ${title}`,
+            content: JSON.stringify({
+              entities: [
+                { entity_content: { file: { file_name: `${id}.pdf` } } }
+              ]
+            })
+          },
+          {
+            message_id: `${id}-assistant`,
+            user_type: 2,
+            index_in_conv: 2,
+            create_time: 1780000001,
+            content_block: [
+              { content: { text_block: { text: `Answer for ${title}` } } },
+              { content: { reference_block: { text: { text: "Smoke reference" } } } }
+            ]
+          }
+        ]
+      }
+    }
+  };
+}
+
 function claudeConversationPayload(id, title) {
   return {
     uuid: id,
@@ -487,6 +670,16 @@ function claudeConversationPayload(id, title) {
       }
     ]
   };
+}
+
+function extractJsonConversationId(text) {
+  if (!text) return "";
+  try {
+    const payload = JSON.parse(text);
+    return String(payload?.uplink_body?.pull_singe_chain_uplink_body?.conversation_id || "");
+  } catch {
+    return "";
+  }
 }
 
 function deepSeekConversationPayload(id, title) {
