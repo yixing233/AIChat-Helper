@@ -63,7 +63,7 @@ async function main() {
       await assertToggleVisibility(page, platformCase);
       if (platformCase.id === "chatgpt") {
         await assertCurrentHtmlExport(page, context);
-        await assertBatchZipExport(page, context, 2);
+        await assertBatchZipExport(page, context, { selectedCount: 3, exportedCount: 2, failedCount: 1 });
       }
       if (platformCase.id === "claude") {
         await assertBatchZipExport(page, context, 2);
@@ -383,7 +383,8 @@ async function fulfillChatGptApiRoute(route) {
       body: JSON.stringify({
         items: [
           { id: "batch-1", title: "Smoke Batch One", update_time: 1780000000 },
-          { id: "batch-2", title: "Smoke Batch Two", update_time: 1780000001 }
+          { id: "batch-2", title: "Smoke Batch Two", update_time: 1780000001 },
+          { id: "batch-fail", title: "Smoke Batch Failure", update_time: 1780000002 }
         ]
       })
     });
@@ -393,6 +394,14 @@ async function fulfillChatGptApiRoute(route) {
   const conversationMatch = url.pathname.match(/^\/backend-api\/conversation\/([^/]+)$/);
   if (conversationMatch) {
     const id = decodeURIComponent(conversationMatch[1]);
+    if (id === "batch-fail") {
+      await route.fulfill({
+        status: 500,
+        contentType: "application/json",
+        body: JSON.stringify({ error: "Smoke detail failure" })
+      });
+      return true;
+    }
     await route.fulfill({
       status: 200,
       contentType: "application/json",
@@ -470,26 +479,31 @@ async function assertCurrentHtmlExport(page, context) {
   }
 }
 
-async function assertBatchZipExport(page, context, expectedCount) {
+async function assertBatchZipExport(page, context, expectation) {
+  const expected = typeof expectation === "number"
+    ? { selectedCount: expectation, exportedCount: expectation, failedCount: 0 }
+    : { failedCount: 0, ...expectation };
   const existingDownloadIds = await getChromeDownloadIds(context);
   await page.locator("[data-ai-chat-helper-batch-export]").click();
   try {
     await page.waitForFunction((count) => {
       return document.querySelectorAll("[data-ai-chat-helper-batch-item]:checked").length === count;
-    }, expectedCount, { timeout: 10000 });
+    }, expected.selectedCount, { timeout: 10000 });
   } catch (error) {
     const modalText = await page.locator("#ai-chat-helper-export-modal").innerText().catch(() => "");
     const selectedBatchItems = await page.locator("[data-ai-chat-helper-batch-item]:checked").count();
-    throw new Error(`Expected ${expectedCount} selected batch conversations, got ${selectedBatchItems}. Modal: ${modalText || "missing"}`);
+    throw new Error(`Expected ${expected.selectedCount} selected batch conversations, got ${selectedBatchItems}. Modal: ${modalText || "missing"}`);
   }
 
   const downloadPromise = page.waitForEvent("download", { timeout: 10000 }).catch(() => null);
   await page.locator("#ai-chat-helper-export-modal [data-format='zip']").click();
   try {
-    await page.waitForFunction((count) => {
+    await page.waitForFunction(({ count, failedCount }) => {
       const status = document.querySelector("[data-ai-chat-helper-status]");
-      return status?.textContent?.includes(`Batch export started for ${count} conversations.`);
-    }, expectedCount, { timeout: 10000 });
+      const text = status?.textContent || "";
+      return text.includes(`Batch export started for ${count} conversations`)
+        && (!failedCount || text.includes(`(${failedCount} failed)`));
+    }, { count: expected.exportedCount, failedCount: expected.failedCount }, { timeout: 10000 });
   } catch (error) {
     const statusText = await page.locator("[data-ai-chat-helper-status]").innerText().catch(() => "");
     throw new Error(`Batch ZIP export did not report success. Status: ${statusText || "empty"}`);

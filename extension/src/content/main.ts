@@ -3,6 +3,7 @@ import { sendBackgroundRequest } from "../messaging/bridge";
 import { getPlatformAdapter } from "../platforms";
 import { DEFAULT_EXTENSION_SETTINGS, LEGACY_SETTING_MIGRATIONS, normalizeExtensionSettings } from "../settings/extension-settings";
 import { createExtensionStorage, migrateLocalStorageKey } from "../storage/extension-storage";
+import { collectBatchSnapshots } from "./batch-export";
 import { createCapturedEventBuffer } from "./captured-event-buffer";
 import { createConversationSnapshot } from "./conversation-snapshot";
 import { downloadExportFiles } from "./export-downloads";
@@ -269,17 +270,28 @@ async function exportRecentConversations(format: SnapshotExportFormat, panel: HT
   setPanelStatus(panel, "Exporting selected conversations...");
 
   try {
-    const snapshots = [];
-
-    for (const [index, summary] of summaries.entries()) {
-      setPanelStatus(panel, `Exporting ${index + 1}/${summaries.length}: ${summary.title || summary.conversationId}`);
-      snapshots.push(await adapter.fetchConversationDetail(summary.conversationId));
+    const result = await collectBatchSnapshots(
+      summaries,
+      (conversationId) => adapter.fetchConversationDetail!(conversationId),
+      {
+        onProgress(summary, index, total) {
+          setPanelStatus(panel, `Exporting ${index + 1}/${total}: ${summary.title || summary.conversationId}`);
+        },
+        onFailure(summary, error) {
+          console.warn("[AI Chat Helper] batch conversation export failed", summary.conversationId, error);
+        }
+      }
+    );
+    if (!result.snapshots.length) {
+      setPanelStatus(panel, `Batch export failed: no selected conversations could be exported (${result.failures.length} failed).`);
+      return;
     }
 
-    const files = await exportBatchSnapshots(snapshots, format);
+    const files = await exportBatchSnapshots(result.snapshots, format);
     await downloadExportFiles(files, sendBackgroundRequest);
 
-    setPanelStatus(panel, `Batch export started for ${snapshots.length} conversations.`);
+    const failedText = result.failures.length ? ` (${result.failures.length} failed).` : ".";
+    setPanelStatus(panel, `Batch export started for ${result.snapshots.length} conversations${failedText}`);
   } catch (error) {
     console.error("[AI Chat Helper] batch export failed", error);
     setPanelStatus(panel, `Batch export failed: ${getErrorMessage(error)}`);

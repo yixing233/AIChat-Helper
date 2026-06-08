@@ -43,6 +43,7 @@ Build the extension with `npm run build`, then load `E:\Code\AI-Chat-Nodes\exten
 - [ ] Doubao page shows the Batch action.
 - [ ] Batch action opens a recent conversation list with conversations selected by default.
 - [ ] Unchecking a conversation excludes it from the next batch export.
+- [ ] If one selected conversation fails to load, the batch export still downloads successful conversations and reports the failure count.
 - [ ] ChatGPT Batch export downloads one ZIP containing recent conversations.
 - [ ] Claude Batch export downloads one ZIP containing recent conversations.
 - [ ] DeepSeek Batch export downloads one ZIP containing recent conversations.

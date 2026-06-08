@@ -30,6 +30,7 @@ The extension currently includes:
 - HTML, Markdown, TXT, and stored ZIP export modules, including attachment metadata and inline attachment content files when available
 - captured API hydration for current conversations on ChatGPT, Claude, Tongyi Qianwen, Doubao, and DeepSeek
 - selectable, configurable batch export for all supported adapters that expose conversation list/detail APIs
+- per-conversation batch export failure isolation, so successful conversations still download when a selected item fails
 
 Current batch coverage:
 
