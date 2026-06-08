@@ -2,7 +2,7 @@
 
 Build the extension with `npm run build`, then load `E:\Code\AI-Chat-Nodes\extension\dist` as an unpacked extension.
 
-- [ ] `npm run smoke:extension` loads `extension\dist` in Edge and reports the mock ChatGPT panel smoke as passed.
+- [ ] `npm run smoke:extension` loads `extension\dist` in Edge and reports ChatGPT, Claude, Tongyi Qianwen, Doubao, and DeepSeek mock panels as passed.
 - [ ] Chrome loads the extension without manifest errors.
 - [ ] Edge loads the extension without manifest errors.
 - [ ] ChatGPT page shows the AI Chat Helper panel.
@@ -19,11 +19,18 @@ Build the extension with `npm run build`, then load `E:\Code\AI-Chat-Nodes\exten
 - [ ] Existing `ai-nodes-visible-limit` localStorage value migrates to extension storage once.
 - [ ] Reading line setting moves the on-page reading guide and survives reload.
 - [ ] Existing `ai-nodes-reading-line` localStorage value migrates to extension storage once.
+- [ ] Dot gap setting changes node spacing and survives reload.
+- [ ] Existing `ai-nodes-dot-gap` localStorage value migrates to extension storage once.
+- [ ] Tongyi Qianwen Remove ads toggle hides recommendation cards and survives reload.
+- [ ] Existing `ai-nodes-remove-qwen-ads` localStorage value migrates to extension storage once.
+- [ ] DeepSeek Hide native nav toggle hides the native node navigation and survives reload.
+- [ ] Existing `ai-nodes-hide-deepseek-native-nav` localStorage value migrates to extension storage once.
 - [ ] Refresh updates the node list.
 - [ ] Export HTML triggers a browser download.
 - [ ] Export Markdown triggers a browser download.
 - [ ] Export TXT triggers a browser download.
 - [ ] HTML, Markdown, and TXT exports include visible attachment metadata when a conversation has files or images.
+- [ ] Exports include inline attachment content files under `attachments/` when captured attachment content is available.
 - [ ] Export ZIP triggers a browser download.
 - [ ] Current conversation export shows progress or failure status in the panel.
 - [ ] Current conversation export uses API-hydrated messages after the page has loaded network responses.
@@ -38,4 +45,5 @@ Build the extension with `npm run build`, then load `E:\Code\AI-Chat-Nodes\exten
 - [ ] Tongyi Qianwen Batch export downloads one ZIP containing recent conversations.
 - [ ] Doubao Batch export downloads one ZIP containing recent conversations.
 - [ ] Batch export shows progress or failure status in the panel.
+- [ ] Batch limit setting changes the number of requested recent conversations and survives reload.
 - [ ] Extension service worker logs no uncaught errors during export.

@@ -14,7 +14,7 @@ npm run smoke:extension
 
 Load `E:\Code\AI-Chat-Nodes\extension\dist` as an unpacked extension from `chrome://extensions` or `edge://extensions`.
 
-`npm run smoke:extension` launches Microsoft Edge with `extension\dist`, serves a mocked `https://chatgpt.com/` page through Playwright, and verifies that the content script renders the panel and node list.
+`npm run smoke:extension` launches Microsoft Edge with `extension\dist`, serves mocked ChatGPT, Claude, Tongyi Qianwen, Doubao, and DeepSeek pages through Playwright, and verifies that the content script renders each platform panel and node list.
 
 ## Current Migration State
 
@@ -26,16 +26,17 @@ The extension currently includes:
 - background request and download handlers
 - platform adapter registry for ChatGPT, Claude, Tongyi Qianwen, Doubao, and DeepSeek
 - an in-page panel with current-conversation export
-- HTML, Markdown, TXT, and stored ZIP export modules
+- node search, reading line, visible node limit, dot gap, and platform-specific settings controls
+- HTML, Markdown, TXT, and stored ZIP export modules, including attachment metadata and inline attachment content files when available
 - captured API hydration for current conversations on ChatGPT, Claude, Tongyi Qianwen, Doubao, and DeepSeek
-- a minimal batch export entry point for all supported adapters that expose conversation list/detail APIs
+- a configurable batch export entry point for all supported adapters that expose conversation list/detail APIs
 
 Current batch coverage:
 
 - ChatGPT: recent conversation list and detail fetching through `/backend-api/conversations` and `/backend-api/conversation/:id`
 - Claude: recent conversation list and detail fetching through `/api/organizations/{org}/chat_conversations_v2` and `/chat_conversations/:id`
 - DeepSeek: recent conversation list and detail fetching through `/api/v0/chat_session/fetch_page` and `/api/v0/chat/history_messages`
-- Tongyi Qianwen: recent conversation list and detail fetching through `https://chat.qwen.ai/api/v2/chats/` and `https://chat2-api.qianwen.com/api/v1/session/msg/list`
-- Doubao: recent conversation list and detail fetching through `/samantha/chat/completion/list` and `/samantha/im/chain/single`
+- Tongyi Qianwen: recent conversation list and detail fetching through `https://chat2-api.qianwen.com/api/v2/session/page/list` and `https://chat2-api.qianwen.com/api/v1/session/msg/list`
+- Doubao: recent conversation list and detail fetching through `/im/chain/recent_conv` and `/im/chain/single`
 
 The old Tampermonkey userscript remains as migration reference material.
