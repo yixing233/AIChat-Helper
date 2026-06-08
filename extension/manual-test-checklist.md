@@ -41,6 +41,8 @@ Build the extension with `npm run build`, then load `E:\Code\AI-Chat-Nodes\exten
 - [ ] DeepSeek page shows the Batch action.
 - [ ] Tongyi Qianwen page shows the Batch action.
 - [ ] Doubao page shows the Batch action.
+- [ ] Batch action opens a recent conversation list with conversations selected by default.
+- [ ] Unchecking a conversation excludes it from the next batch export.
 - [ ] ChatGPT Batch export downloads one ZIP containing recent conversations.
 - [ ] Claude Batch export downloads one ZIP containing recent conversations.
 - [ ] DeepSeek Batch export downloads one ZIP containing recent conversations.

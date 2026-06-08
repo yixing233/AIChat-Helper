@@ -8,10 +8,10 @@ import { createConversationSnapshot } from "./conversation-snapshot";
 import { downloadExportFiles } from "./export-downloads";
 import { exportBatchSnapshots, exportSnapshot, type SnapshotExportFormat } from "../exporters/snapshot-export";
 import { filterConversationNodes, getNextSearchIndex, renderNodeList, scrollNodeIntoView } from "../ui/controls/node-list";
-import { openExportModal } from "../ui/modals/export-modal";
+import { openBatchExportModal, openExportModal } from "../ui/modals/export-modal";
 import { attachPanelDrag } from "../ui/panel/drag";
 import { createPanel, setPanelStatus } from "../ui/panel/panel";
-import type { ConversationNode } from "../shared/types";
+import type { ConversationNode, ConversationSummary } from "../shared/types";
 
 function injectPageHooks(): void {
   const script = document.createElement("script");
@@ -171,9 +171,7 @@ async function mountPanel(): Promise<void> {
     });
   });
   panel.querySelector("[data-ai-chat-helper-batch-export]")?.addEventListener("click", () => {
-    openExportModal((format) => {
-      void exportRecentConversations(format, panel, batchLimit);
-    });
+    void openRecentConversationPicker(panel, batchLimit);
   });
 
   function jumpToSearchResult(direction: 1 | -1): void {
@@ -245,12 +243,32 @@ async function exportCurrentConversation(format: SnapshotExportFormat, panel: HT
   }
 }
 
-async function exportRecentConversations(format: SnapshotExportFormat, panel: HTMLElement, limit: number): Promise<void> {
+async function openRecentConversationPicker(panel: HTMLElement, limit: number): Promise<void> {
   if (!adapter?.fetchConversationList || !adapter.fetchConversationDetail) return;
   setPanelStatus(panel, "Fetching recent conversations...");
 
   try {
     const summaries = await adapter.fetchConversationList({ limit });
+    if (!summaries.length) {
+      setPanelStatus(panel, "No recent conversations found.");
+      return;
+    }
+    openBatchExportModal(summaries, (format, selectedSummaries) => {
+      void exportRecentConversations(format, panel, selectedSummaries);
+    });
+    setPanelStatus(panel, `Loaded ${summaries.length} recent conversations.`);
+  } catch (error) {
+    console.error("[AI Chat Helper] batch list failed", error);
+    setPanelStatus(panel, `Batch list failed: ${getErrorMessage(error)}`);
+  }
+}
+
+async function exportRecentConversations(format: SnapshotExportFormat, panel: HTMLElement, summaries: ConversationSummary[]): Promise<void> {
+  if (!adapter?.fetchConversationList || !adapter.fetchConversationDetail) return;
+  if (!summaries.length) return;
+  setPanelStatus(panel, "Exporting selected conversations...");
+
+  try {
     const snapshots = [];
 
     for (const [index, summary] of summaries.entries()) {

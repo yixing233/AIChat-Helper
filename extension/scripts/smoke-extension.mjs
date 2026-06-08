@@ -473,7 +473,15 @@ async function assertCurrentHtmlExport(page, context) {
 async function assertBatchZipExport(page, context, expectedCount) {
   const existingDownloadIds = await getChromeDownloadIds(context);
   await page.locator("[data-ai-chat-helper-batch-export]").click();
-  await page.waitForSelector("#ai-chat-helper-export-modal", { timeout: 10000 });
+  try {
+    await page.waitForFunction((count) => {
+      return document.querySelectorAll("[data-ai-chat-helper-batch-item]:checked").length === count;
+    }, expectedCount, { timeout: 10000 });
+  } catch (error) {
+    const modalText = await page.locator("#ai-chat-helper-export-modal").innerText().catch(() => "");
+    const selectedBatchItems = await page.locator("[data-ai-chat-helper-batch-item]:checked").count();
+    throw new Error(`Expected ${expectedCount} selected batch conversations, got ${selectedBatchItems}. Modal: ${modalText || "missing"}`);
+  }
 
   const downloadPromise = page.waitForEvent("download", { timeout: 10000 }).catch(() => null);
   await page.locator("#ai-chat-helper-export-modal [data-format='zip']").click();
