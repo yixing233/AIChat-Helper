@@ -2,8 +2,8 @@ import { exporters, type ExportFormat } from "../exporters";
 import { isInjectedMessage } from "../messaging/bridge";
 import { sendBackgroundRequest } from "../messaging/bridge";
 import { getPlatformAdapter } from "../platforms";
-import type { ConversationSnapshot } from "../shared/types";
 import { createCapturedEventBuffer } from "./captured-event-buffer";
+import { createConversationSnapshot } from "./conversation-snapshot";
 import { renderNodeList } from "../ui/controls/node-list";
 import { openExportModal } from "../ui/modals/export-modal";
 import { createPanel } from "../ui/panel/panel";
@@ -42,18 +42,7 @@ function mountPanel(): void {
 
 async function exportCurrentConversation(format: ExportFormat): Promise<void> {
   if (!adapter) return;
-  const nodes = adapter.scanDomNodes(document);
-  const snapshot: ConversationSnapshot = {
-    platformId: adapter.id,
-    conversationId: adapter.getConversationId(),
-    title: document.title || `${adapter.name} Conversation`,
-    attachments: [],
-    messages: nodes.map((node) => ({
-      id: node.id,
-      role: node.role || "assistant",
-      text: node.title
-    }))
-  };
+  const snapshot = await createConversationSnapshot(adapter, capturedEvents.snapshot(), document);
   const files = await exporters[format].export(snapshot);
 
   for (const file of files) {

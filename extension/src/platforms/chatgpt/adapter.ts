@@ -1,5 +1,6 @@
 import type { PlatformAdapter } from "../../shared/types";
 import { scanTextNodes } from "../shared/dom-scan";
+import { extractChatGPTSnapshotFromConversation } from "./mapping";
 
 export const chatgptAdapter: PlatformAdapter = {
   id: "chatgpt",
@@ -12,5 +13,15 @@ export const chatgptAdapter: PlatformAdapter = {
   },
   scanDomNodes(root = document) {
     return scanTextNodes(root, ["[data-message-author-role]", "[data-message-id]", "article"], "chatgpt");
+  },
+  async hydrateFromCapturedApi(events) {
+    const event = [...events].reverse().find((item) => {
+      if (item.status && item.status >= 400) return false;
+      return /\/backend-api\/conversation(?:\/[^/?#]+)?/i.test(item.url) && Boolean(item.responseText);
+    });
+    if (!event?.responseText) {
+      throw new Error("No captured ChatGPT conversation response is available");
+    }
+    return extractChatGPTSnapshotFromConversation(JSON.parse(event.responseText));
   }
 };
