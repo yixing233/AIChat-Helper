@@ -9,6 +9,7 @@ const extensionRoot = resolve(__dirname, "..");
 const extensionDir = resolve(extensionRoot, "dist");
 const userDataDir = mkdtempSync(resolve(tmpdir(), "ai-chat-helper-extension-"));
 const downloadsDir = mkdtempSync(resolve(tmpdir(), "ai-chat-helper-downloads-"));
+const CLAUDE_ORG_ID = "00000000-0000-4000-8000-000000000001";
 
 function findEdgeExecutable() {
   const candidates = [
@@ -61,11 +62,14 @@ async function main() {
       await assertToggleVisibility(page, platformCase);
       if (platformCase.id === "chatgpt") {
         await assertCurrentHtmlExport(page, context);
-        await assertBatchZipExport(page, context);
+        await assertBatchZipExport(page, context, 2);
+      }
+      if (platformCase.id === "claude") {
+        await assertBatchZipExport(page, context, 2);
       }
     }
 
-    console.log(`Extension smoke passed: ${platformCases.map((item) => item.id).join(", ")} panels rendered; ChatGPT HTML and batch ZIP exports verified`);
+    console.log(`Extension smoke passed: ${platformCases.map((item) => item.id).join(", ")} panels rendered; ChatGPT HTML plus ChatGPT/Claude batch ZIP exports verified`);
   } finally {
     await context.close();
     rmSync(userDataDir, { recursive: true, force: true });
@@ -96,6 +100,7 @@ const platformCases = [
     name: "Claude",
     url: "https://claude.ai/chat/00000000-0000-0000-0000-000000000000",
     route: "https://claude.ai/**",
+    headers: { "set-cookie": `lastActiveOrg=${CLAUDE_ORG_ID}; Path=/; SameSite=Lax` },
     body: mockPage("Mock Claude", `
       <article data-testid="user-message">Claude smoke question</article>
       <article data-testid="assistant-message">Claude smoke answer</article>
@@ -141,14 +146,57 @@ async function installMockRoutes(page) {
   for (const platformCase of platformCases) {
     await page.route(platformCase.route, async (route) => {
       if (platformCase.id === "chatgpt" && await fulfillChatGptApiRoute(route)) return;
+      if (platformCase.id === "claude" && await fulfillClaudeApiRoute(route)) return;
 
       await route.fulfill({
         status: 200,
         contentType: "text/html",
+        headers: platformCase.headers || {},
         body: platformCase.body
       });
     });
   }
+}
+
+async function fulfillClaudeApiRoute(route) {
+  const url = new URL(route.request().url());
+
+  if (url.pathname === `/api/organizations/${CLAUDE_ORG_ID}/chat_conversations_v2`) {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        data: [
+          {
+            uuid: "claude-batch-1",
+            name: "Claude Smoke One",
+            updated_at: "2026-06-08T01:00:03Z",
+            chat_messages_count: 2
+          },
+          {
+            uuid: "claude-batch-2",
+            name: "Claude Smoke Two",
+            updated_at: "2026-06-08T01:00:04Z",
+            chat_messages_count: 2
+          }
+        ]
+      })
+    });
+    return true;
+  }
+
+  const detailMatch = url.pathname.match(new RegExp(`^/api/organizations/${CLAUDE_ORG_ID}/chat_conversations/([^/]+)$`));
+  if (detailMatch) {
+    const id = decodeURIComponent(detailMatch[1]);
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(claudeConversationPayload(id, id === "claude-batch-2" ? "Claude Smoke Two" : "Claude Smoke One"))
+    });
+    return true;
+  }
+
+  return false;
 }
 
 async function fulfillChatGptApiRoute(route) {
@@ -217,6 +265,7 @@ async function assertToggleVisibility(page, platformCase) {
 }
 
 async function assertCurrentHtmlExport(page, context) {
+  const existingDownloadIds = await getChromeDownloadIds(context);
   await page.locator("[data-ai-chat-helper-export]").click();
   await page.waitForSelector("#ai-chat-helper-export-modal", { timeout: 10000 });
 
@@ -241,23 +290,24 @@ async function assertCurrentHtmlExport(page, context) {
     return;
   }
 
-  const chromeDownload = await findLatestHtmlChromeDownload(context);
+  const chromeDownload = await findLatestHtmlChromeDownload(context, existingDownloadIds);
   if (!chromeDownload) {
     throw new Error("Current HTML export reported success but no completed Chrome HTML download record was observed.");
   }
 }
 
-async function assertBatchZipExport(page, context) {
+async function assertBatchZipExport(page, context, expectedCount) {
+  const existingDownloadIds = await getChromeDownloadIds(context);
   await page.locator("[data-ai-chat-helper-batch-export]").click();
   await page.waitForSelector("#ai-chat-helper-export-modal", { timeout: 10000 });
 
   const downloadPromise = page.waitForEvent("download", { timeout: 10000 }).catch(() => null);
   await page.locator("#ai-chat-helper-export-modal [data-format='zip']").click();
   try {
-    await page.waitForFunction(() => {
+    await page.waitForFunction((count) => {
       const status = document.querySelector("[data-ai-chat-helper-status]");
-      return status?.textContent?.includes("Batch export started for 2 conversations.");
-    }, null, { timeout: 10000 });
+      return status?.textContent?.includes(`Batch export started for ${count} conversations.`);
+    }, expectedCount, { timeout: 10000 });
   } catch (error) {
     const statusText = await page.locator("[data-ai-chat-helper-status]").innerText().catch(() => "");
     throw new Error(`Batch ZIP export did not report success. Status: ${statusText || "empty"}`);
@@ -272,29 +322,34 @@ async function assertBatchZipExport(page, context) {
     return;
   }
 
-  const chromeDownload = await findLatestChromeDownload(context, "application/zip", "data:application/zip");
+  const chromeDownload = await findLatestChromeDownload(context, "application/zip", "data:application/zip", existingDownloadIds);
   if (!chromeDownload) {
     throw new Error("Batch ZIP export reported success but no completed Chrome ZIP download record was observed.");
   }
 }
 
-async function findLatestHtmlChromeDownload(context) {
-  return findLatestChromeDownload(context, "text/html", "data:text/html");
+async function findLatestHtmlChromeDownload(context, excludedIds = new Set()) {
+  return findLatestChromeDownload(context, "text/html", "data:text/html", excludedIds);
 }
 
-async function findLatestChromeDownload(context, expectedMime, expectedUrlPrefix) {
+async function findLatestChromeDownload(context, expectedMime, expectedUrlPrefix, excludedIds = new Set()) {
   const deadline = Date.now() + 10000;
   while (Date.now() < deadline) {
     const downloads = await searchChromeDownloads(context);
     const matchedDownload = downloads.find((item) => {
       const mime = String(item.mime || "").toLowerCase();
       const url = String(item.finalUrl || item.url || "").toLowerCase();
-      return item.state === "complete" && (mime.includes(expectedMime) || url.startsWith(expectedUrlPrefix));
+      return !excludedIds.has(item.id) && item.state === "complete" && (mime.includes(expectedMime) || url.startsWith(expectedUrlPrefix));
     });
     if (matchedDownload) return matchedDownload;
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
   return null;
+}
+
+async function getChromeDownloadIds(context) {
+  const downloads = await searchChromeDownloads(context);
+  return new Set(downloads.map((item) => item.id));
 }
 
 async function searchChromeDownloads(context) {
@@ -361,5 +416,27 @@ function chatGptConversationPayload(id, title) {
         }
       }
     }
+  };
+}
+
+function claudeConversationPayload(id, title) {
+  return {
+    uuid: id,
+    name: title,
+    updated_at: "2026-06-08T01:00:04Z",
+    chat_messages: [
+      {
+        uuid: `${id}-human`,
+        sender: "human",
+        created_at: "2026-06-08T01:00:00Z",
+        content: [{ type: "text", text: `Question for ${title}` }]
+      },
+      {
+        uuid: `${id}-assistant`,
+        sender: "assistant",
+        created_at: "2026-06-08T01:00:03Z",
+        content: [{ type: "text", text: `Answer for ${title}` }]
+      }
+    ]
   };
 }
