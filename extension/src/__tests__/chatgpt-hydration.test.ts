@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { chatgptAdapter } from "../platforms/chatgpt/adapter";
 import { extractChatGPTSnapshotFromConversation } from "../platforms/chatgpt/mapping";
 import type { CapturedNetworkEvent } from "../shared/types";
@@ -46,6 +46,10 @@ const conversationPayload = {
 };
 
 describe("ChatGPT mapping hydration", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it("extracts only the active current_node path", () => {
     const snapshot = extractChatGPTSnapshotFromConversation(conversationPayload);
 
@@ -69,6 +73,52 @@ describe("ChatGPT mapping hydration", () => {
     }];
 
     await expect(chatgptAdapter.hydrateFromCapturedApi?.(events)).resolves.toMatchObject({
+      conversationId: "conv-1",
+      title: "Mapped Conversation",
+      messages: [
+        { role: "user", text: "Hello" },
+        { role: "assistant", text: "Hi there" }
+      ]
+    });
+  });
+
+  it("fetches conversation summaries from the backend list API", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        items: [
+          {
+            id: "conv-1",
+            title: "First conversation",
+            update_time: "2026-06-08T02:00:00Z",
+            mapping: { a: {}, b: {} }
+          }
+        ]
+      })
+    } as Response);
+
+    await expect(chatgptAdapter.fetchConversationList?.({ limit: 20 })).resolves.toEqual([
+      {
+        platformId: "chatgpt",
+        conversationId: "conv-1",
+        title: "First conversation",
+        updatedAt: "2026-06-08T02:00:00Z",
+        messageCount: 2
+      }
+    ]);
+    expect(fetchMock).toHaveBeenCalledWith("/backend-api/conversations?offset=0&limit=20&order=updated", {
+      credentials: "include"
+    });
+  });
+
+  it("fetches conversation detail from the backend detail API", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue({
+      ok: true,
+      json: async () => conversationPayload
+    } as Response);
+
+    await expect(chatgptAdapter.fetchConversationDetail?.("conv-1")).resolves.toMatchObject({
+      platformId: "chatgpt",
       conversationId: "conv-1",
       title: "Mapped Conversation",
       messages: [
