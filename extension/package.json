@@ -1,0 +1,23 @@
+{
+  "name": "ai-chat-helper-extension",
+  "version": "3.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "vite build",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "markdown-it": "^14.1.0"
+  },
+  "devDependencies": {
+    "@types/chrome": "^0.0.268",
+    "@types/markdown-it": "^14.1.2",
+    "@types/node": "^20.14.12",
+    "jsdom": "^24.1.1",
+    "typescript": "^5.4.5",
+    "vite": "^5.4.11",
+    "vitest": "^1.6.0"
+  }
+}

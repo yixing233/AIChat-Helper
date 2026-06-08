@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128" role="img" aria-label="AI Chat Helper">
+  <rect width="128" height="128" rx="24" fill="#1457d9"/>
+  <path fill="#ffffff" d="M30 35a13 13 0 0 1 13-13h42a13 13 0 0 1 13 13v32a13 13 0 0 1-13 13H62L42 99V80a13 13 0 0 1-12-13V35Z"/>
+  <circle cx="50" cy="51" r="6" fill="#1457d9"/>
+  <circle cx="64" cy="51" r="6" fill="#1457d9"/>
+  <circle cx="78" cy="51" r="6" fill="#1457d9"/>
+</svg>
