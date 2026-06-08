@@ -3,11 +3,13 @@ import { createPanel, setPanelStatus } from "../ui/panel/panel";
 
 describe("createPanel", () => {
   it("creates one root panel element for a platform", () => {
-    const panel = createPanel({ platformName: "ChatGPT" });
+    const panel = createPanel({ platformName: "ChatGPT", platformIconUrl: "https://chatgpt.com/favicon.ico" });
 
     expect(panel.id).toBe("ai-chat-helper-panel");
     expect(panel.textContent).toContain("ChatGPT");
     expect(panel.querySelector(".ai-chat-helper-panel__platform-card")?.textContent).toContain("Current AI platform:");
+    expect(panel.querySelector(".ai-chat-helper-panel__platform-icon")?.getAttribute("src")).toBe("https://chatgpt.com/favicon.ico");
+    expect(panel.querySelector(".ai-chat-helper-panel__platform-icon")?.getAttribute("alt")).toBe("ChatGPT");
     expect(panel.querySelector("[data-ai-chat-helper-search]")).toBeTruthy();
     expect(panel.querySelector("[data-ai-chat-helper-search-prev]")).toBeTruthy();
     expect(panel.querySelector("[data-ai-chat-helper-search-next]")).toBeTruthy();
@@ -30,6 +32,8 @@ describe("createPanel", () => {
 
     expect(toggle).toBeTruthy();
     expect(toggle?.checked).toBe(true);
+    expect(toggle?.closest(".ai-chat-helper-panel__switch")).toBeTruthy();
+    expect(toggle?.parentElement?.querySelector(".ai-chat-helper-panel__switch-slider")).toBeTruthy();
   });
 
   it("renders the DeepSeek native navigation toggle only for DeepSeek", () => {
@@ -38,6 +42,8 @@ describe("createPanel", () => {
 
     expect(toggle).toBeTruthy();
     expect(toggle?.checked).toBe(true);
+    expect(toggle?.closest(".ai-chat-helper-panel__switch")).toBeTruthy();
+    expect(toggle?.parentElement?.querySelector(".ai-chat-helper-panel__switch-slider")).toBeTruthy();
   });
 
   it("renders batch export action when supported", () => {

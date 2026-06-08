@@ -36,6 +36,7 @@ async function mountPanel(): Promise<void> {
   const panel = createPanel({
     platformId: adapter.id,
     platformName: adapter.name,
+    platformIconUrl: getPlatformIconUrl(adapter.id),
     canBatchExport,
     visibleLimit: settings.visibleLimit,
     batchLimit: settings.batchLimit,
@@ -216,6 +217,30 @@ function applyPlatformSettings(settings: ReturnType<typeof normalizeExtensionSet
     "ai-chat-helper-hide-deepseek-native-nav",
     Boolean(adapter?.id === "deepseek" && settings.hideDeepSeekNativeNav)
   );
+}
+
+function getPlatformIconUrl(platformId: string): string {
+  const iconEl = document.querySelector<HTMLLinkElement>(
+    "link[rel='icon'], link[rel='shortcut icon'], link[rel='apple-touch-icon'], link[rel*='icon']"
+  );
+  const href = iconEl?.href || iconEl?.getAttribute("href") || "";
+  if (href) {
+    try {
+      return new URL(href, window.location.origin).href;
+    } catch {
+      // Fall back to known platform favicons below.
+    }
+  }
+
+  const fallbackIcons: Record<string, string> = {
+    chatgpt: "https://chatgpt.com/favicon.ico",
+    qwen: "https://www.qianwen.com/favicon.ico",
+    doubao: "https://www.doubao.com/favicon.ico",
+    deepseek: "https://chat.deepseek.com/favicon.ico",
+    claude: "https://claude.ai/favicon.ico"
+  };
+
+  return fallbackIcons[platformId] || `${window.location.origin}/favicon.ico`;
 }
 
 function createReadingLine(offset: number): HTMLElement {

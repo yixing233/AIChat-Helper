@@ -5,6 +5,7 @@ import { applyPanelPosition, type PanelPosition } from "./drag";
 export interface PanelOptions {
   platformId?: PlatformId;
   platformName: string;
+  platformIconUrl?: string;
   canBatchExport?: boolean;
   visibleLimit?: number;
   batchLimit?: number;
@@ -56,6 +57,7 @@ export function createPanel(options: PanelOptions): HTMLElement {
       <span aria-hidden="true" title="Drag panel" data-ai-chat-helper-drag-handle>drag</span>
     </header>
     <div class="ai-chat-helper-panel__platform-card">
+      ${renderPlatformIcon(options)}
       <span>Current AI platform: <b>${escapeHtml(options.platformName)}</b></span>
     </div>
     <label class="ai-chat-helper-panel__search">
@@ -100,12 +102,20 @@ export function createPanel(options: PanelOptions): HTMLElement {
   return root;
 }
 
+function renderPlatformIcon(options: PanelOptions): string {
+  if (!options.platformIconUrl) return "";
+  return `<img class="ai-chat-helper-panel__platform-icon" src="${escapeHtml(options.platformIconUrl)}" alt="${escapeHtml(options.platformName)}" referrerpolicy="no-referrer" />`;
+}
+
 function renderPlatformToggles(options: PanelOptions): string {
   if (options.platformId === "qwen") {
     return `
       <label class="ai-chat-helper-panel__setting ai-chat-helper-panel__setting--toggle">
         <span>Remove ads</span>
-        <input type="checkbox" ${options.removeQwenAds ? "checked" : ""} data-ai-chat-helper-remove-qwen-ads />
+        <span class="ai-chat-helper-panel__switch">
+          <input type="checkbox" ${options.removeQwenAds ? "checked" : ""} data-ai-chat-helper-remove-qwen-ads />
+          <span class="ai-chat-helper-panel__switch-slider"></span>
+        </span>
       </label>
     `;
   }
@@ -114,7 +124,10 @@ function renderPlatformToggles(options: PanelOptions): string {
     return `
       <label class="ai-chat-helper-panel__setting ai-chat-helper-panel__setting--toggle">
         <span>Hide native nav</span>
-        <input type="checkbox" ${options.hideDeepSeekNativeNav ? "checked" : ""} data-ai-chat-helper-hide-deepseek-native-nav />
+        <span class="ai-chat-helper-panel__switch">
+          <input type="checkbox" ${options.hideDeepSeekNativeNav ? "checked" : ""} data-ai-chat-helper-hide-deepseek-native-nav />
+          <span class="ai-chat-helper-panel__switch-slider"></span>
+        </span>
       </label>
     `;
   }

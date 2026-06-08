@@ -438,6 +438,8 @@ async function assertPanelStyle(page, expectedName) {
     const computed = window.getComputedStyle(panel);
     const platformCard = panel.querySelector(".ai-chat-helper-panel__platform-card");
     const platformCardStyle = platformCard ? window.getComputedStyle(platformCard) : null;
+    const platformIcon = panel.querySelector(".ai-chat-helper-panel__platform-icon");
+    const platformIconStyle = platformIcon ? window.getComputedStyle(platformIcon) : null;
     const refreshButton = panel.querySelector(".ai-chat-helper-panel__action--refresh");
     const exportButton = panel.querySelector(".ai-chat-helper-panel__action--export");
     const batchButton = panel.querySelector(".ai-chat-helper-panel__action--batch");
@@ -455,6 +457,10 @@ async function assertPanelStyle(page, expectedName) {
       platformCardBorderRadius: platformCardStyle?.borderRadius || "",
       platformCardBackground: platformCardStyle?.backgroundColor || "",
       hasPlatformName: platformCard?.textContent?.includes(platformName) || false,
+      platformIconSrc: platformIcon?.getAttribute("src") || "",
+      platformIconWidth: platformIconStyle?.width || "",
+      platformIconHeight: platformIconStyle?.height || "",
+      platformIconRadius: platformIconStyle?.borderRadius || "",
       refreshColor: refreshStyle?.color || "",
       refreshBorderColor: refreshStyle?.borderColor || "",
       exportColor: exportStyle?.color || "",
@@ -489,6 +495,9 @@ async function assertPanelStyle(page, expectedName) {
   if (style.platformCardBackground !== "rgba(248, 250, 252, 0.78)") {
     throw new Error(`Expected Tampermonkey-style platform card background, got ${style.platformCardBackground}.`);
   }
+  if (!style.platformIconSrc || style.platformIconWidth !== "16px" || style.platformIconHeight !== "16px" || style.platformIconRadius !== "4px") {
+    throw new Error(`Expected Tampermonkey-style platform favicon, got ${style.platformIconSrc || "missing"} at ${style.platformIconWidth} x ${style.platformIconHeight} radius ${style.platformIconRadius}.`);
+  }
   if (style.refreshColor !== "rgb(239, 68, 68)" || style.refreshBorderColor !== "rgb(252, 165, 165)") {
     throw new Error(`Expected Tampermonkey-style refresh button colors, got ${style.refreshColor} / ${style.refreshBorderColor}.`);
   }
@@ -513,9 +522,37 @@ async function assertToggleVisibility(page, platformCase) {
     const count = await page.locator(selector).count();
     if (selector === platformCase.expectedToggle) {
       if (!count) throw new Error(`${platformCase.id} panel did not render expected platform toggle ${selector}.`);
+      await assertSwitchStyle(page, selector, platformCase.id);
     } else if (count) {
       throw new Error(`${platformCase.id} panel unexpectedly rendered platform toggle ${selector}.`);
     }
+  }
+}
+
+async function assertSwitchStyle(page, selector, platformId) {
+  const style = await page.locator(selector).evaluate((input) => {
+    const switchEl = input.closest(".ai-chat-helper-panel__switch");
+    const slider = switchEl?.querySelector(".ai-chat-helper-panel__switch-slider");
+    const switchStyle = switchEl ? window.getComputedStyle(switchEl) : null;
+    const sliderStyle = slider ? window.getComputedStyle(slider) : null;
+
+    return {
+      hasSwitch: Boolean(switchEl),
+      hasSlider: Boolean(slider),
+      switchWidth: switchStyle?.width || "",
+      switchHeight: switchStyle?.height || "",
+      sliderRadius: sliderStyle?.borderRadius || ""
+    };
+  });
+
+  if (!style.hasSwitch || !style.hasSlider) {
+    throw new Error(`${platformId} platform toggle is missing the Tampermonkey-style switch wrapper.`);
+  }
+  if (style.switchWidth !== "34px" || style.switchHeight !== "20px") {
+    throw new Error(`${platformId} platform switch expected 34px x 20px, got ${style.switchWidth} x ${style.switchHeight}.`);
+  }
+  if (style.sliderRadius !== "999px") {
+    throw new Error(`${platformId} platform switch expected rounded slider, got ${style.sliderRadius}.`);
   }
 }
 
