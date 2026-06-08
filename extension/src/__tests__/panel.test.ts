@@ -8,6 +8,9 @@ describe("createPanel", () => {
     expect(panel.id).toBe("ai-chat-helper-panel");
     expect(panel.textContent).toContain("ChatGPT");
     expect(panel.querySelector("[data-ai-chat-helper-search]")).toBeTruthy();
+    expect(panel.querySelector("[data-ai-chat-helper-search-prev]")).toBeTruthy();
+    expect(panel.querySelector("[data-ai-chat-helper-search-next]")).toBeTruthy();
+    expect(panel.querySelector("[data-ai-chat-helper-search-status]")).toBeTruthy();
     expect(panel.querySelector("[data-ai-chat-helper-visible-limit]")).toBeTruthy();
     expect(panel.querySelector("[data-ai-chat-helper-reading-line]")).toBeTruthy();
     expect(panel.querySelector("[data-ai-chat-helper-nodes]")).toBeTruthy();

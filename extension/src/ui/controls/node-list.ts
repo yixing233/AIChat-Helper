@@ -18,6 +18,22 @@ export function getReadingLineScrollTop(element: Element, readingLineOffset: num
   return currentScrollY + element.getBoundingClientRect().top - readingLineOffset;
 }
 
+export function getNextSearchIndex(currentIndex: number, resultCount: number, direction: 1 | -1): number {
+  if (resultCount <= 0) return -1;
+  return (currentIndex + direction + resultCount) % resultCount;
+}
+
+export function scrollNodeIntoView(node: ConversationNode, readingLineOffset: number): boolean {
+  if (!node.elementSelector) return false;
+  const target = document.querySelector(node.elementSelector);
+  if (!target) return false;
+  window.scrollTo({
+    top: getReadingLineScrollTop(target, readingLineOffset),
+    behavior: "smooth"
+  });
+  return true;
+}
+
 export function renderNodeList(container: HTMLElement, nodes: ConversationNode[], options: NodeListOptions = {}): void {
   if (nodes.length === 0) {
     const empty = document.createElement("p");
@@ -36,13 +52,7 @@ function createNodeButton(node: ConversationNode, options: NodeListOptions): HTM
   button.className = "ai-chat-helper-node";
   button.textContent = `${node.index + 1}. ${node.title}`;
   button.addEventListener("click", () => {
-    if (!node.elementSelector) return;
-    const target = document.querySelector(node.elementSelector);
-    if (!target) return;
-    window.scrollTo({
-      top: getReadingLineScrollTop(target, options.readingLineOffset || 150),
-      behavior: "smooth"
-    });
+    scrollNodeIntoView(node, options.readingLineOffset || 150);
   });
   return button;
 }

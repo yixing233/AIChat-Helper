@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { filterConversationNodes, getReadingLineScrollTop } from "../ui/controls/node-list";
+import { filterConversationNodes, getNextSearchIndex, getReadingLineScrollTop } from "../ui/controls/node-list";
 import type { ConversationNode } from "../shared/types";
 
 const nodes: ConversationNode[] = [
@@ -32,5 +32,12 @@ describe("filterConversationNodes", () => {
     });
 
     expect(getReadingLineScrollTop(element, 150, 40)).toBe(210);
+  });
+
+  it("cycles search result indexes forward and backward", () => {
+    expect(getNextSearchIndex(0, 3, 1)).toBe(1);
+    expect(getNextSearchIndex(2, 3, 1)).toBe(0);
+    expect(getNextSearchIndex(0, 3, -1)).toBe(2);
+    expect(getNextSearchIndex(0, 0, 1)).toBe(-1);
   });
 });

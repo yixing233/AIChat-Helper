@@ -6,7 +6,7 @@ import { createExtensionStorage, migrateLocalStorageKey } from "../storage/exten
 import { createCapturedEventBuffer } from "./captured-event-buffer";
 import { createConversationSnapshot } from "./conversation-snapshot";
 import { exportBatchSnapshots, exportSnapshot, type SnapshotExportFormat } from "../exporters/snapshot-export";
-import { filterConversationNodes, renderNodeList } from "../ui/controls/node-list";
+import { filterConversationNodes, getNextSearchIndex, renderNodeList, scrollNodeIntoView } from "../ui/controls/node-list";
 import { openExportModal } from "../ui/modals/export-modal";
 import { createPanel, setPanelStatus } from "../ui/panel/panel";
 import type { ConversationNode } from "../shared/types";
@@ -41,15 +41,24 @@ async function mountPanel(): Promise<void> {
 
   const nodesContainer = panel.querySelector<HTMLElement>("[data-ai-chat-helper-nodes]");
   const searchInput = panel.querySelector<HTMLInputElement>("[data-ai-chat-helper-search]");
+  const searchStatus = panel.querySelector<HTMLElement>("[data-ai-chat-helper-search-status]");
+  const searchPrevButton = panel.querySelector<HTMLButtonElement>("[data-ai-chat-helper-search-prev]");
+  const searchNextButton = panel.querySelector<HTMLButtonElement>("[data-ai-chat-helper-search-next]");
   const visibleLimitInput = panel.querySelector<HTMLInputElement>("[data-ai-chat-helper-visible-limit]");
   const readingLineInput = panel.querySelector<HTMLInputElement>("[data-ai-chat-helper-reading-line]");
   let currentNodes: ConversationNode[] = [];
+  let currentSearchResults: ConversationNode[] = [];
+  let currentSearchIndex = -1;
   let visibleLimit = settings.visibleLimit;
   let readingLineOffset = settings.readingLineOffset;
 
   const renderCurrentNodes = () => {
     if (!nodesContainer) return;
-    const filteredNodes = filterConversationNodes(currentNodes, searchInput?.value || "").slice(0, visibleLimit);
+    currentSearchResults = filterConversationNodes(currentNodes, searchInput?.value || "");
+    if (currentSearchResults.length === 0) currentSearchIndex = -1;
+    else if (currentSearchIndex < 0 || currentSearchIndex >= currentSearchResults.length) currentSearchIndex = 0;
+    updateSearchStatus(searchStatus, currentSearchIndex, currentSearchResults.length);
+    const filteredNodes = currentSearchResults.slice(0, visibleLimit);
     renderNodeList(nodesContainer, filteredNodes, { readingLineOffset });
   };
 
@@ -60,7 +69,16 @@ async function mountPanel(): Promise<void> {
 
   refreshNodes();
   panel.querySelector("[data-ai-chat-helper-refresh]")?.addEventListener("click", refreshNodes);
-  searchInput?.addEventListener("input", renderCurrentNodes);
+  searchInput?.addEventListener("input", () => {
+    currentSearchIndex = 0;
+    renderCurrentNodes();
+  });
+  searchPrevButton?.addEventListener("click", () => {
+    jumpToSearchResult(-1);
+  });
+  searchNextButton?.addEventListener("click", () => {
+    jumpToSearchResult(1);
+  });
   visibleLimitInput?.addEventListener("change", () => {
     const nextSettings = normalizeExtensionSettings({ visibleLimit: visibleLimitInput.value });
     visibleLimit = nextSettings.visibleLimit;
@@ -92,6 +110,18 @@ async function mountPanel(): Promise<void> {
       void exportRecentConversations(format, panel);
     });
   });
+
+  function jumpToSearchResult(direction: 1 | -1): void {
+    currentSearchIndex = getNextSearchIndex(currentSearchIndex, currentSearchResults.length, direction);
+    updateSearchStatus(searchStatus, currentSearchIndex, currentSearchResults.length);
+    const node = currentSearchIndex >= 0 ? currentSearchResults[currentSearchIndex] : null;
+    if (node) scrollNodeIntoView(node, readingLineOffset);
+  }
+}
+
+function updateSearchStatus(status: HTMLElement | null, index: number, count: number): void {
+  if (!status) return;
+  status.textContent = count > 0 && index >= 0 ? `${index + 1}/${count}` : "0/0";
 }
 
 async function loadSettings() {

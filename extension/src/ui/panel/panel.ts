@@ -20,6 +20,11 @@ export function createPanel(options: PanelOptions): HTMLElement {
       <span>Search</span>
       <input type="search" data-ai-chat-helper-search placeholder="Search nodes" />
     </label>
+    <div class="ai-chat-helper-panel__search-nav">
+      <button type="button" data-ai-chat-helper-search-prev>Prev</button>
+      <span data-ai-chat-helper-search-status>0/0</span>
+      <button type="button" data-ai-chat-helper-search-next>Next</button>
+    </div>
     <label class="ai-chat-helper-panel__setting">
       <span>Visible</span>
       <input type="number" min="1" max="100" step="1" value="${Number(options.visibleLimit || 20)}" data-ai-chat-helper-visible-limit />
