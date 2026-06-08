@@ -9,9 +9,12 @@ npm install
 npm test
 npm run typecheck
 npm run build
+npm run smoke:extension
 ```
 
 Load `E:\Code\AI-Chat-Nodes\extension\dist` as an unpacked extension from `chrome://extensions` or `edge://extensions`.
+
+`npm run smoke:extension` launches Microsoft Edge with `extension\dist`, serves a mocked `https://chatgpt.com/` page through Playwright, and verifies that the content script renders the panel and node list.
 
 ## Current Migration State
 

@@ -2,6 +2,7 @@
 
 Build the extension with `npm run build`, then load `E:\Code\AI-Chat-Nodes\extension\dist` as an unpacked extension.
 
+- [ ] `npm run smoke:extension` loads `extension\dist` in Edge and reports the mock ChatGPT panel smoke as passed.
 - [ ] Chrome loads the extension without manifest errors.
 - [ ] Edge loads the extension without manifest errors.
 - [ ] ChatGPT page shows the AI Chat Helper panel.
