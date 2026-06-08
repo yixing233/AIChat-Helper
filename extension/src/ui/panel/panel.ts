@@ -21,10 +21,15 @@ export function createPanel(options: PanelOptions): HTMLElement {
   root.className = "ai-chat-helper-panel";
   root.innerHTML = `
     <header class="ai-chat-helper-panel__header">
-      <strong>AI Chat Helper</strong>
-      <span>${escapeHtml(options.platformName)}</span>
+      <div>
+        <strong>AI Chat Helper</strong>
+        <span>Extension</span>
+      </div>
       <span aria-hidden="true" title="Drag panel" data-ai-chat-helper-drag-handle>drag</span>
     </header>
+    <div class="ai-chat-helper-panel__platform-card">
+      <span>Current AI platform: <b>${escapeHtml(options.platformName)}</b></span>
+    </div>
     <label class="ai-chat-helper-panel__search">
       <span>Search</span>
       <input type="search" data-ai-chat-helper-search placeholder="Search nodes" />
@@ -56,9 +61,9 @@ export function createPanel(options: PanelOptions): HTMLElement {
     <div class="ai-chat-helper-panel__nodes" data-ai-chat-helper-nodes></div>
     <div class="ai-chat-helper-panel__status" data-ai-chat-helper-status aria-live="polite"></div>
     <footer class="ai-chat-helper-panel__actions">
-      <button type="button" data-ai-chat-helper-refresh>Refresh</button>
-      <button type="button" data-ai-chat-helper-export>Export</button>
-      ${options.canBatchExport ? "<button type=\"button\" data-ai-chat-helper-batch-export>Batch</button>" : ""}
+      <button type="button" class="ai-chat-helper-panel__action--refresh" data-ai-chat-helper-refresh>Refresh</button>
+      <button type="button" class="ai-chat-helper-panel__action--export" data-ai-chat-helper-export>Export</button>
+      ${options.canBatchExport ? "<button type=\"button\" class=\"ai-chat-helper-panel__action--batch\" data-ai-chat-helper-batch-export>Batch</button>" : ""}
     </footer>
   `;
   if (options.panelPosition) {

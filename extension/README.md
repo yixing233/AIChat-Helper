@@ -14,7 +14,7 @@ npm run smoke:extension
 
 Load `E:\Code\AI-Chat-Nodes\extension\dist` as an unpacked extension from `chrome://extensions` or `edge://extensions`.
 
-`npm run smoke:extension` launches Microsoft Edge with `extension\dist`, serves mocked ChatGPT, Claude, Tongyi Qianwen, Doubao, and DeepSeek pages through Playwright, verifies that the content script renders each platform panel and node list, and confirms ChatGPT HTML plus all supported batch ZIP exports reach Chrome's downloads API.
+`npm run smoke:extension` launches Microsoft Edge with `extension\dist`, serves mocked ChatGPT, Claude, Tongyi Qianwen, Doubao, and DeepSeek pages through Playwright, verifies that the content script renders each platform panel and node list with Tampermonkey-style panel tokens, and confirms ChatGPT HTML plus all supported batch ZIP exports reach Chrome's downloads API.
 
 ## Current Migration State
 
@@ -31,6 +31,7 @@ The extension currently includes:
 - captured API hydration for current conversations on ChatGPT, Claude, Tongyi Qianwen, Doubao, and DeepSeek
 - selectable, configurable batch export with selected-count and select-all controls for all supported adapters that expose conversation list/detail APIs
 - per-conversation batch export failure isolation, so successful conversations still download when a selected item fails
+- Tampermonkey-style main panel sizing, glass surface, platform card, and refresh/export action colors
 - Tampermonkey-style batch export modal sizing, selection controls, list framing, and overlay treatment
 
 Current batch coverage:

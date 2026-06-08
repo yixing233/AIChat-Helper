@@ -429,6 +429,74 @@ async function assertPanel(page, expectedPlatform, expectedName) {
   if (!panelText.includes("AI Chat Helper") || !panelText.includes(expectedName)) {
     throw new Error(`${expectedPlatform} panel rendered without expected title/platform text.`);
   }
+
+  await assertPanelStyle(page, expectedName);
+}
+
+async function assertPanelStyle(page, expectedName) {
+  const style = await page.locator("#ai-chat-helper-panel").evaluate((panel, platformName) => {
+    const computed = window.getComputedStyle(panel);
+    const platformCard = panel.querySelector(".ai-chat-helper-panel__platform-card");
+    const platformCardStyle = platformCard ? window.getComputedStyle(platformCard) : null;
+    const refreshButton = panel.querySelector(".ai-chat-helper-panel__action--refresh");
+    const exportButton = panel.querySelector(".ai-chat-helper-panel__action--export");
+    const batchButton = panel.querySelector(".ai-chat-helper-panel__action--batch");
+    const refreshStyle = refreshButton ? window.getComputedStyle(refreshButton) : null;
+    const exportStyle = exportButton ? window.getComputedStyle(exportButton) : null;
+    const batchStyle = batchButton ? window.getComputedStyle(batchButton) : null;
+
+    return {
+      width: computed.width,
+      borderRadius: computed.borderRadius,
+      padding: computed.padding,
+      boxShadow: computed.boxShadow,
+      backdropFilter: computed.backdropFilter || computed.webkitBackdropFilter || "",
+      platformCardText: platformCard?.textContent || "",
+      platformCardBorderRadius: platformCardStyle?.borderRadius || "",
+      platformCardBackground: platformCardStyle?.backgroundColor || "",
+      hasPlatformName: platformCard?.textContent?.includes(platformName) || false,
+      refreshColor: refreshStyle?.color || "",
+      refreshBorderColor: refreshStyle?.borderColor || "",
+      exportColor: exportStyle?.color || "",
+      exportBorderColor: exportStyle?.borderColor || "",
+      batchBackground: batchStyle?.backgroundColor || "",
+      batchColor: batchStyle?.color || ""
+    };
+  }, expectedName);
+
+  if (style.width !== "220px") {
+    throw new Error(`Expected Tampermonkey-style 220px panel width, got ${style.width}.`);
+  }
+  if (style.borderRadius !== "12px") {
+    throw new Error(`Expected Tampermonkey-style 12px panel radius, got ${style.borderRadius}.`);
+  }
+  if (style.padding !== "16px") {
+    throw new Error(`Expected Tampermonkey-style 16px panel padding, got ${style.padding}.`);
+  }
+  if (!style.boxShadow || style.boxShadow === "none") {
+    throw new Error("Expected Tampermonkey-style panel shadow.");
+  }
+  if (!style.backdropFilter.includes("blur")) {
+    throw new Error(`Expected Tampermonkey-style panel backdrop blur, got ${style.backdropFilter || "none"}.`);
+  }
+  if (!style.platformCardText.includes("Current AI platform:") || !style.hasPlatformName) {
+    throw new Error(`Expected Tampermonkey-style platform card for ${expectedName}, got ${style.platformCardText || "missing"}.`);
+  }
+  if (style.platformCardBorderRadius !== "10px") {
+    throw new Error(`Expected Tampermonkey-style 10px platform card radius, got ${style.platformCardBorderRadius}.`);
+  }
+  if (style.platformCardBackground !== "rgba(248, 250, 252, 0.78)") {
+    throw new Error(`Expected Tampermonkey-style platform card background, got ${style.platformCardBackground}.`);
+  }
+  if (style.refreshColor !== "rgb(239, 68, 68)" || style.refreshBorderColor !== "rgb(252, 165, 165)") {
+    throw new Error(`Expected Tampermonkey-style refresh button colors, got ${style.refreshColor} / ${style.refreshBorderColor}.`);
+  }
+  if (style.exportColor !== "rgb(30, 136, 229)" || style.exportBorderColor !== "rgb(147, 197, 253)") {
+    throw new Error(`Expected Tampermonkey-style export button colors, got ${style.exportColor} / ${style.exportBorderColor}.`);
+  }
+  if (style.batchColor !== "rgb(255, 255, 255)" || style.batchBackground !== "rgb(15, 118, 110)") {
+    throw new Error(`Expected extension batch action to keep high-contrast styling, got ${style.batchColor} / ${style.batchBackground}.`);
+  }
 }
 
 async function assertToggleVisibility(page, platformCase) {

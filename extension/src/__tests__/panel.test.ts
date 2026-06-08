@@ -7,6 +7,7 @@ describe("createPanel", () => {
 
     expect(panel.id).toBe("ai-chat-helper-panel");
     expect(panel.textContent).toContain("ChatGPT");
+    expect(panel.querySelector(".ai-chat-helper-panel__platform-card")?.textContent).toContain("Current AI platform:");
     expect(panel.querySelector("[data-ai-chat-helper-search]")).toBeTruthy();
     expect(panel.querySelector("[data-ai-chat-helper-search-prev]")).toBeTruthy();
     expect(panel.querySelector("[data-ai-chat-helper-search-next]")).toBeTruthy();
@@ -42,6 +43,9 @@ describe("createPanel", () => {
   it("renders batch export action when supported", () => {
     const panel = createPanel({ platformName: "ChatGPT", canBatchExport: true, batchLimit: 35 });
 
+    expect(panel.querySelector(".ai-chat-helper-panel__action--refresh")).toBeTruthy();
+    expect(panel.querySelector(".ai-chat-helper-panel__action--export")).toBeTruthy();
+    expect(panel.querySelector(".ai-chat-helper-panel__action--batch")).toBeTruthy();
     expect(panel.querySelector("[data-ai-chat-helper-batch-export]")).toBeTruthy();
     expect(panel.querySelector<HTMLInputElement>("[data-ai-chat-helper-batch-limit]")?.value).toBe("35");
   });
