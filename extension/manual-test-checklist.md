@@ -22,6 +22,7 @@ Build the extension with `npm run build`, then load `E:\Code\AI-Chat-Nodes\exten
 - [ ] Export HTML triggers a browser download.
 - [ ] Export Markdown triggers a browser download.
 - [ ] Export TXT triggers a browser download.
+- [ ] HTML, Markdown, and TXT exports include visible attachment metadata when a conversation has files or images.
 - [ ] Export ZIP triggers a browser download.
 - [ ] Current conversation export shows progress or failure status in the panel.
 - [ ] Current conversation export uses API-hydrated messages after the page has loaded network responses.

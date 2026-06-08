@@ -1,5 +1,5 @@
 import type { Exporter } from "../shared/types";
-import { safeFileName } from "./shared";
+import { formatAttachmentMarkdown, safeFileName } from "./shared";
 
 export const markdownExporter: Exporter = {
   format: "markdown",
@@ -7,7 +7,21 @@ export const markdownExporter: Exporter = {
     const lines = [`# ${snapshot.title}`, ""];
     snapshot.messages.forEach((message) => {
       lines.push(`## ${message.role}`, "", message.text, "");
+      if (message.attachments?.length) {
+        lines.push("### Attachments", "");
+        message.attachments.forEach((attachment) => {
+          lines.push(`- ${formatAttachmentMarkdown(attachment)}`);
+        });
+        lines.push("");
+      }
     });
+    if (snapshot.attachments.length) {
+      lines.push("## Attachments", "");
+      snapshot.attachments.forEach((attachment) => {
+        lines.push(`- ${formatAttachmentMarkdown(attachment)}`);
+      });
+      lines.push("");
+    }
 
     return [{
       path: `${safeFileName(snapshot.title)}.md`,

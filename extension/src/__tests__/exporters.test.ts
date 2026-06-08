@@ -16,6 +16,34 @@ const snapshot: ConversationSnapshot = {
   ]
 };
 
+const attachmentSnapshot: ConversationSnapshot = {
+  ...snapshot,
+  title: "Attachment Chat",
+  attachments: [
+    {
+      id: "global-image",
+      fileName: "diagram.png",
+      mimeType: "image/png",
+      url: "https://example.com/diagram.png"
+    }
+  ],
+  messages: [
+    {
+      id: "1",
+      role: "user",
+      text: "Please inspect this",
+      attachments: [
+        {
+          id: "message-file",
+          fileName: "notes.pdf",
+          mimeType: "application/pdf",
+          url: "https://example.com/notes.pdf"
+        }
+      ]
+    }
+  ]
+};
+
 describe("exporters", () => {
   it("exports html", async () => {
     const [file] = await htmlExporter.export(snapshot);
@@ -36,6 +64,31 @@ describe("exporters", () => {
 
     expect(file.path).toBe("Sample Chat.txt");
     expect(String(file.content)).toContain("user: Hello");
+  });
+
+  it("exports attachment metadata in html", async () => {
+    const [file] = await htmlExporter.export(attachmentSnapshot);
+    const content = String(file.content);
+
+    expect(content).toContain("notes.pdf");
+    expect(content).toContain("https://example.com/notes.pdf");
+    expect(content).toContain("diagram.png");
+  });
+
+  it("exports attachment metadata in markdown", async () => {
+    const [file] = await markdownExporter.export(attachmentSnapshot);
+    const content = String(file.content);
+
+    expect(content).toContain("[notes.pdf](https://example.com/notes.pdf)");
+    expect(content).toContain("[diagram.png](https://example.com/diagram.png)");
+  });
+
+  it("exports attachment metadata in txt", async () => {
+    const [file] = await txtExporter.export(attachmentSnapshot);
+    const content = String(file.content);
+
+    expect(content).toContain("Attachment: notes.pdf <https://example.com/notes.pdf>");
+    expect(content).toContain("Attachment: diagram.png <https://example.com/diagram.png>");
   });
 
   it("creates a stored zip archive containing file names", () => {
