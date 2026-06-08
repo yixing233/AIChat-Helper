@@ -42,17 +42,17 @@ export function renderNodeList(container: HTMLElement, nodes: ConversationNode[]
   container.classList.add("ai-chat-helper-orbital__nodes");
   container.style.setProperty("--ai-chat-helper-dot-gap", `${dotGap}px`);
 
+  if (nodes.length === 0) {
+    container.replaceChildren();
+    container.hidden = true;
+    container.style.height = "0px";
+    return;
+  }
+
+  container.hidden = false;
   const track = document.createElement("div");
   track.className = "ai-chat-helper-orbital__track";
   track.setAttribute("aria-hidden", "true");
-
-  if (nodes.length === 0) {
-    const empty = document.createElement("p");
-    empty.className = "ai-chat-helper-empty";
-    empty.textContent = "No nodes found";
-    container.replaceChildren(track, empty);
-    return;
-  }
 
   const railHeight = (nodes.length - 1) * dotGap + 32;
   container.style.height = `${Math.max(96, railHeight)}px`;

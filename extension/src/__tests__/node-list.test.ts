@@ -70,4 +70,15 @@ describe("filterConversationNodes", () => {
     expect(buttons[1].style.top).toBe("58px");
     expect(buttons[2].style.top).toBe("100px");
   });
+
+  it("hides the rail entirely when there are no nodes", () => {
+    const container = document.createElement("div");
+
+    renderNodeList(container, []);
+
+    expect(container.querySelector(".ai-chat-helper-empty")).toBeFalsy();
+    expect(container.querySelector(".ai-chat-helper-orbital__track")).toBeFalsy();
+    expect(container.textContent).not.toContain("No nodes found");
+    expect(container.hidden).toBe(true);
+  });
 });

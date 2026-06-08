@@ -92,6 +92,8 @@ export function createPanel(options: PanelOptions): HTMLElement {
         <input type="search" data-ai-chat-helper-search placeholder="搜索当前对话消息..." />
         <button type="button" data-ai-chat-helper-search-confirm>搜索</button>
       </div>
+    </section>
+    <section class="ai-chat-helper-popover ai-chat-helper-search-results-popover" aria-hidden="true" data-ai-chat-helper-search-results-popover>
       <div class="ai-chat-helper-panel__search-nav">
         <button type="button" data-ai-chat-helper-search-prev>上一个</button>
         <span data-ai-chat-helper-search-status>0/0</span>

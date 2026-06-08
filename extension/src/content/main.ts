@@ -94,6 +94,7 @@ async function mountPanel(): Promise<void> {
   const nodeSettingsTrigger = panel.querySelector<HTMLElement>("[data-ai-chat-helper-node-settings-trigger]");
   const readingLineTrigger = panel.querySelector<HTMLElement>("[data-ai-chat-helper-reading-line-trigger]");
   const searchPopover = panel.querySelector<HTMLElement>("[data-ai-chat-helper-search-popover]");
+  const searchResultsPopover = panel.querySelector<HTMLElement>("[data-ai-chat-helper-search-results-popover]");
   const settingsPopover = panel.querySelector<HTMLElement>("[data-ai-chat-helper-settings-popover]");
   const nodeSettingsPopover = panel.querySelector<HTMLElement>("[data-ai-chat-helper-node-settings-popover]");
   const readingLinePopover = panel.querySelector<HTMLElement>("[data-ai-chat-helper-reading-line-popover]");
@@ -133,11 +134,16 @@ async function mountPanel(): Promise<void> {
   searchInput?.addEventListener("input", () => {
     currentSearchIndex = 0;
     renderCurrentNodes();
+    if (searchResultsPopover) setPopoverOpen(searchResultsPopover, false, true);
   });
   searchConfirmButton?.addEventListener("click", () => {
     currentSearchIndex = 0;
     renderCurrentNodes();
     jumpToCurrentSearchResult();
+    if (searchResultsPopover && searchConfirmButton) {
+      positionPopover(searchResultsPopover, searchConfirmButton);
+      setPopoverOpen(searchResultsPopover, true);
+    }
   });
   searchPrevButton?.addEventListener("click", () => {
     jumpToSearchResult(-1);
@@ -165,13 +171,38 @@ async function mountPanel(): Promise<void> {
       setPanelStatus(panel, `Settings save failed: ${getErrorMessage(error)}`);
     });
   });
-  readingLineInput?.addEventListener("change", () => {
+  let readingLinePreviewTimer = 0;
+  const applyReadingLineInput = () => {
+    if (!readingLineInput) return;
     const nextSettings = normalizeExtensionSettings({ readingLineOffset: readingLineInput.value });
     readingLineOffset = nextSettings.readingLineOffset;
     readingLineInput.value = String(readingLineOffset);
     updateReadingLineSummary();
     readingLine.style.top = `${readingLineOffset}px`;
     renderCurrentNodes();
+  };
+  const showReadingLinePreview = () => {
+    readingLine.classList.add("is-adjusting");
+    if (readingLinePreviewTimer) window.clearTimeout(readingLinePreviewTimer);
+  };
+  const hideReadingLinePreviewSoon = () => {
+    if (readingLinePreviewTimer) window.clearTimeout(readingLinePreviewTimer);
+    readingLinePreviewTimer = window.setTimeout(() => {
+      readingLine.classList.remove("is-adjusting");
+      readingLinePreviewTimer = 0;
+    }, 700);
+  };
+  readingLineInput?.addEventListener("input", () => {
+    showReadingLinePreview();
+    applyReadingLineInput();
+  });
+  readingLineInput?.addEventListener("pointerdown", showReadingLinePreview);
+  readingLineInput?.addEventListener("focus", showReadingLinePreview);
+  readingLineInput?.addEventListener("pointerup", hideReadingLinePreviewSoon);
+  readingLineInput?.addEventListener("blur", hideReadingLinePreviewSoon);
+  readingLineInput?.addEventListener("change", () => {
+    applyReadingLineInput();
+    hideReadingLinePreviewSoon();
     void settingsStorage.set("readingLineOffset", readingLineOffset).catch((error) => {
       console.error("[AI Chat Helper] settings save failed", error);
       setPanelStatus(panel, `Settings save failed: ${getErrorMessage(error)}`);
@@ -257,7 +288,7 @@ async function mountPanel(): Promise<void> {
   }
 
   function setupPopoverInteractions(): void {
-    const popovers = [searchPopover, settingsPopover, nodeSettingsPopover, readingLinePopover].filter(Boolean) as HTMLElement[];
+    const popovers = [searchPopover, searchResultsPopover, settingsPopover, nodeSettingsPopover, readingLinePopover].filter(Boolean) as HTMLElement[];
 
     const closePopovers = (keep: HTMLElement[] = [], immediate = false) => {
       const keepSet = new Set(keep);
