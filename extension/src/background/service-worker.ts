@@ -1,4 +1,5 @@
 import { handleBackgroundRequest } from "./handlers";
+import { createDownloadDataUrl, createDownloadOptions } from "./downloads";
 import type { BackgroundRequest } from "../messaging/protocol";
 
 chrome.runtime.onInstalled.addListener(() => {
@@ -22,14 +23,8 @@ chrome.runtime.onMessage.addListener((request: BackgroundRequest, _sender, sendR
       };
     },
     downloadFile: async (payload) => {
-      const content = payload.content instanceof Uint8Array ? payload.content : new TextEncoder().encode(payload.content);
-      const blobPart = content.buffer.slice(content.byteOffset, content.byteOffset + content.byteLength) as ArrayBuffer;
-      const url = URL.createObjectURL(new Blob([blobPart], { type: payload.mimeType }));
-      return chrome.downloads.download({
-        url,
-        filename: payload.fileName,
-        saveAs: true
-      });
+      const url = createDownloadDataUrl(payload.content, payload.mimeType);
+      return chrome.downloads.download(createDownloadOptions(url, payload.fileName));
     }
   }).then(sendResponse);
 

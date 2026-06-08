@@ -8,6 +8,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const extensionRoot = resolve(__dirname, "..");
 const extensionDir = resolve(extensionRoot, "dist");
 const userDataDir = mkdtempSync(resolve(tmpdir(), "ai-chat-helper-extension-"));
+const downloadsDir = mkdtempSync(resolve(tmpdir(), "ai-chat-helper-downloads-"));
 
 function findEdgeExecutable() {
   const candidates = [
@@ -32,6 +33,8 @@ async function main() {
   const context = await chromium.launchPersistentContext(userDataDir, {
     executablePath,
     headless: false,
+    acceptDownloads: true,
+    downloadsPath: downloadsDir,
     args: [
       `--disable-extensions-except=${extensionDir}`,
       `--load-extension=${extensionDir}`,
@@ -42,24 +45,37 @@ async function main() {
 
   try {
     const page = await context.newPage();
+    page.on("console", (message) => {
+      if (["error", "warning"].includes(message.type())) {
+        console.warn(`[page:${message.type()}] ${message.text()}`);
+      }
+    });
+    page.on("pageerror", (error) => {
+      console.warn(`[page:error] ${error.message}`);
+    });
     await installMockRoutes(page);
 
     for (const platformCase of platformCases) {
       await page.goto(platformCase.url, { waitUntil: "domcontentloaded" });
       await assertPanel(page, platformCase.id, platformCase.name);
       await assertToggleVisibility(page, platformCase);
+      if (platformCase.id === "chatgpt") {
+        await assertCurrentHtmlExport(page, context);
+      }
     }
 
-    console.log(`Extension smoke passed: ${platformCases.map((item) => item.id).join(", ")} panels rendered`);
+    console.log(`Extension smoke passed: ${platformCases.map((item) => item.id).join(", ")} panels rendered; ChatGPT HTML export verified`);
   } finally {
     await context.close();
     rmSync(userDataDir, { recursive: true, force: true });
+    rmSync(downloadsDir, { recursive: true, force: true });
   }
 }
 
 main().catch((error) => {
   console.error(error);
   rmSync(userDataDir, { recursive: true, force: true });
+  rmSync(downloadsDir, { recursive: true, force: true });
   process.exit(1);
 });
 
@@ -164,6 +180,72 @@ async function assertToggleVisibility(page, platformCase) {
       throw new Error(`${platformCase.id} panel unexpectedly rendered platform toggle ${selector}.`);
     }
   }
+}
+
+async function assertCurrentHtmlExport(page, context) {
+  await page.locator("[data-ai-chat-helper-export]").click();
+  await page.waitForSelector("#ai-chat-helper-export-modal", { timeout: 10000 });
+
+  const downloadPromise = page.waitForEvent("download", { timeout: 10000 }).catch(() => null);
+  await page.locator("#ai-chat-helper-export-modal [data-format='html']").click();
+  try {
+    await page.waitForFunction(() => {
+      const status = document.querySelector("[data-ai-chat-helper-status]");
+      return status?.textContent?.includes("Current conversation export started.");
+    }, null, { timeout: 10000 });
+  } catch (error) {
+    const statusText = await page.locator("[data-ai-chat-helper-status]").innerText().catch(() => "");
+    throw new Error(`Current HTML export did not report success. Status: ${statusText || "empty"}`);
+  }
+
+  const download = await downloadPromise;
+  if (download) {
+    const suggestedName = download.suggestedFilename();
+    if (!suggestedName.endsWith(".html")) {
+      throw new Error(`Expected an HTML download, got ${suggestedName}.`);
+    }
+    return;
+  }
+
+  const chromeDownload = await findLatestHtmlChromeDownload(context);
+  if (!chromeDownload) {
+    throw new Error("Current HTML export reported success but no completed Chrome HTML download record was observed.");
+  }
+}
+
+async function findLatestHtmlChromeDownload(context) {
+  const deadline = Date.now() + 10000;
+  while (Date.now() < deadline) {
+    const downloads = await searchChromeDownloads(context);
+    const htmlDownload = downloads.find((item) => {
+      const mime = String(item.mime || "").toLowerCase();
+      const url = String(item.finalUrl || item.url || "").toLowerCase();
+      return item.state === "complete" && (mime.includes("text/html") || url.startsWith("data:text/html"));
+    });
+    if (htmlDownload) return htmlDownload;
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  return null;
+}
+
+async function searchChromeDownloads(context) {
+  const worker = await getExtensionServiceWorker(context);
+  return worker.evaluate(() => new Promise((resolve) => {
+    chrome.downloads.search({ limit: 20, orderBy: ["-startTime"] }, resolve);
+  }));
+}
+
+async function getExtensionServiceWorker(context) {
+  const existing = context.serviceWorkers().find((worker) => worker.url().startsWith("chrome-extension://"));
+  if (existing) return existing;
+
+  const deadline = Date.now() + 10000;
+  while (Date.now() < deadline) {
+    const worker = context.serviceWorkers().find((item) => item.url().startsWith("chrome-extension://"));
+    if (worker) return worker;
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  throw new Error("Extension service worker was not available for download inspection.");
 }
 
 function mockPage(title, body) {

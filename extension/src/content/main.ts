@@ -5,6 +5,7 @@ import { DEFAULT_EXTENSION_SETTINGS, LEGACY_SETTING_MIGRATIONS, normalizeExtensi
 import { createExtensionStorage, migrateLocalStorageKey } from "../storage/extension-storage";
 import { createCapturedEventBuffer } from "./captured-event-buffer";
 import { createConversationSnapshot } from "./conversation-snapshot";
+import { downloadExportFiles } from "./export-downloads";
 import { exportBatchSnapshots, exportSnapshot, type SnapshotExportFormat } from "../exporters/snapshot-export";
 import { filterConversationNodes, getNextSearchIndex, renderNodeList, scrollNodeIntoView } from "../ui/controls/node-list";
 import { openExportModal } from "../ui/modals/export-modal";
@@ -224,16 +225,7 @@ async function exportCurrentConversation(format: SnapshotExportFormat, panel: HT
   try {
     const snapshot = await createConversationSnapshot(adapter, capturedEvents.snapshot(), document);
     const files = await exportSnapshot(snapshot, format);
-
-    for (const file of files) {
-      await sendBackgroundRequest({
-        type: "download-file",
-        payload: {
-          ...file,
-          fileName: file.path
-        }
-      });
-    }
+    await downloadExportFiles(files, sendBackgroundRequest);
 
     setPanelStatus(panel, "Current conversation export started.");
   } catch (error) {
@@ -256,15 +248,7 @@ async function exportRecentConversations(format: SnapshotExportFormat, panel: HT
     }
 
     const files = await exportBatchSnapshots(snapshots, format);
-    for (const file of files) {
-      await sendBackgroundRequest({
-        type: "download-file",
-        payload: {
-          ...file,
-          fileName: file.path
-        }
-      });
-    }
+    await downloadExportFiles(files, sendBackgroundRequest);
 
     setPanelStatus(panel, `Batch export started for ${snapshots.length} conversations.`);
   } catch (error) {

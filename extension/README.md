@@ -14,7 +14,7 @@ npm run smoke:extension
 
 Load `E:\Code\AI-Chat-Nodes\extension\dist` as an unpacked extension from `chrome://extensions` or `edge://extensions`.
 
-`npm run smoke:extension` launches Microsoft Edge with `extension\dist`, serves mocked ChatGPT, Claude, Tongyi Qianwen, Doubao, and DeepSeek pages through Playwright, and verifies that the content script renders each platform panel and node list.
+`npm run smoke:extension` launches Microsoft Edge with `extension\dist`, serves mocked ChatGPT, Claude, Tongyi Qianwen, Doubao, and DeepSeek pages through Playwright, verifies that the content script renders each platform panel and node list, and confirms a ChatGPT HTML export reaches Chrome's downloads API.
 
 ## Current Migration State
 
@@ -23,7 +23,7 @@ The extension currently includes:
 - Manifest V3 build output
 - content script injection
 - page-world network capture hooks
-- background request and download handlers
+- background request and automatic download handlers that work in Manifest V3 service workers
 - platform adapter registry for ChatGPT, Claude, Tongyi Qianwen, Doubao, and DeepSeek
 - an in-page panel with current-conversation export
 - node search, reading line, visible node limit, dot gap, and platform-specific settings controls
