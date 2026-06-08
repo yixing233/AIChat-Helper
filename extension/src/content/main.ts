@@ -1,7 +1,7 @@
 import { isInjectedMessage } from "../messaging/bridge";
 import { sendBackgroundRequest } from "../messaging/bridge";
 import { getPlatformAdapter } from "../platforms";
-import { DEFAULT_EXTENSION_SETTINGS, LEGACY_READING_LINE_KEY, LEGACY_VISIBLE_LIMIT_KEY, normalizeExtensionSettings } from "../settings/extension-settings";
+import { DEFAULT_EXTENSION_SETTINGS, LEGACY_SETTING_MIGRATIONS, normalizeExtensionSettings } from "../settings/extension-settings";
 import { createExtensionStorage, migrateLocalStorageKey } from "../storage/extension-storage";
 import { createCapturedEventBuffer } from "./captured-event-buffer";
 import { createConversationSnapshot } from "./conversation-snapshot";
@@ -28,6 +28,7 @@ async function mountPanel(): Promise<void> {
   if (!adapter || document.getElementById("ai-chat-helper-panel")) return;
 
   const settings = await loadSettings();
+  applyPlatformSettings(settings);
   const canBatchExport = Boolean(adapter.fetchConversationList && adapter.fetchConversationDetail);
   const panel = createPanel({
     platformName: adapter.name,
@@ -131,15 +132,28 @@ function updateSearchStatus(status: HTMLElement | null, index: number, count: nu
 
 async function loadSettings() {
   try {
-    await migrateLocalStorageKey(settingsStorage, LEGACY_VISIBLE_LIMIT_KEY, "visibleLimit");
-    await migrateLocalStorageKey(settingsStorage, LEGACY_READING_LINE_KEY, "readingLineOffset");
-    const visibleLimit = await settingsStorage.get("visibleLimit", DEFAULT_EXTENSION_SETTINGS.visibleLimit);
-    const readingLineOffset = await settingsStorage.get("readingLineOffset", DEFAULT_EXTENSION_SETTINGS.readingLineOffset);
-    return normalizeExtensionSettings({ visibleLimit, readingLineOffset });
+    for (const [legacyKey, targetKey] of LEGACY_SETTING_MIGRATIONS) {
+      await migrateLocalStorageKey(settingsStorage, legacyKey, targetKey);
+    }
+
+    const values = await Promise.all(
+      Object.entries(DEFAULT_EXTENSION_SETTINGS).map(async ([key, defaultValue]) => [
+        key,
+        await settingsStorage.get(key, defaultValue)
+      ])
+    );
+    return normalizeExtensionSettings(Object.fromEntries(values));
   } catch (error) {
     console.error("[AI Chat Helper] settings load failed", error);
     return DEFAULT_EXTENSION_SETTINGS;
   }
+}
+
+function applyPlatformSettings(settings: ReturnType<typeof normalizeExtensionSettings>): void {
+  document.body.classList.toggle(
+    "ai-chat-helper-hide-deepseek-native-nav",
+    Boolean(adapter?.id === "deepseek" && settings.hideDeepSeekNativeNav)
+  );
 }
 
 function createReadingLine(offset: number): HTMLElement {
