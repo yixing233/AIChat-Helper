@@ -55,4 +55,14 @@ describe("filterConversationNodes", () => {
     expect(buttons[1].classList.contains("ai-chat-helper-node--active")).toBe(true);
     expect(buttons[2].classList.contains("ai-chat-helper-node--match")).toBe(false);
   });
+
+  it("applies the configured node gap to rendered buttons", () => {
+    const container = document.createElement("div");
+
+    renderNodeList(container, nodes, { dotGap: 42 });
+
+    const buttons = Array.from(container.querySelectorAll<HTMLButtonElement>("button"));
+    expect(buttons[0].style.marginBlock).toBe("21px");
+    expect(buttons[1].style.marginBlock).toBe("21px");
+  });
 });

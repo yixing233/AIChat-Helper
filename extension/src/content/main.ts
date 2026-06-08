@@ -34,7 +34,8 @@ async function mountPanel(): Promise<void> {
     platformName: adapter.name,
     canBatchExport,
     visibleLimit: settings.visibleLimit,
-    readingLineOffset: settings.readingLineOffset
+    readingLineOffset: settings.readingLineOffset,
+    dotGap: settings.dotGap
   });
   document.body.appendChild(panel);
   const readingLine = createReadingLine(settings.readingLineOffset);
@@ -47,11 +48,13 @@ async function mountPanel(): Promise<void> {
   const searchNextButton = panel.querySelector<HTMLButtonElement>("[data-ai-chat-helper-search-next]");
   const visibleLimitInput = panel.querySelector<HTMLInputElement>("[data-ai-chat-helper-visible-limit]");
   const readingLineInput = panel.querySelector<HTMLInputElement>("[data-ai-chat-helper-reading-line]");
+  const dotGapInput = panel.querySelector<HTMLInputElement>("[data-ai-chat-helper-dot-gap]");
   let currentNodes: ConversationNode[] = [];
   let currentSearchResults: ConversationNode[] = [];
   let currentSearchIndex = -1;
   let visibleLimit = settings.visibleLimit;
   let readingLineOffset = settings.readingLineOffset;
+  let dotGap = settings.dotGap;
 
   const renderCurrentNodes = () => {
     if (!nodesContainer) return;
@@ -63,6 +66,7 @@ async function mountPanel(): Promise<void> {
     const activeNodeId = currentSearchIndex >= 0 ? currentSearchResults[currentSearchIndex]?.id : undefined;
     renderNodeList(nodesContainer, filteredNodes, {
       readingLineOffset,
+      dotGap,
       highlightedNodeIds: new Set(currentSearchResults.map((node) => node.id)),
       activeNodeId
     });
@@ -102,6 +106,16 @@ async function mountPanel(): Promise<void> {
     readingLine.style.top = `${readingLineOffset}px`;
     renderCurrentNodes();
     void settingsStorage.set("readingLineOffset", readingLineOffset).catch((error) => {
+      console.error("[AI Chat Helper] settings save failed", error);
+      setPanelStatus(panel, `Settings save failed: ${getErrorMessage(error)}`);
+    });
+  });
+  dotGapInput?.addEventListener("change", () => {
+    const nextSettings = normalizeExtensionSettings({ dotGap: dotGapInput.value });
+    dotGap = nextSettings.dotGap;
+    dotGapInput.value = String(dotGap);
+    renderCurrentNodes();
+    void settingsStorage.set("dotGap", dotGap).catch((error) => {
       console.error("[AI Chat Helper] settings save failed", error);
       setPanelStatus(panel, `Settings save failed: ${getErrorMessage(error)}`);
     });

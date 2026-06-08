@@ -13,7 +13,7 @@
   width: 260px;
   max-height: min(620px, calc(100vh - 128px));
   display: grid;
-  grid-template-rows: auto auto auto 1fr auto auto;
+  grid-template-rows: auto auto auto auto 1fr auto auto;
   background: var(--ai-chat-helper-bg);
   color: var(--ai-chat-helper-text);
   border: 1px solid var(--ai-chat-helper-border);

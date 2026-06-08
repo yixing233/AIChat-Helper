@@ -2,6 +2,7 @@ import type { ConversationNode } from "../../shared/types";
 
 export interface NodeListOptions {
   readingLineOffset?: number;
+  dotGap?: number;
   highlightedNodeIds?: Set<string>;
   activeNodeId?: string;
 }
@@ -57,6 +58,9 @@ function createNodeButton(node: ConversationNode, options: NodeListOptions): HTM
   }
   if (options.activeNodeId === node.id) {
     button.classList.add("ai-chat-helper-node--active");
+  }
+  if (options.dotGap) {
+    button.style.marginBlock = `${Math.max(0, options.dotGap / 2)}px`;
   }
   button.textContent = `${node.index + 1}. ${node.title}`;
   button.addEventListener("click", () => {

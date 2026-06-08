@@ -5,6 +5,7 @@ export interface PanelOptions {
   canBatchExport?: boolean;
   visibleLimit?: number;
   readingLineOffset?: number;
+  dotGap?: number;
 }
 
 export function createPanel(options: PanelOptions): HTMLElement {
@@ -32,6 +33,10 @@ export function createPanel(options: PanelOptions): HTMLElement {
     <label class="ai-chat-helper-panel__setting">
       <span>Reading line</span>
       <input type="number" min="10" max="500" step="10" value="${Number(options.readingLineOffset || 150)}" data-ai-chat-helper-reading-line />
+    </label>
+    <label class="ai-chat-helper-panel__setting">
+      <span>Dot gap</span>
+      <input type="number" min="20" max="50" step="1" value="${Number(options.dotGap || 36)}" data-ai-chat-helper-dot-gap />
     </label>
     <div class="ai-chat-helper-panel__nodes" data-ai-chat-helper-nodes></div>
     <div class="ai-chat-helper-panel__status" data-ai-chat-helper-status aria-live="polite"></div>
