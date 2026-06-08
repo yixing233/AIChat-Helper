@@ -1,9 +1,9 @@
-import { exporters, type ExportFormat } from "../exporters";
 import { isInjectedMessage } from "../messaging/bridge";
 import { sendBackgroundRequest } from "../messaging/bridge";
 import { getPlatformAdapter } from "../platforms";
 import { createCapturedEventBuffer } from "./captured-event-buffer";
 import { createConversationSnapshot } from "./conversation-snapshot";
+import { exportSnapshot, type SnapshotExportFormat } from "../exporters/snapshot-export";
 import { renderNodeList } from "../ui/controls/node-list";
 import { openExportModal } from "../ui/modals/export-modal";
 import { createPanel } from "../ui/panel/panel";
@@ -40,10 +40,10 @@ function mountPanel(): void {
   });
 }
 
-async function exportCurrentConversation(format: ExportFormat): Promise<void> {
+async function exportCurrentConversation(format: SnapshotExportFormat): Promise<void> {
   if (!adapter) return;
   const snapshot = await createConversationSnapshot(adapter, capturedEvents.snapshot(), document);
-  const files = await exporters[format].export(snapshot);
+  const files = await exportSnapshot(snapshot, format);
 
   for (const file of files) {
     await sendBackgroundRequest({
