@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createPanel } from "../ui/panel/panel";
+import { createPanel, setPanelStatus } from "../ui/panel/panel";
 
 describe("createPanel", () => {
   it("creates one root panel element for a platform", () => {
@@ -16,5 +16,16 @@ describe("createPanel", () => {
     const panel = createPanel({ platformName: "ChatGPT", canBatchExport: true });
 
     expect(panel.querySelector("[data-ai-chat-helper-batch-export]")).toBeTruthy();
+  });
+
+  it("renders and updates export status", () => {
+    const panel = createPanel({ platformName: "ChatGPT", canBatchExport: true });
+    const status = panel.querySelector("[data-ai-chat-helper-status]");
+
+    expect(status).toBeTruthy();
+
+    setPanelStatus(panel, "Exporting recent conversations...");
+
+    expect(status?.textContent).toBe("Exporting recent conversations...");
   });
 });

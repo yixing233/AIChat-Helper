@@ -15,6 +15,7 @@ export function createPanel(options: PanelOptions): HTMLElement {
       <span>${escapeHtml(options.platformName)}</span>
     </header>
     <div class="ai-chat-helper-panel__nodes" data-ai-chat-helper-nodes></div>
+    <div class="ai-chat-helper-panel__status" data-ai-chat-helper-status aria-live="polite"></div>
     <footer class="ai-chat-helper-panel__actions">
       <button type="button" data-ai-chat-helper-refresh>Refresh</button>
       <button type="button" data-ai-chat-helper-export>Export</button>
@@ -22,4 +23,12 @@ export function createPanel(options: PanelOptions): HTMLElement {
     </footer>
   `;
   return root;
+}
+
+export function setPanelStatus(panel: HTMLElement, message: string): void {
+  const status = panel.querySelector<HTMLElement>("[data-ai-chat-helper-status]");
+  if (!status) return;
+
+  status.textContent = message;
+  status.hidden = message.length === 0;
 }

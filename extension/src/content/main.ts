@@ -6,7 +6,7 @@ import { createConversationSnapshot } from "./conversation-snapshot";
 import { exportBatchSnapshots, exportSnapshot, type SnapshotExportFormat } from "../exporters/snapshot-export";
 import { renderNodeList } from "../ui/controls/node-list";
 import { openExportModal } from "../ui/modals/export-modal";
-import { createPanel } from "../ui/panel/panel";
+import { createPanel, setPanelStatus } from "../ui/panel/panel";
 
 function injectPageHooks(): void {
   const script = document.createElement("script");
@@ -36,51 +36,74 @@ function mountPanel(): void {
   panel.querySelector("[data-ai-chat-helper-refresh]")?.addEventListener("click", refreshNodes);
   panel.querySelector("[data-ai-chat-helper-export]")?.addEventListener("click", () => {
     openExportModal((format) => {
-      void exportCurrentConversation(format);
+      void exportCurrentConversation(format, panel);
     });
   });
   panel.querySelector("[data-ai-chat-helper-batch-export]")?.addEventListener("click", () => {
     openExportModal((format) => {
-      void exportRecentConversations(format);
+      void exportRecentConversations(format, panel);
     });
   });
 }
 
-async function exportCurrentConversation(format: SnapshotExportFormat): Promise<void> {
+async function exportCurrentConversation(format: SnapshotExportFormat, panel: HTMLElement): Promise<void> {
   if (!adapter) return;
-  const snapshot = await createConversationSnapshot(adapter, capturedEvents.snapshot(), document);
-  const files = await exportSnapshot(snapshot, format);
+  setPanelStatus(panel, "Exporting current conversation...");
 
-  for (const file of files) {
-    await sendBackgroundRequest({
-      type: "download-file",
-      payload: {
-        ...file,
-        fileName: file.path
-      }
-    });
+  try {
+    const snapshot = await createConversationSnapshot(adapter, capturedEvents.snapshot(), document);
+    const files = await exportSnapshot(snapshot, format);
+
+    for (const file of files) {
+      await sendBackgroundRequest({
+        type: "download-file",
+        payload: {
+          ...file,
+          fileName: file.path
+        }
+      });
+    }
+
+    setPanelStatus(panel, "Current conversation export started.");
+  } catch (error) {
+    console.error("[AI Chat Helper] current export failed", error);
+    setPanelStatus(panel, `Current export failed: ${getErrorMessage(error)}`);
   }
 }
 
-async function exportRecentConversations(format: SnapshotExportFormat): Promise<void> {
+async function exportRecentConversations(format: SnapshotExportFormat, panel: HTMLElement): Promise<void> {
   if (!adapter?.fetchConversationList || !adapter.fetchConversationDetail) return;
-  const summaries = await adapter.fetchConversationList({ limit: 20 });
-  const snapshots = [];
+  setPanelStatus(panel, "Fetching recent conversations...");
 
-  for (const summary of summaries) {
-    snapshots.push(await adapter.fetchConversationDetail(summary.conversationId));
-  }
+  try {
+    const summaries = await adapter.fetchConversationList({ limit: 20 });
+    const snapshots = [];
 
-  const files = await exportBatchSnapshots(snapshots, format);
-  for (const file of files) {
-    await sendBackgroundRequest({
-      type: "download-file",
-      payload: {
-        ...file,
-        fileName: file.path
-      }
-    });
+    for (const [index, summary] of summaries.entries()) {
+      setPanelStatus(panel, `Exporting ${index + 1}/${summaries.length}: ${summary.title || summary.conversationId}`);
+      snapshots.push(await adapter.fetchConversationDetail(summary.conversationId));
+    }
+
+    const files = await exportBatchSnapshots(snapshots, format);
+    for (const file of files) {
+      await sendBackgroundRequest({
+        type: "download-file",
+        payload: {
+          ...file,
+          fileName: file.path
+        }
+      });
+    }
+
+    setPanelStatus(panel, `Batch export started for ${snapshots.length} conversations.`);
+  } catch (error) {
+    console.error("[AI Chat Helper] batch export failed", error);
+    setPanelStatus(panel, `Batch export failed: ${getErrorMessage(error)}`);
   }
+}
+
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 if (adapter) {

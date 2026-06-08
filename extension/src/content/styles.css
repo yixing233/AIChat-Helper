@@ -13,7 +13,7 @@
   width: 260px;
   max-height: min(620px, calc(100vh - 128px));
   display: grid;
-  grid-template-rows: auto 1fr auto;
+  grid-template-rows: auto 1fr auto auto;
   background: var(--ai-chat-helper-bg);
   color: var(--ai-chat-helper-text);
   border: 1px solid var(--ai-chat-helper-border);
@@ -34,6 +34,17 @@
 .ai-chat-helper-panel__nodes {
   overflow: auto;
   padding: 4px 8px;
+}
+
+.ai-chat-helper-panel__status {
+  min-height: 28px;
+  padding: 6px 10px;
+  color: #475467;
+  border-top: 1px solid var(--ai-chat-helper-border);
+}
+
+.ai-chat-helper-panel__status:empty {
+  display: none;
 }
 
 .ai-chat-helper-node,

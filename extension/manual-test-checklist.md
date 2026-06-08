@@ -15,6 +15,7 @@ Build the extension with `npm run build`, then load `E:\Code\AI-Chat-Nodes\exten
 - [ ] Export Markdown triggers a browser download.
 - [ ] Export TXT triggers a browser download.
 - [ ] Export ZIP triggers a browser download.
+- [ ] Current conversation export shows progress or failure status in the panel.
 - [ ] Current conversation export uses API-hydrated messages after the page has loaded network responses.
 - [ ] ChatGPT page shows the Batch action.
 - [ ] Claude page shows the Batch action when `lastActiveOrg` is available.
@@ -26,4 +27,5 @@ Build the extension with `npm run build`, then load `E:\Code\AI-Chat-Nodes\exten
 - [ ] DeepSeek Batch export downloads one ZIP containing recent conversations.
 - [ ] Tongyi Qianwen Batch export downloads one ZIP containing recent conversations.
 - [ ] Doubao Batch export downloads one ZIP containing recent conversations.
+- [ ] Batch export shows progress or failure status in the panel.
 - [ ] Extension service worker logs no uncaught errors during export.
