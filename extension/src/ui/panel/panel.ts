@@ -1,11 +1,15 @@
 import { escapeHtml } from "../shared/escape-html";
+import type { PlatformId } from "../../shared/types";
 
 export interface PanelOptions {
+  platformId?: PlatformId;
   platformName: string;
   canBatchExport?: boolean;
   visibleLimit?: number;
   readingLineOffset?: number;
   dotGap?: number;
+  removeQwenAds?: boolean;
+  hideDeepSeekNativeNav?: boolean;
 }
 
 export function createPanel(options: PanelOptions): HTMLElement {
@@ -38,6 +42,7 @@ export function createPanel(options: PanelOptions): HTMLElement {
       <span>Dot gap</span>
       <input type="number" min="20" max="50" step="1" value="${Number(options.dotGap || 36)}" data-ai-chat-helper-dot-gap />
     </label>
+    ${renderPlatformToggles(options)}
     <div class="ai-chat-helper-panel__nodes" data-ai-chat-helper-nodes></div>
     <div class="ai-chat-helper-panel__status" data-ai-chat-helper-status aria-live="polite"></div>
     <footer class="ai-chat-helper-panel__actions">
@@ -47,6 +52,28 @@ export function createPanel(options: PanelOptions): HTMLElement {
     </footer>
   `;
   return root;
+}
+
+function renderPlatformToggles(options: PanelOptions): string {
+  if (options.platformId === "qwen") {
+    return `
+      <label class="ai-chat-helper-panel__setting ai-chat-helper-panel__setting--toggle">
+        <span>Remove ads</span>
+        <input type="checkbox" ${options.removeQwenAds ? "checked" : ""} data-ai-chat-helper-remove-qwen-ads />
+      </label>
+    `;
+  }
+
+  if (options.platformId === "deepseek") {
+    return `
+      <label class="ai-chat-helper-panel__setting ai-chat-helper-panel__setting--toggle">
+        <span>Hide native nav</span>
+        <input type="checkbox" ${options.hideDeepSeekNativeNav ? "checked" : ""} data-ai-chat-helper-hide-deepseek-native-nav />
+      </label>
+    `;
+  }
+
+  return "";
 }
 
 export function setPanelStatus(panel: HTMLElement, message: string): void {

@@ -31,11 +31,14 @@ async function mountPanel(): Promise<void> {
   applyPlatformSettings(settings);
   const canBatchExport = Boolean(adapter.fetchConversationList && adapter.fetchConversationDetail);
   const panel = createPanel({
+    platformId: adapter.id,
     platformName: adapter.name,
     canBatchExport,
     visibleLimit: settings.visibleLimit,
     readingLineOffset: settings.readingLineOffset,
-    dotGap: settings.dotGap
+    dotGap: settings.dotGap,
+    removeQwenAds: settings.removeQwenAds,
+    hideDeepSeekNativeNav: settings.hideDeepSeekNativeNav
   });
   document.body.appendChild(panel);
   const readingLine = createReadingLine(settings.readingLineOffset);
@@ -49,6 +52,8 @@ async function mountPanel(): Promise<void> {
   const visibleLimitInput = panel.querySelector<HTMLInputElement>("[data-ai-chat-helper-visible-limit]");
   const readingLineInput = panel.querySelector<HTMLInputElement>("[data-ai-chat-helper-reading-line]");
   const dotGapInput = panel.querySelector<HTMLInputElement>("[data-ai-chat-helper-dot-gap]");
+  const removeQwenAdsInput = panel.querySelector<HTMLInputElement>("[data-ai-chat-helper-remove-qwen-ads]");
+  const hideDeepSeekNativeNavInput = panel.querySelector<HTMLInputElement>("[data-ai-chat-helper-hide-deepseek-native-nav]");
   let currentNodes: ConversationNode[] = [];
   let currentSearchResults: ConversationNode[] = [];
   let currentSearchIndex = -1;
@@ -120,6 +125,22 @@ async function mountPanel(): Promise<void> {
       setPanelStatus(panel, `Settings save failed: ${getErrorMessage(error)}`);
     });
   });
+  removeQwenAdsInput?.addEventListener("change", () => {
+    const removeQwenAds = removeQwenAdsInput.checked;
+    applyPlatformSettings({ ...settings, removeQwenAds });
+    void settingsStorage.set("removeQwenAds", removeQwenAds).catch((error) => {
+      console.error("[AI Chat Helper] settings save failed", error);
+      setPanelStatus(panel, `Settings save failed: ${getErrorMessage(error)}`);
+    });
+  });
+  hideDeepSeekNativeNavInput?.addEventListener("change", () => {
+    const hideDeepSeekNativeNav = hideDeepSeekNativeNavInput.checked;
+    applyPlatformSettings({ ...settings, hideDeepSeekNativeNav });
+    void settingsStorage.set("hideDeepSeekNativeNav", hideDeepSeekNativeNav).catch((error) => {
+      console.error("[AI Chat Helper] settings save failed", error);
+      setPanelStatus(panel, `Settings save failed: ${getErrorMessage(error)}`);
+    });
+  });
   panel.querySelector("[data-ai-chat-helper-export]")?.addEventListener("click", () => {
     openExportModal((format) => {
       void exportCurrentConversation(format, panel);
@@ -164,6 +185,10 @@ async function loadSettings() {
 }
 
 function applyPlatformSettings(settings: ReturnType<typeof normalizeExtensionSettings>): void {
+  document.body.classList.toggle(
+    "ai-chat-helper-hide-qwen-ads",
+    Boolean(adapter?.id === "qwen" && settings.removeQwenAds)
+  );
   document.body.classList.toggle(
     "ai-chat-helper-hide-deepseek-native-nav",
     Boolean(adapter?.id === "deepseek" && settings.hideDeepSeekNativeNav)

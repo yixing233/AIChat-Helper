@@ -17,6 +17,24 @@ describe("createPanel", () => {
     expect(panel.querySelector("[data-ai-chat-helper-nodes]")).toBeTruthy();
     expect(panel.querySelector("[data-ai-chat-helper-export]")).toBeTruthy();
     expect(panel.querySelector("[data-ai-chat-helper-batch-export]")).toBeFalsy();
+    expect(panel.querySelector("[data-ai-chat-helper-remove-qwen-ads]")).toBeFalsy();
+    expect(panel.querySelector("[data-ai-chat-helper-hide-deepseek-native-nav]")).toBeFalsy();
+  });
+
+  it("renders the Qwen ad removal toggle only for Qwen", () => {
+    const panel = createPanel({ platformId: "qwen", platformName: "Tongyi Qianwen", removeQwenAds: true });
+    const toggle = panel.querySelector<HTMLInputElement>("[data-ai-chat-helper-remove-qwen-ads]");
+
+    expect(toggle).toBeTruthy();
+    expect(toggle?.checked).toBe(true);
+  });
+
+  it("renders the DeepSeek native navigation toggle only for DeepSeek", () => {
+    const panel = createPanel({ platformId: "deepseek", platformName: "DeepSeek", hideDeepSeekNativeNav: true });
+    const toggle = panel.querySelector<HTMLInputElement>("[data-ai-chat-helper-hide-deepseek-native-nav]");
+
+    expect(toggle).toBeTruthy();
+    expect(toggle?.checked).toBe(true);
   });
 
   it("renders batch export action when supported", () => {

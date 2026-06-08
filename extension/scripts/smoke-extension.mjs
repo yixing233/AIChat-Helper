@@ -58,25 +58,37 @@ async function main() {
           </html>`
       });
     });
+    await page.route("https://www.qianwen.com/**", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "text/html",
+        body: `<!doctype html>
+          <html>
+            <head><title>Mock Qwen</title></head>
+            <body>
+              <main>
+                <article class="message">Qwen smoke question</article>
+                <article class="message">Qwen smoke answer</article>
+                <section data-c="result_card">Sponsored result</section>
+              </main>
+            </body>
+          </html>`
+      });
+    });
 
     await page.goto("https://chatgpt.com/", { waitUntil: "domcontentloaded" });
-    await page.waitForSelector("#ai-chat-helper-panel", { timeout: 10000 });
-
-    const platform = await page.locator("html").getAttribute("data-ai-chat-helper-platform");
-    const nodeCount = await page.locator(".ai-chat-helper-node").count();
-    const panelText = await page.locator("#ai-chat-helper-panel").innerText();
-
-    if (platform !== "chatgpt") {
-      throw new Error(`Expected chatgpt platform marker, got ${platform || "missing"}.`);
-    }
-    if (nodeCount < 2) {
-      throw new Error(`Expected at least 2 rendered nodes, got ${nodeCount}.`);
-    }
-    if (!panelText.includes("AI Chat Helper") || !panelText.includes("ChatGPT")) {
-      throw new Error("Extension panel rendered without expected title/platform text.");
+    await assertPanel(page, "chatgpt", "ChatGPT");
+    if (await page.locator("[data-ai-chat-helper-remove-qwen-ads]").count()) {
+      throw new Error("ChatGPT panel unexpectedly rendered the Qwen ad-removal toggle.");
     }
 
-    console.log(`Extension smoke passed: platform=${platform}, nodes=${nodeCount}`);
+    await page.goto("https://www.qianwen.com/chat/smoketest01", { waitUntil: "domcontentloaded" });
+    await assertPanel(page, "qwen", "Tongyi Qianwen");
+    if (!(await page.locator("[data-ai-chat-helper-remove-qwen-ads]").count())) {
+      throw new Error("Qwen panel did not render the ad-removal toggle.");
+    }
+
+    console.log("Extension smoke passed: chatgpt and qwen panels rendered");
   } finally {
     await context.close();
     rmSync(userDataDir, { recursive: true, force: true });
@@ -88,3 +100,21 @@ main().catch((error) => {
   rmSync(userDataDir, { recursive: true, force: true });
   process.exit(1);
 });
+
+async function assertPanel(page, expectedPlatform, expectedName) {
+  await page.waitForSelector("#ai-chat-helper-panel", { timeout: 10000 });
+
+  const platform = await page.locator("html").getAttribute("data-ai-chat-helper-platform");
+  const nodeCount = await page.locator(".ai-chat-helper-node").count();
+  const panelText = await page.locator("#ai-chat-helper-panel").innerText();
+
+  if (platform !== expectedPlatform) {
+    throw new Error(`Expected ${expectedPlatform} platform marker, got ${platform || "missing"}.`);
+  }
+  if (nodeCount < 2) {
+    throw new Error(`Expected at least 2 rendered nodes for ${expectedPlatform}, got ${nodeCount}.`);
+  }
+  if (!panelText.includes("AI Chat Helper") || !panelText.includes(expectedName)) {
+    throw new Error(`${expectedPlatform} panel rendered without expected title/platform text.`);
+  }
+}
