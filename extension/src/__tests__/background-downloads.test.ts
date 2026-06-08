@@ -17,4 +17,8 @@ describe("createDownloadOptions", () => {
   it("creates data URLs for binary download content", () => {
     expect(createDownloadDataUrl(new Uint8Array([0x50, 0x4b]), "application/zip")).toBe("data:application/zip;base64,UEs=");
   });
+
+  it("creates data URLs for runtime-serialized binary download content", () => {
+    expect(createDownloadDataUrl([0x50, 0x4b], "application/zip")).toBe("data:application/zip;base64,UEs=");
+  });
 });

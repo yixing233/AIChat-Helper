@@ -61,10 +61,11 @@ async function main() {
       await assertToggleVisibility(page, platformCase);
       if (platformCase.id === "chatgpt") {
         await assertCurrentHtmlExport(page, context);
+        await assertBatchZipExport(page, context);
       }
     }
 
-    console.log(`Extension smoke passed: ${platformCases.map((item) => item.id).join(", ")} panels rendered; ChatGPT HTML export verified`);
+    console.log(`Extension smoke passed: ${platformCases.map((item) => item.id).join(", ")} panels rendered; ChatGPT HTML and batch ZIP exports verified`);
   } finally {
     await context.close();
     rmSync(userDataDir, { recursive: true, force: true });
@@ -139,6 +140,8 @@ const platformCases = [
 async function installMockRoutes(page) {
   for (const platformCase of platformCases) {
     await page.route(platformCase.route, async (route) => {
+      if (platformCase.id === "chatgpt" && await fulfillChatGptApiRoute(route)) return;
+
       await route.fulfill({
         status: 200,
         contentType: "text/html",
@@ -146,6 +149,37 @@ async function installMockRoutes(page) {
       });
     });
   }
+}
+
+async function fulfillChatGptApiRoute(route) {
+  const url = new URL(route.request().url());
+
+  if (url.pathname === "/backend-api/conversations") {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        items: [
+          { id: "batch-1", title: "Smoke Batch One", update_time: 1780000000 },
+          { id: "batch-2", title: "Smoke Batch Two", update_time: 1780000001 }
+        ]
+      })
+    });
+    return true;
+  }
+
+  const conversationMatch = url.pathname.match(/^\/backend-api\/conversation\/([^/]+)$/);
+  if (conversationMatch) {
+    const id = decodeURIComponent(conversationMatch[1]);
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(chatGptConversationPayload(id, id === "batch-2" ? "Smoke Batch Two" : "Smoke Batch One"))
+    });
+    return true;
+  }
+
+  return false;
 }
 
 async function assertPanel(page, expectedPlatform, expectedName) {
@@ -213,16 +247,51 @@ async function assertCurrentHtmlExport(page, context) {
   }
 }
 
+async function assertBatchZipExport(page, context) {
+  await page.locator("[data-ai-chat-helper-batch-export]").click();
+  await page.waitForSelector("#ai-chat-helper-export-modal", { timeout: 10000 });
+
+  const downloadPromise = page.waitForEvent("download", { timeout: 10000 }).catch(() => null);
+  await page.locator("#ai-chat-helper-export-modal [data-format='zip']").click();
+  try {
+    await page.waitForFunction(() => {
+      const status = document.querySelector("[data-ai-chat-helper-status]");
+      return status?.textContent?.includes("Batch export started for 2 conversations.");
+    }, null, { timeout: 10000 });
+  } catch (error) {
+    const statusText = await page.locator("[data-ai-chat-helper-status]").innerText().catch(() => "");
+    throw new Error(`Batch ZIP export did not report success. Status: ${statusText || "empty"}`);
+  }
+
+  const download = await downloadPromise;
+  if (download) {
+    const suggestedName = download.suggestedFilename();
+    if (!suggestedName.endsWith(".zip")) {
+      throw new Error(`Expected a ZIP download, got ${suggestedName}.`);
+    }
+    return;
+  }
+
+  const chromeDownload = await findLatestChromeDownload(context, "application/zip", "data:application/zip");
+  if (!chromeDownload) {
+    throw new Error("Batch ZIP export reported success but no completed Chrome ZIP download record was observed.");
+  }
+}
+
 async function findLatestHtmlChromeDownload(context) {
+  return findLatestChromeDownload(context, "text/html", "data:text/html");
+}
+
+async function findLatestChromeDownload(context, expectedMime, expectedUrlPrefix) {
   const deadline = Date.now() + 10000;
   while (Date.now() < deadline) {
     const downloads = await searchChromeDownloads(context);
-    const htmlDownload = downloads.find((item) => {
+    const matchedDownload = downloads.find((item) => {
       const mime = String(item.mime || "").toLowerCase();
       const url = String(item.finalUrl || item.url || "").toLowerCase();
-      return item.state === "complete" && (mime.includes("text/html") || url.startsWith("data:text/html"));
+      return item.state === "complete" && (mime.includes(expectedMime) || url.startsWith(expectedUrlPrefix));
     });
-    if (htmlDownload) return htmlDownload;
+    if (matchedDownload) return matchedDownload;
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
   return null;
@@ -254,4 +323,43 @@ function mockPage(title, body) {
       <head><title>${title}</title></head>
       <body><main>${body}</main></body>
     </html>`;
+}
+
+function chatGptConversationPayload(id, title) {
+  return {
+    id,
+    title,
+    current_node: `${id}-assistant`,
+    create_time: 1780000000,
+    update_time: 1780000001,
+    mapping: {
+      "client-created-root": {
+        id: "client-created-root",
+        parent: null,
+        children: [`${id}-user`]
+      },
+      [`${id}-user`]: {
+        id: `${id}-user`,
+        parent: "client-created-root",
+        children: [`${id}-assistant`],
+        message: {
+          id: `${id}-user-message`,
+          author: { role: "user" },
+          content: { parts: [`Question for ${title}`] },
+          create_time: 1780000000
+        }
+      },
+      [`${id}-assistant`]: {
+        id: `${id}-assistant`,
+        parent: `${id}-user`,
+        children: [],
+        message: {
+          id: `${id}-assistant-message`,
+          author: { role: "assistant" },
+          content: { parts: [`Answer for ${title}`] },
+          create_time: 1780000001
+        }
+      }
+    }
+  };
 }

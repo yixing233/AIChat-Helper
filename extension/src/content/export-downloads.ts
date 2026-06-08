@@ -9,6 +9,7 @@ export async function downloadExportFiles(files: ExportFile[], send: BackgroundS
       type: "download-file",
       payload: {
         ...file,
+        content: serializeDownloadContent(file.content),
         fileName: file.path
       }
     });
@@ -17,4 +18,8 @@ export async function downloadExportFiles(files: ExportFile[], send: BackgroundS
       throw new Error(response.error);
     }
   }
+}
+
+function serializeDownloadContent(content: ExportFile["content"]): string | number[] {
+  return content instanceof Uint8Array ? Array.from(content) : content;
 }

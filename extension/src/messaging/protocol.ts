@@ -26,7 +26,7 @@ export type BackgroundRequest =
     }
   | {
       type: "download-file";
-      payload: ExportFile & { fileName: string };
+      payload: Omit<ExportFile, "content"> & { content: string | number[]; fileName: string };
     }
   | {
       type: "get-version";

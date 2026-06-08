@@ -26,6 +26,21 @@ describe("downloadExportFiles", () => {
     });
   });
 
+  it("serializes binary export content for extension runtime messaging", async () => {
+    const send = vi.fn(async (): Promise<BackgroundResponse> => ({ ok: true, value: { downloadId: 8 } }));
+
+    await downloadExportFiles([{ ...files[0], content: new Uint8Array([0x50, 0x4b]) }], send);
+
+    expect(send).toHaveBeenCalledWith({
+      type: "download-file",
+      payload: {
+        ...files[0],
+        content: [0x50, 0x4b],
+        fileName: "conversation.html"
+      }
+    });
+  });
+
   it("fails when the background download handler returns an error", async () => {
     const send = vi.fn(async (): Promise<BackgroundResponse> => ({ ok: false, error: "downloads permission denied" }));
 
