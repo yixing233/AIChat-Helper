@@ -36,13 +36,29 @@ describe("extension settings", () => {
     expect(normalizeExtensionSettings({ removeQwenAds: "false" }).removeQwenAds).toBe(false);
   });
 
+  it("normalizes panel position from saved extension or legacy userscript storage", () => {
+    expect(normalizeExtensionSettings({
+      panelPosition: { right: 24.4, top: 188.6 }
+    }).panelPosition).toEqual({ right: 24, top: 189 });
+    expect(normalizeExtensionSettings({
+      panelPosition: "{\"right\":32,\"top\":120}"
+    }).panelPosition).toEqual({ right: 32, top: 120 });
+    expect(normalizeExtensionSettings({
+      panelPosition: { right: -20, top: 5000 }
+    }).panelPosition).toEqual({ right: 0, top: 1200 });
+    expect(normalizeExtensionSettings({
+      panelPosition: "not-json"
+    }).panelPosition).toBeNull();
+  });
+
   it("declares legacy localStorage keys for settings migration", () => {
     expect(LEGACY_SETTING_MIGRATIONS).toEqual([
       ["ai-nodes-visible-limit", "visibleLimit"],
       ["ai-nodes-reading-line", "readingLineOffset"],
       ["ai-nodes-dot-gap", "dotGap"],
       ["ai-nodes-remove-qwen-ads", "removeQwenAds"],
-      ["ai-nodes-hide-deepseek-native-nav", "hideDeepSeekNativeNav"]
+      ["ai-nodes-hide-deepseek-native-nav", "hideDeepSeekNativeNav"],
+      ["AI-Chat-Helper-pos", "panelPosition"]
     ]);
   });
 });

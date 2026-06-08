@@ -17,6 +17,8 @@ Build the extension with `npm run build`, then load `E:\Code\AI-Chat-Nodes\exten
 - [ ] Search Prev/Next cycles through matching nodes and scrolls each result to the reading line.
 - [ ] Visible node limit setting filters the rendered node count and survives reload.
 - [ ] Existing `ai-nodes-visible-limit` localStorage value migrates to extension storage once.
+- [ ] Dragging the panel header moves the panel and the position survives reload.
+- [ ] Existing `AI-Chat-Helper-pos` localStorage value migrates to extension storage once.
 - [ ] Reading line setting moves the on-page reading guide and survives reload.
 - [ ] Existing `ai-nodes-reading-line` localStorage value migrates to extension storage once.
 - [ ] Dot gap setting changes node spacing and survives reload.

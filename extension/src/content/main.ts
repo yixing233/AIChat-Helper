@@ -9,6 +9,7 @@ import { downloadExportFiles } from "./export-downloads";
 import { exportBatchSnapshots, exportSnapshot, type SnapshotExportFormat } from "../exporters/snapshot-export";
 import { filterConversationNodes, getNextSearchIndex, renderNodeList, scrollNodeIntoView } from "../ui/controls/node-list";
 import { openExportModal } from "../ui/modals/export-modal";
+import { attachPanelDrag } from "../ui/panel/drag";
 import { createPanel, setPanelStatus } from "../ui/panel/panel";
 import type { ConversationNode } from "../shared/types";
 
@@ -40,9 +41,19 @@ async function mountPanel(): Promise<void> {
     readingLineOffset: settings.readingLineOffset,
     dotGap: settings.dotGap,
     removeQwenAds: settings.removeQwenAds,
-    hideDeepSeekNativeNav: settings.hideDeepSeekNativeNav
+    hideDeepSeekNativeNav: settings.hideDeepSeekNativeNav,
+    panelPosition: settings.panelPosition
   });
   document.body.appendChild(panel);
+  const dragHandle = panel.querySelector<HTMLElement>("[data-ai-chat-helper-drag-handle]");
+  if (dragHandle) {
+    attachPanelDrag(panel, dragHandle, (panelPosition) => {
+      void settingsStorage.set("panelPosition", panelPosition).catch((error) => {
+        console.error("[AI Chat Helper] panel position save failed", error);
+        setPanelStatus(panel, `Panel position save failed: ${getErrorMessage(error)}`);
+      });
+    });
+  }
   const readingLine = createReadingLine(settings.readingLineOffset);
   document.body.appendChild(readingLine);
 

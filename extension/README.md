@@ -26,7 +26,7 @@ The extension currently includes:
 - background request and automatic download handlers that work in Manifest V3 service workers
 - platform adapter registry for ChatGPT, Claude, Tongyi Qianwen, Doubao, and DeepSeek
 - an in-page panel with current-conversation export
-- node search, reading line, visible node limit, dot gap, and platform-specific settings controls
+- node search, reading line, draggable panel position, visible node limit, dot gap, and platform-specific settings controls
 - HTML, Markdown, TXT, and stored ZIP export modules, including attachment metadata and inline attachment content files when available
 - captured API hydration for current conversations on ChatGPT, Claude, Tongyi Qianwen, Doubao, and DeepSeek
 - a configurable batch export entry point for all supported adapters that expose conversation list/detail APIs

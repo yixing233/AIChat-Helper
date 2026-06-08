@@ -1,5 +1,6 @@
 import { escapeHtml } from "../shared/escape-html";
 import type { PlatformId } from "../../shared/types";
+import { applyPanelPosition, type PanelPosition } from "./drag";
 
 export interface PanelOptions {
   platformId?: PlatformId;
@@ -11,6 +12,7 @@ export interface PanelOptions {
   dotGap?: number;
   removeQwenAds?: boolean;
   hideDeepSeekNativeNav?: boolean;
+  panelPosition?: PanelPosition | null;
 }
 
 export function createPanel(options: PanelOptions): HTMLElement {
@@ -21,6 +23,7 @@ export function createPanel(options: PanelOptions): HTMLElement {
     <header class="ai-chat-helper-panel__header">
       <strong>AI Chat Helper</strong>
       <span>${escapeHtml(options.platformName)}</span>
+      <span aria-hidden="true" title="Drag panel" data-ai-chat-helper-drag-handle>drag</span>
     </header>
     <label class="ai-chat-helper-panel__search">
       <span>Search</span>
@@ -58,6 +61,9 @@ export function createPanel(options: PanelOptions): HTMLElement {
       ${options.canBatchExport ? "<button type=\"button\" data-ai-chat-helper-batch-export>Batch</button>" : ""}
     </footer>
   `;
+  if (options.panelPosition) {
+    applyPanelPosition(root, options.panelPosition);
+  }
   return root;
 }
 

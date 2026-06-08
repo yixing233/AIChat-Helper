@@ -11,6 +11,7 @@ describe("createPanel", () => {
     expect(panel.querySelector("[data-ai-chat-helper-search-prev]")).toBeTruthy();
     expect(panel.querySelector("[data-ai-chat-helper-search-next]")).toBeTruthy();
     expect(panel.querySelector("[data-ai-chat-helper-search-status]")).toBeTruthy();
+    expect(panel.querySelector("[data-ai-chat-helper-drag-handle]")).toBeTruthy();
     expect(panel.querySelector("[data-ai-chat-helper-visible-limit]")).toBeTruthy();
     expect(panel.querySelector("[data-ai-chat-helper-reading-line]")).toBeTruthy();
     expect(panel.querySelector("[data-ai-chat-helper-dot-gap]")).toBeTruthy();
@@ -43,6 +44,16 @@ describe("createPanel", () => {
 
     expect(panel.querySelector("[data-ai-chat-helper-batch-export]")).toBeTruthy();
     expect(panel.querySelector<HTMLInputElement>("[data-ai-chat-helper-batch-limit]")?.value).toBe("35");
+  });
+
+  it("applies saved panel position when provided", () => {
+    const panel = createPanel({
+      platformName: "ChatGPT",
+      panelPosition: { right: 28, top: 144 }
+    });
+
+    expect(panel.style.right).toBe("28px");
+    expect(panel.style.top).toBe("144px");
   });
 
   it("renders and updates export status", () => {

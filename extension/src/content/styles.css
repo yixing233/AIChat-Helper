@@ -31,6 +31,16 @@
   align-items: center;
 }
 
+.ai-chat-helper-panel__header {
+  cursor: move;
+  user-select: none;
+}
+
+.ai-chat-helper-panel__header [data-ai-chat-helper-drag-handle] {
+  color: #667085;
+  letter-spacing: 1px;
+}
+
 .ai-chat-helper-panel__nodes {
   flex: 1 1 auto;
   min-height: 0;
