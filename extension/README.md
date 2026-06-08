@@ -30,6 +30,8 @@ The extension currently includes:
 Current batch coverage:
 
 - ChatGPT: recent conversation list and detail fetching through `/backend-api/conversations` and `/backend-api/conversation/:id`
-- Claude, Tongyi Qianwen, Doubao, DeepSeek: current conversation export only until list/detail adapters are added
+- Claude: recent conversation list and detail fetching through `/api/organizations/{org}/chat_conversations_v2` and `/chat_conversations/:id`
+- DeepSeek: recent conversation list and detail fetching through `/api/v0/chat_session/fetch_page` and `/api/v0/chat/history_messages`
+- Tongyi Qianwen and Doubao: current conversation export only until list/detail adapters are added
 
 The old Tampermonkey userscript remains as migration reference material.

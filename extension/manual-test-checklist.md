@@ -17,6 +17,10 @@ Build the extension with `npm run build`, then load `E:\Code\AI-Chat-Nodes\exten
 - [ ] Export ZIP triggers a browser download.
 - [ ] Current conversation export uses API-hydrated messages after the page has loaded network responses.
 - [ ] ChatGPT page shows the Batch action.
+- [ ] Claude page shows the Batch action when `lastActiveOrg` is available.
+- [ ] DeepSeek page shows the Batch action.
 - [ ] ChatGPT Batch export downloads one ZIP containing recent conversations.
-- [ ] Claude, Tongyi Qianwen, Doubao, and DeepSeek do not show Batch until list/detail adapters are added.
+- [ ] Claude Batch export downloads one ZIP containing recent conversations.
+- [ ] DeepSeek Batch export downloads one ZIP containing recent conversations.
+- [ ] Tongyi Qianwen and Doubao do not show Batch until list/detail adapters are added.
 - [ ] Extension service worker logs no uncaught errors during export.
