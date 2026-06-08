@@ -64,6 +64,7 @@ async function main() {
       await assertPanel(page, platformCase.id, platformCase.name, expectedExtensionVersion);
       await assertToggleVisibility(page, platformCase);
       if (platformCase.id === "chatgpt") {
+        await assertSilentAutoUpdateCheck(page);
         await assertVersionUpdateCheck(page, expectedExtensionVersion);
         await assertCurrentHtmlExport(page, context);
         await assertBatchZipExport(page, context, { selectedCount: 3, exportedCount: 2, failedCount: 1 });
@@ -457,7 +458,7 @@ async function assertPanel(page, expectedPlatform, expectedName, expectedExtensi
 
   const platform = await page.locator("html").getAttribute("data-ai-chat-helper-platform");
   const nodeCount = await page.locator(".ai-chat-helper-node").count();
-  const panelText = await page.locator("#ai-chat-helper-panel").innerText();
+  const panelText = await page.locator("#ai-chat-helper-panel").evaluate((panel) => panel.textContent || "");
 
   if (platform !== expectedPlatform) {
     throw new Error(`Expected ${expectedPlatform} platform marker, got ${platform || "missing"}.`);
@@ -465,20 +466,38 @@ async function assertPanel(page, expectedPlatform, expectedName, expectedExtensi
   if (nodeCount < 2) {
     throw new Error(`Expected at least 2 rendered nodes for ${expectedPlatform}, got ${nodeCount}.`);
   }
-  if (!panelText.includes("AI Chat Helper") || !panelText.includes(expectedName)) {
-    throw new Error(`${expectedPlatform} panel rendered without expected title/platform text.`);
+  if (!panelText.includes("AI对话助手") || !panelText.includes(expectedName)) {
+    throw new Error(`${expectedPlatform} rail shell rendered without expected title/platform text.`);
   }
 
   await assertPanelStyle(page, expectedName, expectedExtensionVersion);
 }
 
 async function assertPanelStyle(page, expectedName, expectedExtensionVersion) {
+  await openSettingsPopover(page);
+
   const style = await page.locator("#ai-chat-helper-panel").evaluate((panel, platformName) => {
     const computed = window.getComputedStyle(panel);
+    const orbital = panel.querySelector("[data-ai-chat-helper-orbital]");
+    const orbitalStyle = orbital ? window.getComputedStyle(orbital) : null;
+    const track = panel.querySelector(".ai-chat-helper-orbital__track");
+    const trackStyle = track ? window.getComputedStyle(track) : null;
+    const firstNode = panel.querySelector(".ai-chat-helper-node");
+    const firstNodeStyle = firstNode ? window.getComputedStyle(firstNode) : null;
+    const searchTrigger = panel.querySelector("[data-ai-chat-helper-search-trigger]");
+    const settingsTrigger = panel.querySelector("[data-ai-chat-helper-settings-trigger]");
+    const searchTriggerStyle = searchTrigger ? window.getComputedStyle(searchTrigger) : null;
+    const settingsTriggerStyle = settingsTrigger ? window.getComputedStyle(settingsTrigger) : null;
+    const settingsPopover = panel.querySelector("[data-ai-chat-helper-settings-popover]");
+    const settingsPopoverStyle = settingsPopover ? window.getComputedStyle(settingsPopover) : null;
+    const searchPopover = panel.querySelector("[data-ai-chat-helper-search-popover]");
     const versionButton = panel.querySelector("[data-ai-chat-helper-version]");
     const versionButtonStyle = versionButton ? window.getComputedStyle(versionButton) : null;
     const versionBadge = panel.querySelector("[data-ai-chat-helper-version-badge]");
     const versionBadgeStyle = versionBadge ? window.getComputedStyle(versionBadge) : null;
+    const autoUpdateInput = panel.querySelector("[data-ai-chat-helper-auto-update-check]");
+    const autoUpdateSwitch = autoUpdateInput?.closest(".ai-chat-helper-panel__switch");
+    const autoUpdateSwitchStyle = autoUpdateSwitch ? window.getComputedStyle(autoUpdateSwitch) : null;
     const platformCard = panel.querySelector(".ai-chat-helper-panel__platform-card");
     const platformCardStyle = platformCard ? window.getComputedStyle(platformCard) : null;
     const platformIcon = panel.querySelector(".ai-chat-helper-panel__platform-icon");
@@ -494,16 +513,35 @@ async function assertPanelStyle(page, expectedName, expectedExtensionVersion) {
 
     return {
       width: computed.width,
-      borderRadius: computed.borderRadius,
-      padding: computed.padding,
-      boxShadow: computed.boxShadow,
-      backdropFilter: computed.backdropFilter || computed.webkitBackdropFilter || "",
+      rootClass: panel.className,
+      orbitalWidth: orbitalStyle?.width || "",
+      trackWidth: trackStyle?.width || "",
+      nodeWidth: firstNodeStyle?.width || "",
+      nodeHeight: firstNodeStyle?.height || "",
+      nodeRadius: firstNodeStyle?.borderRadius || "",
+      searchTriggerWidth: searchTriggerStyle?.width || "",
+      searchTriggerHeight: searchTriggerStyle?.height || "",
+      searchTriggerRadius: searchTriggerStyle?.borderRadius || "",
+      settingsTriggerWidth: settingsTriggerStyle?.width || "",
+      settingsTriggerHeight: settingsTriggerStyle?.height || "",
+      settingsTriggerRadius: settingsTriggerStyle?.borderRadius || "",
+      settingsPopoverOpen: settingsPopover?.classList.contains("is-open") || false,
+      settingsPopoverHidden: settingsPopover?.getAttribute("aria-hidden") || "",
+      settingsPopoverWidth: settingsPopoverStyle?.width || "",
+      settingsPopoverBorderRadius: settingsPopoverStyle?.borderRadius || "",
+      settingsPopoverPadding: settingsPopoverStyle?.padding || "",
+      settingsPopoverBoxShadow: settingsPopoverStyle?.boxShadow || "",
+      settingsPopoverBackdropFilter: settingsPopoverStyle?.backdropFilter || settingsPopoverStyle?.webkitBackdropFilter || "",
+      searchPopoverHidden: searchPopover?.getAttribute("aria-hidden") || "",
       versionText: versionButton?.textContent || "",
       versionColor: versionButtonStyle?.color || "",
       versionBackground: versionButtonStyle?.backgroundColor || "",
       versionBadgeWidth: versionBadgeStyle?.width || "",
       versionBadgeHeight: versionBadgeStyle?.height || "",
       versionBadgeBackground: versionBadgeStyle?.backgroundColor || "",
+      autoUpdateChecked: Boolean(autoUpdateInput?.checked),
+      autoUpdateSwitchWidth: autoUpdateSwitchStyle?.width || "",
+      autoUpdateSwitchHeight: autoUpdateSwitchStyle?.height || "",
       platformCardText: platformCard?.textContent || "",
       platformCardBorderRadius: platformCardStyle?.borderRadius || "",
       platformCardBackground: platformCardStyle?.backgroundColor || "",
@@ -524,20 +562,35 @@ async function assertPanelStyle(page, expectedName, expectedExtensionVersion) {
     };
   }, expectedName);
 
-  if (style.width !== "220px") {
-    throw new Error(`Expected Tampermonkey-style 220px panel width, got ${style.width}.`);
+  if (!style.rootClass.includes("ai-chat-helper-nav-wrapper") || style.width !== "42px") {
+    throw new Error(`Expected userscript-style narrow rail shell, got class=${style.rootClass} width=${style.width}.`);
   }
-  if (style.borderRadius !== "12px") {
-    throw new Error(`Expected Tampermonkey-style 12px panel radius, got ${style.borderRadius}.`);
+  if (style.orbitalWidth !== "42px" || style.trackWidth !== "4px") {
+    throw new Error(`Expected userscript-style orbital rail, got orbital ${style.orbitalWidth} track ${style.trackWidth}.`);
   }
-  if (style.padding !== "16px") {
-    throw new Error(`Expected Tampermonkey-style 16px panel padding, got ${style.padding}.`);
+  if (style.nodeWidth !== "14px" || style.nodeHeight !== "14px" || style.nodeRadius !== "999px") {
+    throw new Error(`Expected userscript-style circular node dots, got ${style.nodeWidth} x ${style.nodeHeight} radius ${style.nodeRadius}.`);
   }
-  if (!style.boxShadow || style.boxShadow === "none") {
-    throw new Error("Expected Tampermonkey-style panel shadow.");
+  if (style.searchTriggerWidth !== "32px" || style.searchTriggerHeight !== "32px" || style.searchTriggerRadius !== "999px") {
+    throw new Error(`Expected userscript-style round search trigger, got ${style.searchTriggerWidth} x ${style.searchTriggerHeight} radius ${style.searchTriggerRadius}.`);
   }
-  if (!style.backdropFilter.includes("blur")) {
-    throw new Error(`Expected Tampermonkey-style panel backdrop blur, got ${style.backdropFilter || "none"}.`);
+  if (style.settingsTriggerWidth !== "32px" || style.settingsTriggerHeight !== "32px" || style.settingsTriggerRadius !== "999px") {
+    throw new Error(`Expected userscript-style round settings trigger, got ${style.settingsTriggerWidth} x ${style.settingsTriggerHeight} radius ${style.settingsTriggerRadius}.`);
+  }
+  if (!style.settingsPopoverOpen || style.settingsPopoverHidden !== "false") {
+    throw new Error("Expected settings trigger to open the userscript-style settings popover.");
+  }
+  if (style.settingsPopoverWidth !== "220px" || style.settingsPopoverBorderRadius !== "12px" || style.settingsPopoverPadding !== "16px") {
+    throw new Error(`Expected userscript-style 220px settings popover, got ${style.settingsPopoverWidth} radius ${style.settingsPopoverBorderRadius} padding ${style.settingsPopoverPadding}.`);
+  }
+  if (!style.settingsPopoverBoxShadow || style.settingsPopoverBoxShadow === "none") {
+    throw new Error("Expected userscript-style settings popover shadow.");
+  }
+  if (!style.settingsPopoverBackdropFilter.includes("blur")) {
+    throw new Error(`Expected userscript-style settings popover backdrop blur, got ${style.settingsPopoverBackdropFilter || "none"}.`);
+  }
+  if (style.searchPopoverHidden !== "true") {
+    throw new Error("Expected search popover to stay hidden until the round search trigger is clicked.");
   }
   if (!style.versionText.includes(`v${expectedExtensionVersion}`)) {
     throw new Error(`Expected Tampermonkey-style version marker v${expectedExtensionVersion}, got ${style.versionText || "missing"}.`);
@@ -548,7 +601,10 @@ async function assertPanelStyle(page, expectedName, expectedExtensionVersion) {
   if (style.versionBadgeWidth !== "8px" || style.versionBadgeHeight !== "8px" || style.versionBadgeBackground !== "rgb(239, 68, 68)") {
     throw new Error(`Expected Tampermonkey-style version badge, got ${style.versionBadgeWidth} x ${style.versionBadgeHeight} / ${style.versionBadgeBackground}.`);
   }
-  if (!style.platformCardText.includes("Current AI platform:") || !style.hasPlatformName) {
+  if (!style.autoUpdateChecked || style.autoUpdateSwitchWidth !== "34px" || style.autoUpdateSwitchHeight !== "20px") {
+    throw new Error(`Expected Tampermonkey-style auto update switch, got checked=${style.autoUpdateChecked} ${style.autoUpdateSwitchWidth} x ${style.autoUpdateSwitchHeight}.`);
+  }
+  if (!style.platformCardText.includes("当前 AI 平台:") || !style.hasPlatformName) {
     throw new Error(`Expected Tampermonkey-style platform card for ${expectedName}, got ${style.platformCardText || "missing"}.`);
   }
   if (style.platformCardBorderRadius !== "10px") {
@@ -575,6 +631,26 @@ async function assertPanelStyle(page, expectedName, expectedExtensionVersion) {
   if (style.actionIconCount < 4) {
     throw new Error(`Expected Tampermonkey-style icon action buttons, got ${style.actionIconCount} icons.`);
   }
+
+  await page.locator("[data-ai-chat-helper-search-trigger]").click();
+  await page.waitForFunction(() => {
+    const popover = document.querySelector("[data-ai-chat-helper-search-popover]");
+    return popover?.classList.contains("is-open") && popover.getAttribute("aria-hidden") === "false";
+  }, null, { timeout: 5000 });
+  const searchStyle = await page.locator("[data-ai-chat-helper-search-popover]").evaluate((popover) => {
+    const computed = window.getComputedStyle(popover);
+    const input = popover.querySelector("[data-ai-chat-helper-search]");
+    const confirm = popover.querySelector("[data-ai-chat-helper-search-confirm]");
+    return {
+      width: computed.width,
+      borderRadius: computed.borderRadius,
+      placeholder: input?.getAttribute("placeholder") || "",
+      hasConfirm: Boolean(confirm)
+    };
+  });
+  if (searchStyle.width !== "320px" || searchStyle.borderRadius !== "12px" || !searchStyle.placeholder.includes("搜索当前对话") || !searchStyle.hasConfirm) {
+    throw new Error(`Expected userscript-style search popover, got ${JSON.stringify(searchStyle)}.`);
+  }
 }
 
 async function assertToggleVisibility(page, platformCase) {
@@ -592,6 +668,19 @@ async function assertToggleVisibility(page, platformCase) {
       throw new Error(`${platformCase.id} panel unexpectedly rendered platform toggle ${selector}.`);
     }
   }
+}
+
+async function openSettingsPopover(page) {
+  const isOpen = await page.locator("[data-ai-chat-helper-settings-popover]").evaluate((popover) => {
+    return popover.classList.contains("is-open") && popover.getAttribute("aria-hidden") === "false";
+  }).catch(() => false);
+  if (!isOpen) {
+    await page.locator("[data-ai-chat-helper-settings-trigger]").click();
+  }
+  await page.waitForFunction(() => {
+    const popover = document.querySelector("[data-ai-chat-helper-settings-popover]");
+    return popover?.classList.contains("is-open") && popover.getAttribute("aria-hidden") === "false";
+  }, null, { timeout: 5000 });
 }
 
 async function assertSwitchStyle(page, selector, platformId) {
@@ -623,6 +712,7 @@ async function assertSwitchStyle(page, selector, platformId) {
 
 async function assertCurrentHtmlExport(page, context) {
   const existingDownloadIds = await getChromeDownloadIds(context);
+  await openSettingsPopover(page);
   await page.locator("[data-ai-chat-helper-export]").click();
   await page.waitForSelector("#ai-chat-helper-export-modal", { timeout: 10000 });
 
@@ -653,7 +743,20 @@ async function assertCurrentHtmlExport(page, context) {
   }
 }
 
+async function assertSilentAutoUpdateCheck(page) {
+  await page.waitForFunction(() => {
+    const badge = document.querySelector("[data-ai-chat-helper-version-badge]");
+    return badge?.style.opacity === "1" && badge?.style.transform === "scale(1)";
+  }, null, { timeout: 10000 });
+
+  const modalCount = await page.locator("#ai-chat-helper-update-modal").count();
+  if (modalCount) {
+    throw new Error("Silent auto update check should light the badge without opening the update modal.");
+  }
+}
+
 async function assertVersionUpdateCheck(page, expectedExtensionVersion) {
+  await openSettingsPopover(page);
   await page.locator("[data-ai-chat-helper-version]").click();
   await page.waitForSelector("#ai-chat-helper-update-modal", { timeout: 10000 });
 
@@ -684,6 +787,7 @@ async function assertBatchZipExport(page, context, expectation) {
     ? { selectedCount: expectation, exportedCount: expectation, failedCount: 0 }
     : { failedCount: 0, ...expectation };
   const existingDownloadIds = await getChromeDownloadIds(context);
+  await openSettingsPopover(page);
   await page.locator("[data-ai-chat-helper-batch-export]").click();
   try {
     await page.waitForFunction((count) => {

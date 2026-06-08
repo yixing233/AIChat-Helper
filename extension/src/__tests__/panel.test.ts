@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { createPanel, setPanelStatus, setPanelVersionUpdateBadge } from "../ui/panel/panel";
 
 describe("createPanel", () => {
-  it("creates one root panel element for a platform", () => {
+  it("creates a userscript-style rail shell with popover cards for a platform", () => {
     const panel = createPanel({
       platformName: "ChatGPT",
       platformIconUrl: "https://chatgpt.com/favicon.ico",
@@ -10,16 +10,37 @@ describe("createPanel", () => {
     });
 
     expect(panel.id).toBe("ai-chat-helper-panel");
+    expect(panel.classList.contains("ai-chat-helper-nav-wrapper")).toBe(true);
     expect(panel.textContent).toContain("ChatGPT");
+    expect(panel.querySelector("[data-ai-chat-helper-orbital]")).toBeTruthy();
+    expect(panel.querySelector(".ai-chat-helper-orbital__track")).toBeTruthy();
+    expect(panel.querySelector("[data-ai-chat-helper-nodes]")).toBeTruthy();
+    expect(panel.querySelector("[data-ai-chat-helper-search-trigger]")).toBeTruthy();
+    expect(panel.querySelector("[data-ai-chat-helper-search-trigger]")?.classList.contains("ai-chat-helper-round-button")).toBe(true);
+    expect(panel.querySelector("[data-ai-chat-helper-settings-trigger]")).toBeTruthy();
+    expect(panel.querySelector("[data-ai-chat-helper-settings-trigger]")?.classList.contains("ai-chat-helper-round-button")).toBe(true);
     const versionButton = panel.querySelector("[data-ai-chat-helper-version]");
     expect(versionButton).toBeTruthy();
     expect(versionButton?.textContent).toContain("v3.0.0");
     expect(versionButton?.getAttribute("aria-label")).toBe("Extension version 3.0.0");
     expect(panel.querySelector("[data-ai-chat-helper-version] svg")).toBeTruthy();
     expect(panel.querySelector("[data-ai-chat-helper-version-badge]")).toBeTruthy();
-    expect(panel.querySelector(".ai-chat-helper-panel__platform-card")?.textContent).toContain("Current AI platform:");
-    expect(panel.querySelector(".ai-chat-helper-panel__platform-icon")?.getAttribute("src")).toBe("https://chatgpt.com/favicon.ico");
-    expect(panel.querySelector(".ai-chat-helper-panel__platform-icon")?.getAttribute("alt")).toBe("ChatGPT");
+    const settingsPopover = panel.querySelector("[data-ai-chat-helper-settings-popover]");
+    expect(settingsPopover).toBeTruthy();
+    expect(settingsPopover?.classList.contains("ai-chat-helper-popover")).toBe(true);
+    expect(settingsPopover?.getAttribute("aria-hidden")).toBe("true");
+    expect(settingsPopover?.querySelector(".ai-chat-helper-panel__platform-card")?.textContent).toContain("当前 AI 平台:");
+    expect(settingsPopover?.querySelector(".ai-chat-helper-panel__platform-icon")?.getAttribute("src")).toBe("https://chatgpt.com/favicon.ico");
+    expect(settingsPopover?.querySelector(".ai-chat-helper-panel__platform-icon")?.getAttribute("alt")).toBe("ChatGPT");
+    const autoUpdateToggle = panel.querySelector<HTMLInputElement>("[data-ai-chat-helper-auto-update-check]");
+    expect(autoUpdateToggle).toBeTruthy();
+    expect(autoUpdateToggle?.checked).toBe(true);
+    expect(autoUpdateToggle?.closest(".ai-chat-helper-panel__switch")).toBeTruthy();
+    expect(autoUpdateToggle?.parentElement?.querySelector(".ai-chat-helper-panel__switch-slider")).toBeTruthy();
+    const searchPopover = panel.querySelector("[data-ai-chat-helper-search-popover]");
+    expect(searchPopover).toBeTruthy();
+    expect(searchPopover?.classList.contains("ai-chat-helper-popover")).toBe(true);
+    expect(searchPopover?.getAttribute("aria-hidden")).toBe("true");
     expect(panel.querySelector("[data-ai-chat-helper-search]")).toBeTruthy();
     expect(panel.querySelector("[data-ai-chat-helper-search-prev]")).toBeTruthy();
     expect(panel.querySelector("[data-ai-chat-helper-search-next]")).toBeTruthy();
@@ -29,7 +50,6 @@ describe("createPanel", () => {
     expect(panel.querySelector("[data-ai-chat-helper-reading-line]")).toBeTruthy();
     expect(panel.querySelector("[data-ai-chat-helper-dot-gap]")).toBeTruthy();
     expect(panel.querySelector("[data-ai-chat-helper-batch-limit]")).toBeFalsy();
-    expect(panel.querySelector("[data-ai-chat-helper-nodes]")).toBeTruthy();
     expect(panel.querySelector("[data-ai-chat-helper-export]")).toBeTruthy();
     expect(panel.querySelector("[data-ai-chat-helper-batch-export]")).toBeFalsy();
     expect(panel.querySelector("[data-ai-chat-helper-remove-qwen-ads]")).toBeFalsy();
@@ -64,20 +84,20 @@ describe("createPanel", () => {
     const githubButton = panel.querySelector<HTMLButtonElement>(".ai-chat-helper-panel__action--github");
 
     expect(refreshButton).toBeTruthy();
-    expect(refreshButton?.getAttribute("aria-label")).toBe("Refresh nodes");
-    expect(refreshButton?.getAttribute("title")).toBe("Refresh nodes");
+    expect(refreshButton?.getAttribute("aria-label")).toBe("重新获取节点");
+    expect(refreshButton?.getAttribute("title")).toBe("重新获取节点");
     expect(refreshButton?.querySelector("svg")).toBeTruthy();
     expect(exportButton).toBeTruthy();
-    expect(exportButton?.getAttribute("aria-label")).toBe("Export current conversation");
-    expect(exportButton?.getAttribute("title")).toBe("Export current conversation");
+    expect(exportButton?.getAttribute("aria-label")).toBe("导出对话记录");
+    expect(exportButton?.getAttribute("title")).toBe("导出对话记录");
     expect(exportButton?.querySelector("svg")).toBeTruthy();
     expect(batchButton).toBeTruthy();
-    expect(batchButton?.getAttribute("aria-label")).toBe("Batch export conversations");
-    expect(batchButton?.getAttribute("title")).toBe("Batch export conversations");
+    expect(batchButton?.getAttribute("aria-label")).toBe("批量导出对话");
+    expect(batchButton?.getAttribute("title")).toBe("批量导出对话");
     expect(batchButton?.querySelector("svg")).toBeTruthy();
     expect(githubButton).toBeTruthy();
-    expect(githubButton?.getAttribute("aria-label")).toBe("Open GitHub project");
-    expect(githubButton?.getAttribute("title")).toBe("Open GitHub project");
+    expect(githubButton?.getAttribute("aria-label")).toBe("GitHub 项目");
+    expect(githubButton?.getAttribute("title")).toBe("GitHub 项目");
     expect(githubButton?.querySelector("svg")).toBeTruthy();
     expect(panel.querySelector("[data-ai-chat-helper-github]")).toBeTruthy();
     expect(panel.querySelector("[data-ai-chat-helper-batch-export]")).toBeTruthy();

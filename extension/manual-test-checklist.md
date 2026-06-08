@@ -5,13 +5,16 @@ Build the extension with `npm run build`, then load `E:\Code\AI-Chat-Nodes\exten
 - [ ] `npm run smoke:extension` loads `extension\dist` in Edge, reports ChatGPT, Claude, Tongyi Qianwen, Doubao, and DeepSeek mock panels as passed, and verifies ChatGPT HTML plus all supported batch ZIP export download records.
 - [ ] Chrome loads the extension without manifest errors.
 - [ ] Edge loads the extension without manifest errors.
-- [ ] ChatGPT page shows the AI Chat Helper panel.
-- [ ] Claude page shows the AI Chat Helper panel.
-- [ ] Tongyi Qianwen page shows the AI Chat Helper panel.
-- [ ] Doubao page shows the AI Chat Helper panel.
-- [ ] DeepSeek page shows the AI Chat Helper panel.
-- [ ] Main panel visually matches the Tampermonkey settings popup: narrow glass panel, 12px radius, header version marker, platform favicon card, custom switch controls, GitHub project action, and red/blue icon actions.
+- [ ] ChatGPT page shows the AI Chat Helper right-side node rail.
+- [ ] Claude page shows the AI Chat Helper right-side node rail.
+- [ ] Tongyi Qianwen page shows the AI Chat Helper right-side node rail.
+- [ ] Doubao page shows the AI Chat Helper right-side node rail.
+- [ ] DeepSeek page shows the AI Chat Helper right-side node rail.
+- [ ] Node rail visually matches the Tampermonkey userscript: narrow right-side track, circular node dots, and stacked 32px round search/settings buttons.
+- [ ] Clicking the settings button opens the Tampermonkey-style settings popover: 220px glass card, 12px radius, header version marker, platform favicon card, custom switch controls, GitHub project action, and red/blue icon actions.
+- [ ] Clicking the search button opens the Tampermonkey-style search popover instead of showing an always-visible search row.
 - [ ] Clicking the header version marker checks for updates, lights the red badge when a newer version is found, and opens the Tampermonkey-style update dialog.
+- [ ] Auto update check switch is enabled by default, migrates `ai-nodes-auto-update-check`, and silently lights the version badge when a newer version is found.
 - [ ] Node list renders on a loaded conversation page.
 - [ ] Clicking a node scrolls the matching conversation message into view.
 - [ ] Search filters the node list by typed text.
@@ -19,7 +22,7 @@ Build the extension with `npm run build`, then load `E:\Code\AI-Chat-Nodes\exten
 - [ ] Search Prev/Next cycles through matching nodes and scrolls each result to the reading line.
 - [ ] Visible node limit setting filters the rendered node count and survives reload.
 - [ ] Existing `ai-nodes-visible-limit` localStorage value migrates to extension storage once.
-- [ ] Dragging the panel header moves the panel and the position survives reload.
+- [ ] Dragging the small rail grip moves the node rail and the position survives reload.
 - [ ] Existing `AI-Chat-Helper-pos` localStorage value migrates to extension storage once.
 - [ ] Reading line setting moves the on-page reading guide and survives reload.
 - [ ] Existing `ai-nodes-reading-line` localStorage value migrates to extension storage once.
@@ -36,7 +39,7 @@ Build the extension with `npm run build`, then load `E:\Code\AI-Chat-Nodes\exten
 - [ ] HTML, Markdown, and TXT exports include visible attachment metadata when a conversation has files or images.
 - [ ] Exports include inline attachment content files under `attachments/` when captured attachment content is available.
 - [ ] Export ZIP triggers a browser download.
-- [ ] Current conversation export shows progress or failure status in the panel.
+- [ ] Current conversation export shows progress or failure status in the settings popover.
 - [ ] Current conversation export uses API-hydrated messages after the page has loaded network responses.
 - [ ] ChatGPT page shows the Batch action.
 - [ ] Claude page shows the Batch action when `lastActiveOrg` is available.
@@ -53,6 +56,6 @@ Build the extension with `npm run build`, then load `E:\Code\AI-Chat-Nodes\exten
 - [ ] DeepSeek Batch export downloads one ZIP containing recent conversations.
 - [ ] Tongyi Qianwen Batch export downloads one ZIP containing recent conversations.
 - [ ] Doubao Batch export downloads one ZIP containing recent conversations.
-- [ ] Batch export shows progress or failure status in the panel.
+- [ ] Batch export shows progress or failure status in the settings popover.
 - [ ] Batch limit setting changes the number of requested recent conversations and survives reload.
 - [ ] Extension service worker logs no uncaught errors during export.

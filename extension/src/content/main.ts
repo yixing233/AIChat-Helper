@@ -55,6 +55,7 @@ async function mountPanel(): Promise<void> {
     batchLimit: settings.batchLimit,
     readingLineOffset: settings.readingLineOffset,
     dotGap: settings.dotGap,
+    autoUpdateCheck: settings.autoUpdateCheck,
     removeQwenAds: settings.removeQwenAds,
     hideDeepSeekNativeNav: settings.hideDeepSeekNativeNav,
     panelPosition: settings.panelPosition
@@ -77,12 +78,25 @@ async function mountPanel(): Promise<void> {
   const searchStatus = panel.querySelector<HTMLElement>("[data-ai-chat-helper-search-status]");
   const searchPrevButton = panel.querySelector<HTMLButtonElement>("[data-ai-chat-helper-search-prev]");
   const searchNextButton = panel.querySelector<HTMLButtonElement>("[data-ai-chat-helper-search-next]");
+  const searchConfirmButton = panel.querySelector<HTMLButtonElement>("[data-ai-chat-helper-search-confirm]");
   const visibleLimitInput = panel.querySelector<HTMLInputElement>("[data-ai-chat-helper-visible-limit]");
   const batchLimitInput = panel.querySelector<HTMLInputElement>("[data-ai-chat-helper-batch-limit]");
   const readingLineInput = panel.querySelector<HTMLInputElement>("[data-ai-chat-helper-reading-line]");
   const dotGapInput = panel.querySelector<HTMLInputElement>("[data-ai-chat-helper-dot-gap]");
+  const autoUpdateCheckInput = panel.querySelector<HTMLInputElement>("[data-ai-chat-helper-auto-update-check]");
   const removeQwenAdsInput = panel.querySelector<HTMLInputElement>("[data-ai-chat-helper-remove-qwen-ads]");
   const hideDeepSeekNativeNavInput = panel.querySelector<HTMLInputElement>("[data-ai-chat-helper-hide-deepseek-native-nav]");
+  const nodeSettingsSummary = panel.querySelector<HTMLElement>("[data-ai-chat-helper-node-settings-summary]");
+  const readingLineSummary = panel.querySelector<HTMLElement>("[data-ai-chat-helper-reading-line-summary]");
+  const readingLineDisplay = panel.querySelector<HTMLElement>("[data-ai-chat-helper-reading-line-display]");
+  const searchTrigger = panel.querySelector<HTMLElement>("[data-ai-chat-helper-search-trigger]");
+  const settingsTrigger = panel.querySelector<HTMLElement>("[data-ai-chat-helper-settings-trigger]");
+  const nodeSettingsTrigger = panel.querySelector<HTMLElement>("[data-ai-chat-helper-node-settings-trigger]");
+  const readingLineTrigger = panel.querySelector<HTMLElement>("[data-ai-chat-helper-reading-line-trigger]");
+  const searchPopover = panel.querySelector<HTMLElement>("[data-ai-chat-helper-search-popover]");
+  const settingsPopover = panel.querySelector<HTMLElement>("[data-ai-chat-helper-settings-popover]");
+  const nodeSettingsPopover = panel.querySelector<HTMLElement>("[data-ai-chat-helper-node-settings-popover]");
+  const readingLinePopover = panel.querySelector<HTMLElement>("[data-ai-chat-helper-reading-line-popover]");
   let currentNodes: ConversationNode[] = [];
   let currentSearchResults: ConversationNode[] = [];
   let currentSearchIndex = -1;
@@ -90,6 +104,7 @@ async function mountPanel(): Promise<void> {
   let batchLimit = settings.batchLimit;
   let readingLineOffset = settings.readingLineOffset;
   let dotGap = settings.dotGap;
+  let autoUpdateCheckStarted = false;
 
   const renderCurrentNodes = () => {
     if (!nodesContainer) return;
@@ -114,9 +129,15 @@ async function mountPanel(): Promise<void> {
 
   refreshNodes();
   panel.querySelector("[data-ai-chat-helper-refresh]")?.addEventListener("click", refreshNodes);
+  setupPopoverInteractions();
   searchInput?.addEventListener("input", () => {
     currentSearchIndex = 0;
     renderCurrentNodes();
+  });
+  searchConfirmButton?.addEventListener("click", () => {
+    currentSearchIndex = 0;
+    renderCurrentNodes();
+    jumpToCurrentSearchResult();
   });
   searchPrevButton?.addEventListener("click", () => {
     jumpToSearchResult(-1);
@@ -128,6 +149,7 @@ async function mountPanel(): Promise<void> {
     const nextSettings = normalizeExtensionSettings({ visibleLimit: visibleLimitInput.value });
     visibleLimit = nextSettings.visibleLimit;
     visibleLimitInput.value = String(visibleLimit);
+    updateNodeSettingsSummary();
     renderCurrentNodes();
     void settingsStorage.set("visibleLimit", visibleLimit).catch((error) => {
       console.error("[AI Chat Helper] settings save failed", error);
@@ -147,6 +169,7 @@ async function mountPanel(): Promise<void> {
     const nextSettings = normalizeExtensionSettings({ readingLineOffset: readingLineInput.value });
     readingLineOffset = nextSettings.readingLineOffset;
     readingLineInput.value = String(readingLineOffset);
+    updateReadingLineSummary();
     readingLine.style.top = `${readingLineOffset}px`;
     renderCurrentNodes();
     void settingsStorage.set("readingLineOffset", readingLineOffset).catch((error) => {
@@ -158,11 +181,20 @@ async function mountPanel(): Promise<void> {
     const nextSettings = normalizeExtensionSettings({ dotGap: dotGapInput.value });
     dotGap = nextSettings.dotGap;
     dotGapInput.value = String(dotGap);
+    updateNodeSettingsSummary();
     renderCurrentNodes();
     void settingsStorage.set("dotGap", dotGap).catch((error) => {
       console.error("[AI Chat Helper] settings save failed", error);
       setPanelStatus(panel, `Settings save failed: ${getErrorMessage(error)}`);
     });
+  });
+  autoUpdateCheckInput?.addEventListener("change", () => {
+    const autoUpdateCheck = autoUpdateCheckInput.checked;
+    void settingsStorage.set("autoUpdateCheck", autoUpdateCheck).catch((error) => {
+      console.error("[AI Chat Helper] settings save failed", error);
+      setPanelStatus(panel, `Settings save failed: ${getErrorMessage(error)}`);
+    });
+    if (autoUpdateCheck) scheduleSilentUpdateCheck();
   });
   removeQwenAdsInput?.addEventListener("change", () => {
     const removeQwenAds = removeQwenAdsInput.checked;
@@ -194,18 +226,127 @@ async function mountPanel(): Promise<void> {
   panel.querySelector("[data-ai-chat-helper-github]")?.addEventListener("click", () => {
     window.open(PROJECT_REPO_URL, "_blank", "noopener,noreferrer");
   });
+  if (settings.autoUpdateCheck) scheduleSilentUpdateCheck();
+
+  function scheduleSilentUpdateCheck(): void {
+    if (autoUpdateCheckStarted) return;
+    autoUpdateCheckStarted = true;
+    window.setTimeout(() => {
+      void checkForExtensionUpdate(panel, extensionVersion, { silent: true });
+    }, 1800);
+  }
 
   function jumpToSearchResult(direction: 1 | -1): void {
     currentSearchIndex = getNextSearchIndex(currentSearchIndex, currentSearchResults.length, direction);
     updateSearchStatus(searchStatus, currentSearchIndex, currentSearchResults.length);
+    jumpToCurrentSearchResult();
+  }
+
+  function jumpToCurrentSearchResult(): void {
     const node = currentSearchIndex >= 0 ? currentSearchResults[currentSearchIndex] : null;
     if (node) scrollNodeIntoView(node, readingLineOffset);
+  }
+
+  function updateNodeSettingsSummary(): void {
+    if (nodeSettingsSummary) nodeSettingsSummary.textContent = `${dotGap} px | ${visibleLimit}`;
+  }
+
+  function updateReadingLineSummary(): void {
+    if (readingLineSummary) readingLineSummary.textContent = `${readingLineOffset} px`;
+    if (readingLineDisplay) readingLineDisplay.textContent = `${readingLineOffset}px`;
+  }
+
+  function setupPopoverInteractions(): void {
+    const popovers = [searchPopover, settingsPopover, nodeSettingsPopover, readingLinePopover].filter(Boolean) as HTMLElement[];
+
+    const closePopovers = (keep: HTMLElement[] = [], immediate = false) => {
+      const keepSet = new Set(keep);
+      popovers.forEach((popover) => {
+        if (keepSet.has(popover)) return;
+        setPopoverOpen(popover, false, immediate);
+      });
+    };
+
+    const togglePopover = (popover: HTMLElement | null, trigger: HTMLElement | null, keep: HTMLElement[] = []) => {
+      if (!popover || !trigger) return;
+      const willOpen = !popover.classList.contains("is-open");
+      closePopovers(willOpen ? keep : [], willOpen);
+      if (!willOpen) {
+        setPopoverOpen(popover, false);
+        return;
+      }
+      positionPopover(popover, trigger);
+      setPopoverOpen(popover, true);
+      if (popover === searchPopover) searchInput?.focus();
+    };
+
+    settingsTrigger?.addEventListener("click", (event) => {
+      event.stopPropagation();
+      togglePopover(settingsPopover, settingsTrigger);
+    });
+    searchTrigger?.addEventListener("click", (event) => {
+      event.stopPropagation();
+      togglePopover(searchPopover, searchTrigger);
+    });
+    nodeSettingsTrigger?.addEventListener("click", (event) => {
+      event.stopPropagation();
+      togglePopover(nodeSettingsPopover, nodeSettingsTrigger, settingsPopover ? [settingsPopover] : []);
+    });
+    readingLineTrigger?.addEventListener("click", (event) => {
+      event.stopPropagation();
+      togglePopover(readingLinePopover, readingLineTrigger, settingsPopover ? [settingsPopover] : []);
+    });
+    panel.addEventListener("pointerdown", (event) => {
+      event.stopPropagation();
+    });
+    window.addEventListener("pointerdown", () => {
+      closePopovers();
+    });
+    window.addEventListener("resize", () => {
+      closePopovers();
+    });
+    window.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") closePopovers();
+    });
   }
 }
 
 function updateSearchStatus(status: HTMLElement | null, index: number, count: number): void {
   if (!status) return;
   status.textContent = count > 0 && index >= 0 ? `${index + 1}/${count}` : "0/0";
+}
+
+function setPopoverOpen(popover: HTMLElement, open: boolean, immediate = false): void {
+  if (!open && immediate) {
+    popover.style.transition = "none";
+  }
+  popover.classList.toggle("is-open", open);
+  popover.setAttribute("aria-hidden", open ? "false" : "true");
+  if (!open && immediate) {
+    void popover.offsetHeight;
+    popover.style.transition = "";
+  }
+}
+
+function positionPopover(popover: HTMLElement, trigger: HTMLElement): void {
+  const triggerRect = trigger.getBoundingClientRect();
+  const gap = 10;
+  const viewportPadding = 12;
+  const width = Math.max(popover.offsetWidth || 220, 180);
+  const height = Math.max(popover.offsetHeight || 40, 32);
+  const leftSide = triggerRect.left - width - gap;
+  const rightSide = triggerRect.right + gap;
+  const opensLeft = leftSide >= viewportPadding || rightSide + width > window.innerWidth - viewportPadding;
+  const left = opensLeft
+    ? Math.max(viewportPadding, leftSide)
+    : Math.min(window.innerWidth - width - viewportPadding, rightSide);
+  const centeredTop = triggerRect.top + triggerRect.height / 2 - height / 2;
+  const top = Math.max(viewportPadding, Math.min(window.innerHeight - height - viewportPadding, centeredTop));
+
+  popover.style.right = "auto";
+  popover.style.left = `${Math.round(left)}px`;
+  popover.style.top = `${Math.round(top)}px`;
+  popover.style.transformOrigin = opensLeft ? "center right" : "center left";
 }
 
 async function loadSettings() {
@@ -238,8 +379,12 @@ async function getExtensionVersion(): Promise<string> {
   }
 }
 
-async function checkForExtensionUpdate(panel: HTMLElement, currentVersion: string): Promise<void> {
-  setPanelStatus(panel, "Checking for updates...");
+async function checkForExtensionUpdate(
+  panel: HTMLElement,
+  currentVersion: string,
+  options: { silent?: boolean } = {}
+): Promise<void> {
+  if (!options.silent) setPanelStatus(panel, "Checking for updates...");
 
   try {
     const latestSource = await requestRemoteText(`${SCRIPT_UPDATE_URL}?t=${Date.now()}`);
@@ -248,11 +393,13 @@ async function checkForExtensionUpdate(panel: HTMLElement, currentVersion: strin
 
     if (!summary.hasUpdate) {
       setPanelVersionUpdateBadge(panel, "");
-      setPanelStatus(panel, `Already latest version v${summary.currentVersion}.`);
+      if (!options.silent) setPanelStatus(panel, `Already latest version v${summary.currentVersion}.`);
       return;
     }
 
     setPanelVersionUpdateBadge(panel, summary.latestVersion);
+    if (options.silent) return;
+
     setPanelStatus(panel, `New version v${summary.latestVersion} available.`);
     openVersionUpdateModal({
       currentVersion: summary.currentVersion,
@@ -264,7 +411,7 @@ async function checkForExtensionUpdate(panel: HTMLElement, currentVersion: strin
     });
   } catch (error) {
     console.warn("[AI Chat Helper] update check failed", error);
-    setPanelStatus(panel, `Update check failed: ${getErrorMessage(error)}`);
+    if (!options.silent) setPanelStatus(panel, `Update check failed: ${getErrorMessage(error)}`);
   }
 }
 

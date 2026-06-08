@@ -50,19 +50,24 @@ describe("filterConversationNodes", () => {
     });
 
     const buttons = Array.from(container.querySelectorAll("button"));
+    expect(container.querySelector(".ai-chat-helper-orbital__track")).toBeTruthy();
+    expect(buttons[0].classList.contains("ai-chat-helper-node-dot")).toBe(true);
     expect(buttons[0].classList.contains("ai-chat-helper-node--match")).toBe(true);
     expect(buttons[1].classList.contains("ai-chat-helper-node--match")).toBe(true);
     expect(buttons[1].classList.contains("ai-chat-helper-node--active")).toBe(true);
     expect(buttons[2].classList.contains("ai-chat-helper-node--match")).toBe(false);
+    expect(buttons[1].getAttribute("aria-current")).toBe("true");
   });
 
-  it("applies the configured node gap to rendered buttons", () => {
+  it("applies the configured node gap to the orbital rail", () => {
     const container = document.createElement("div");
 
     renderNodeList(container, nodes, { dotGap: 42 });
 
     const buttons = Array.from(container.querySelectorAll<HTMLButtonElement>("button"));
-    expect(buttons[0].style.marginBlock).toBe("21px");
-    expect(buttons[1].style.marginBlock).toBe("21px");
+    expect(container.style.getPropertyValue("--ai-chat-helper-dot-gap")).toBe("42px");
+    expect(buttons[0].style.top).toBe("16px");
+    expect(buttons[1].style.top).toBe("58px");
+    expect(buttons[2].style.top).toBe("100px");
   });
 });

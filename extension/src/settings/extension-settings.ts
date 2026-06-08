@@ -3,6 +3,7 @@ export interface ExtensionSettings {
   batchLimit: number;
   readingLineOffset: number;
   dotGap: number;
+  autoUpdateCheck: boolean;
   removeQwenAds: boolean;
   hideDeepSeekNativeNav: boolean;
   panelPosition: PanelPosition | null;
@@ -18,6 +19,7 @@ export const DEFAULT_EXTENSION_SETTINGS: ExtensionSettings = {
   batchLimit: 20,
   readingLineOffset: 150,
   dotGap: 36,
+  autoUpdateCheck: true,
   removeQwenAds: false,
   hideDeepSeekNativeNav: false,
   panelPosition: null
@@ -26,6 +28,7 @@ export const DEFAULT_EXTENSION_SETTINGS: ExtensionSettings = {
 export const LEGACY_VISIBLE_LIMIT_KEY = "ai-nodes-visible-limit";
 export const LEGACY_READING_LINE_KEY = "ai-nodes-reading-line";
 export const LEGACY_DOT_GAP_KEY = "ai-nodes-dot-gap";
+export const LEGACY_AUTO_UPDATE_CHECK_KEY = "ai-nodes-auto-update-check";
 export const LEGACY_QWEN_ADS_KEY = "ai-nodes-remove-qwen-ads";
 export const LEGACY_DEEPSEEK_NATIVE_NAV_KEY = "ai-nodes-hide-deepseek-native-nav";
 export const LEGACY_PANEL_POSITION_KEY = "AI-Chat-Helper-pos";
@@ -34,6 +37,7 @@ export const LEGACY_SETTING_MIGRATIONS: Array<[string, keyof ExtensionSettings]>
   [LEGACY_VISIBLE_LIMIT_KEY, "visibleLimit"],
   [LEGACY_READING_LINE_KEY, "readingLineOffset"],
   [LEGACY_DOT_GAP_KEY, "dotGap"],
+  [LEGACY_AUTO_UPDATE_CHECK_KEY, "autoUpdateCheck"],
   [LEGACY_QWEN_ADS_KEY, "removeQwenAds"],
   [LEGACY_DEEPSEEK_NATIVE_NAV_KEY, "hideDeepSeekNativeNav"],
   [LEGACY_PANEL_POSITION_KEY, "panelPosition"]
@@ -45,6 +49,7 @@ export function normalizeExtensionSettings(value: Partial<Record<keyof Extension
     batchLimit: normalizeBatchLimit(value.batchLimit),
     readingLineOffset: normalizeReadingLineOffset(value.readingLineOffset),
     dotGap: normalizeDotGap(value.dotGap),
+    autoUpdateCheck: normalizeBoolean(value.autoUpdateCheck, DEFAULT_EXTENSION_SETTINGS.autoUpdateCheck),
     removeQwenAds: normalizeBoolean(value.removeQwenAds, DEFAULT_EXTENSION_SETTINGS.removeQwenAds),
     hideDeepSeekNativeNav: normalizeBoolean(value.hideDeepSeekNativeNav, DEFAULT_EXTENSION_SETTINGS.hideDeepSeekNativeNav),
     panelPosition: normalizePanelPosition(value.panelPosition)

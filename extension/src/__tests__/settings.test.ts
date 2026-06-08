@@ -31,6 +31,8 @@ describe("extension settings", () => {
     expect(normalizeExtensionSettings({ dotGap: 1 }).dotGap).toBe(20);
     expect(normalizeExtensionSettings({ dotGap: 90 }).dotGap).toBe(50);
     expect(normalizeExtensionSettings({ dotGap: "42" }).dotGap).toBe(42);
+    expect(normalizeExtensionSettings({ autoUpdateCheck: "true" }).autoUpdateCheck).toBe(true);
+    expect(normalizeExtensionSettings({ autoUpdateCheck: "false" }).autoUpdateCheck).toBe(false);
     expect(normalizeExtensionSettings({ removeQwenAds: "true" }).removeQwenAds).toBe(true);
     expect(normalizeExtensionSettings({ hideDeepSeekNativeNav: "1" }).hideDeepSeekNativeNav).toBe(true);
     expect(normalizeExtensionSettings({ removeQwenAds: "false" }).removeQwenAds).toBe(false);
@@ -56,6 +58,7 @@ describe("extension settings", () => {
       ["ai-nodes-visible-limit", "visibleLimit"],
       ["ai-nodes-reading-line", "readingLineOffset"],
       ["ai-nodes-dot-gap", "dotGap"],
+      ["ai-nodes-auto-update-check", "autoUpdateCheck"],
       ["ai-nodes-remove-qwen-ads", "removeQwenAds"],
       ["ai-nodes-hide-deepseek-native-nav", "hideDeepSeekNativeNav"],
       ["AI-Chat-Helper-pos", "panelPosition"]
