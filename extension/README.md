@@ -22,7 +22,14 @@ The extension currently includes:
 - page-world network capture hooks
 - background request and download handlers
 - platform adapter registry for ChatGPT, Claude, Tongyi Qianwen, Doubao, and DeepSeek
-- a minimal in-page panel
+- an in-page panel with current-conversation export
 - HTML, Markdown, TXT, and stored ZIP export modules
+- captured API hydration for current conversations on ChatGPT, Claude, Tongyi Qianwen, Doubao, and DeepSeek
+- a minimal batch export entry point for adapters that expose conversation list/detail APIs
+
+Current batch coverage:
+
+- ChatGPT: recent conversation list and detail fetching through `/backend-api/conversations` and `/backend-api/conversation/:id`
+- Claude, Tongyi Qianwen, Doubao, DeepSeek: current conversation export only until list/detail adapters are added
 
 The old Tampermonkey userscript remains as migration reference material.

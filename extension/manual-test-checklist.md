@@ -14,4 +14,9 @@ Build the extension with `npm run build`, then load `E:\Code\AI-Chat-Nodes\exten
 - [ ] Export HTML triggers a browser download.
 - [ ] Export Markdown triggers a browser download.
 - [ ] Export TXT triggers a browser download.
+- [ ] Export ZIP triggers a browser download.
+- [ ] Current conversation export uses API-hydrated messages after the page has loaded network responses.
+- [ ] ChatGPT page shows the Batch action.
+- [ ] ChatGPT Batch export downloads one ZIP containing recent conversations.
+- [ ] Claude, Tongyi Qianwen, Doubao, and DeepSeek do not show Batch until list/detail adapters are added.
 - [ ] Extension service worker logs no uncaught errors during export.
