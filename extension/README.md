@@ -14,7 +14,7 @@ npm run smoke:extension
 
 Load `E:\Code\AI-Chat-Nodes\extension\dist` as an unpacked extension from `chrome://extensions` or `edge://extensions`.
 
-`npm run smoke:extension` launches Microsoft Edge with `extension\dist`, serves mocked ChatGPT, Claude, Tongyi Qianwen, Doubao, and DeepSeek pages through Playwright, verifies that the content script renders each platform panel and node list, and confirms ChatGPT HTML plus ChatGPT/Claude batch ZIP exports reach Chrome's downloads API.
+`npm run smoke:extension` launches Microsoft Edge with `extension\dist`, serves mocked ChatGPT, Claude, Tongyi Qianwen, Doubao, and DeepSeek pages through Playwright, verifies that the content script renders each platform panel and node list, and confirms ChatGPT HTML plus ChatGPT/Claude/DeepSeek batch ZIP exports reach Chrome's downloads API.
 
 ## Current Migration State
 

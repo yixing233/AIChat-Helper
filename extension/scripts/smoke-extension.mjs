@@ -67,9 +67,12 @@ async function main() {
       if (platformCase.id === "claude") {
         await assertBatchZipExport(page, context, 2);
       }
+      if (platformCase.id === "deepseek") {
+        await assertBatchZipExport(page, context, 2);
+      }
     }
 
-    console.log(`Extension smoke passed: ${platformCases.map((item) => item.id).join(", ")} panels rendered; ChatGPT HTML plus ChatGPT/Claude batch ZIP exports verified`);
+    console.log(`Extension smoke passed: ${platformCases.map((item) => item.id).join(", ")} panels rendered; ChatGPT HTML plus ChatGPT/Claude/DeepSeek batch ZIP exports verified`);
   } finally {
     await context.close();
     rmSync(userDataDir, { recursive: true, force: true });
@@ -147,6 +150,7 @@ async function installMockRoutes(page) {
     await page.route(platformCase.route, async (route) => {
       if (platformCase.id === "chatgpt" && await fulfillChatGptApiRoute(route)) return;
       if (platformCase.id === "claude" && await fulfillClaudeApiRoute(route)) return;
+      if (platformCase.id === "deepseek" && await fulfillDeepSeekApiRoute(route)) return;
 
       await route.fulfill({
         status: 200,
@@ -156,6 +160,50 @@ async function installMockRoutes(page) {
       });
     });
   }
+}
+
+async function fulfillDeepSeekApiRoute(route) {
+  const url = new URL(route.request().url());
+
+  if (url.pathname === "/api/v0/chat_session/fetch_page") {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        data: {
+          biz_data: {
+            chat_sessions: [
+              {
+                id: "deepseek-batch-1",
+                title: "DeepSeek Smoke One",
+                updated_at: "2026-06-08T02:00:05Z",
+                message_count: 2
+              },
+              {
+                id: "deepseek-batch-2",
+                title: "DeepSeek Smoke Two",
+                updated_at: "2026-06-08T02:00:06Z",
+                message_count: 2
+              }
+            ]
+          }
+        }
+      })
+    });
+    return true;
+  }
+
+  if (url.pathname === "/api/v0/chat/history_messages") {
+    const id = url.searchParams.get("chat_session_id") || "deepseek-batch-1";
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(deepSeekConversationPayload(id, id === "deepseek-batch-2" ? "DeepSeek Smoke Two" : "DeepSeek Smoke One"))
+    });
+    return true;
+  }
+
+  return false;
 }
 
 async function fulfillClaudeApiRoute(route) {
@@ -438,5 +486,59 @@ function claudeConversationPayload(id, title) {
         content: [{ type: "text", text: `Answer for ${title}` }]
       }
     ]
+  };
+}
+
+function deepSeekConversationPayload(id, title) {
+  return {
+    data: {
+      biz_data: {
+        chat_session: {
+          id,
+          title,
+          inserted_at: "2026-06-08T02:00:00Z",
+          updated_at: "2026-06-08T02:00:05Z"
+        },
+        chat_messages: [
+          {
+            message_id: `${id}-request`,
+            fragments: [
+              {
+                id: `${id}-request-fragment`,
+                type: "REQUEST",
+                content: `Question for ${title}`
+              }
+            ]
+          },
+          {
+            message_id: `${id}-assistant`,
+            role: "ASSISTANT",
+            fragments: [
+              {
+                id: `${id}-think-fragment`,
+                type: "THINK",
+                content: `Thinking about ${title}`
+              },
+              {
+                id: `${id}-response-fragment`,
+                type: "RESPONSE",
+                content: `Answer for ${title} [citation:1]`
+              },
+              {
+                id: `${id}-search-fragment`,
+                type: "SEARCH",
+                results: [
+                  {
+                    cite_index: 1,
+                    title: "Smoke Source",
+                    url: "https://example.com/deepseek-smoke"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    }
   };
 }
