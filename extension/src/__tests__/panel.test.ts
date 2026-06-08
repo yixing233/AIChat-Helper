@@ -42,10 +42,22 @@ describe("createPanel", () => {
 
   it("renders batch export action when supported", () => {
     const panel = createPanel({ platformName: "ChatGPT", canBatchExport: true, batchLimit: 35 });
+    const refreshButton = panel.querySelector<HTMLButtonElement>(".ai-chat-helper-panel__action--refresh");
+    const exportButton = panel.querySelector<HTMLButtonElement>(".ai-chat-helper-panel__action--export");
+    const batchButton = panel.querySelector<HTMLButtonElement>(".ai-chat-helper-panel__action--batch");
 
-    expect(panel.querySelector(".ai-chat-helper-panel__action--refresh")).toBeTruthy();
-    expect(panel.querySelector(".ai-chat-helper-panel__action--export")).toBeTruthy();
-    expect(panel.querySelector(".ai-chat-helper-panel__action--batch")).toBeTruthy();
+    expect(refreshButton).toBeTruthy();
+    expect(refreshButton?.getAttribute("aria-label")).toBe("Refresh nodes");
+    expect(refreshButton?.getAttribute("title")).toBe("Refresh nodes");
+    expect(refreshButton?.querySelector("svg")).toBeTruthy();
+    expect(exportButton).toBeTruthy();
+    expect(exportButton?.getAttribute("aria-label")).toBe("Export current conversation");
+    expect(exportButton?.getAttribute("title")).toBe("Export current conversation");
+    expect(exportButton?.querySelector("svg")).toBeTruthy();
+    expect(batchButton).toBeTruthy();
+    expect(batchButton?.getAttribute("aria-label")).toBe("Batch export conversations");
+    expect(batchButton?.getAttribute("title")).toBe("Batch export conversations");
+    expect(batchButton?.querySelector("svg")).toBeTruthy();
     expect(panel.querySelector("[data-ai-chat-helper-batch-export]")).toBeTruthy();
     expect(panel.querySelector<HTMLInputElement>("[data-ai-chat-helper-batch-limit]")?.value).toBe("35");
   });

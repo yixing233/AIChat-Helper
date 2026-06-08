@@ -15,6 +15,34 @@ export interface PanelOptions {
   panelPosition?: PanelPosition | null;
 }
 
+const refreshIcon = `
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+    <path d="M21 2v6h-6"></path>
+    <path d="M3 12a9 9 0 0 1 15-6.7L21 8"></path>
+    <path d="M3 22v-6h6"></path>
+    <path d="M21 12a9 9 0 0 1-15 6.7L3 16"></path>
+  </svg>
+`;
+
+const exportIcon = `
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+    <polyline points="7 10 12 15 17 10"></polyline>
+    <line x1="12" y1="15" x2="12" y2="3"></line>
+  </svg>
+`;
+
+const batchIcon = `
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+    <path d="M8 6h13"></path>
+    <path d="M8 12h13"></path>
+    <path d="M8 18h13"></path>
+    <path d="M3 6h.01"></path>
+    <path d="M3 12h.01"></path>
+    <path d="M3 18h.01"></path>
+  </svg>
+`;
+
 export function createPanel(options: PanelOptions): HTMLElement {
   const root = document.createElement("aside");
   root.id = "ai-chat-helper-panel";
@@ -61,9 +89,9 @@ export function createPanel(options: PanelOptions): HTMLElement {
     <div class="ai-chat-helper-panel__nodes" data-ai-chat-helper-nodes></div>
     <div class="ai-chat-helper-panel__status" data-ai-chat-helper-status aria-live="polite"></div>
     <footer class="ai-chat-helper-panel__actions">
-      <button type="button" class="ai-chat-helper-panel__action--refresh" data-ai-chat-helper-refresh>Refresh</button>
-      <button type="button" class="ai-chat-helper-panel__action--export" data-ai-chat-helper-export>Export</button>
-      ${options.canBatchExport ? "<button type=\"button\" class=\"ai-chat-helper-panel__action--batch\" data-ai-chat-helper-batch-export>Batch</button>" : ""}
+      <button type="button" class="ai-chat-helper-panel__action--refresh" title="Refresh nodes" aria-label="Refresh nodes" data-ai-chat-helper-refresh>${refreshIcon}</button>
+      <button type="button" class="ai-chat-helper-panel__action--export" title="Export current conversation" aria-label="Export current conversation" data-ai-chat-helper-export>${exportIcon}</button>
+      ${options.canBatchExport ? `<button type="button" class="ai-chat-helper-panel__action--batch" title="Batch export conversations" aria-label="Batch export conversations" data-ai-chat-helper-batch-export>${batchIcon}</button>` : ""}
     </footer>
   `;
   if (options.panelPosition) {

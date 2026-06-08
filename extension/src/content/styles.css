@@ -263,8 +263,18 @@ body.ai-chat-helper-hide-qwen-ads [class*="container-3D4Pp"] {
   flex: 1;
   min-width: 0;
   min-height: 38px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   background: transparent;
   border-radius: 10px;
+}
+
+.ai-chat-helper-panel__actions svg {
+  display: block;
+  width: 16px;
+  height: 16px;
+  flex: none;
 }
 
 .ai-chat-helper-panel__action--refresh {

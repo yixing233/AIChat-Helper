@@ -460,7 +460,8 @@ async function assertPanelStyle(page, expectedName) {
       exportColor: exportStyle?.color || "",
       exportBorderColor: exportStyle?.borderColor || "",
       batchBackground: batchStyle?.backgroundColor || "",
-      batchColor: batchStyle?.color || ""
+      batchColor: batchStyle?.color || "",
+      actionIconCount: panel.querySelectorAll(".ai-chat-helper-panel__actions button svg").length
     };
   }, expectedName);
 
@@ -496,6 +497,9 @@ async function assertPanelStyle(page, expectedName) {
   }
   if (style.batchColor !== "rgb(255, 255, 255)" || style.batchBackground !== "rgb(15, 118, 110)") {
     throw new Error(`Expected extension batch action to keep high-contrast styling, got ${style.batchColor} / ${style.batchBackground}.`);
+  }
+  if (style.actionIconCount < 3) {
+    throw new Error(`Expected Tampermonkey-style icon action buttons, got ${style.actionIconCount} icons.`);
   }
 }
 
