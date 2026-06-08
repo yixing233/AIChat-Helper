@@ -40,4 +40,12 @@ describe("exportSnapshot", () => {
     expect(files[0].mimeType).toBe("application/zip");
     expect(files[0].content).toBeInstanceOf(Uint8Array);
   });
+
+  it("keeps duplicate batch conversation titles in distinct folders", async () => {
+    const [file] = await exportBatchSnapshots([snapshot, { ...snapshot, conversationId: "conv-2" }], "markdown");
+    const text = new TextDecoder().decode(file.content as Uint8Array);
+
+    expect(text).toContain("Zip Chat - conv-1/Zip Chat.md");
+    expect(text).toContain("Zip Chat - conv-2/Zip Chat.md");
+  });
 });

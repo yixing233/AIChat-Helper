@@ -27,7 +27,9 @@ export async function exportBatchSnapshots(snapshots: ConversationSnapshot[], fo
   const entries: ExportFile[] = [];
 
   for (const snapshot of snapshots) {
-    const folder = safeFileName(snapshot.title || snapshot.conversationId);
+    const folder = safeFileName(snapshot.title
+      ? `${snapshot.title} - ${snapshot.conversationId}`
+      : snapshot.conversationId);
     const files = format === "zip"
       ? [
         ...(await exporters.html.export(snapshot)),
