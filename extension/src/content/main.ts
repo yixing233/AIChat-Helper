@@ -1,5 +1,8 @@
+import { exporters, type ExportFormat } from "../exporters";
 import { isInjectedMessage } from "../messaging/bridge";
+import { sendBackgroundRequest } from "../messaging/bridge";
 import { getPlatformAdapter } from "../platforms";
+import type { ConversationSnapshot } from "../shared/types";
 import { createCapturedEventBuffer } from "./captured-event-buffer";
 import { renderNodeList } from "../ui/controls/node-list";
 import { openExportModal } from "../ui/modals/export-modal";
@@ -30,7 +33,38 @@ function mountPanel(): void {
 
   refreshNodes();
   panel.querySelector("[data-ai-chat-helper-refresh]")?.addEventListener("click", refreshNodes);
-  panel.querySelector("[data-ai-chat-helper-export]")?.addEventListener("click", openExportModal);
+  panel.querySelector("[data-ai-chat-helper-export]")?.addEventListener("click", () => {
+    openExportModal((format) => {
+      void exportCurrentConversation(format);
+    });
+  });
+}
+
+async function exportCurrentConversation(format: ExportFormat): Promise<void> {
+  if (!adapter) return;
+  const nodes = adapter.scanDomNodes(document);
+  const snapshot: ConversationSnapshot = {
+    platformId: adapter.id,
+    conversationId: adapter.getConversationId(),
+    title: document.title || `${adapter.name} Conversation`,
+    attachments: [],
+    messages: nodes.map((node) => ({
+      id: node.id,
+      role: node.role || "assistant",
+      text: node.title
+    }))
+  };
+  const files = await exporters[format].export(snapshot);
+
+  for (const file of files) {
+    await sendBackgroundRequest({
+      type: "download-file",
+      payload: {
+        ...file,
+        fileName: file.path
+      }
+    });
+  }
 }
 
 if (adapter) {
