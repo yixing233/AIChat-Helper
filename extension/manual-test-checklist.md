@@ -19,8 +19,11 @@ Build the extension with `npm run build`, then load `E:\Code\AI-Chat-Nodes\exten
 - [ ] ChatGPT page shows the Batch action.
 - [ ] Claude page shows the Batch action when `lastActiveOrg` is available.
 - [ ] DeepSeek page shows the Batch action.
+- [ ] Tongyi Qianwen page shows the Batch action.
+- [ ] Doubao page shows the Batch action.
 - [ ] ChatGPT Batch export downloads one ZIP containing recent conversations.
 - [ ] Claude Batch export downloads one ZIP containing recent conversations.
 - [ ] DeepSeek Batch export downloads one ZIP containing recent conversations.
-- [ ] Tongyi Qianwen and Doubao do not show Batch until list/detail adapters are added.
+- [ ] Tongyi Qianwen Batch export downloads one ZIP containing recent conversations.
+- [ ] Doubao Batch export downloads one ZIP containing recent conversations.
 - [ ] Extension service worker logs no uncaught errors during export.

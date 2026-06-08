@@ -25,13 +25,14 @@ The extension currently includes:
 - an in-page panel with current-conversation export
 - HTML, Markdown, TXT, and stored ZIP export modules
 - captured API hydration for current conversations on ChatGPT, Claude, Tongyi Qianwen, Doubao, and DeepSeek
-- a minimal batch export entry point for adapters that expose conversation list/detail APIs
+- a minimal batch export entry point for all supported adapters that expose conversation list/detail APIs
 
 Current batch coverage:
 
 - ChatGPT: recent conversation list and detail fetching through `/backend-api/conversations` and `/backend-api/conversation/:id`
 - Claude: recent conversation list and detail fetching through `/api/organizations/{org}/chat_conversations_v2` and `/chat_conversations/:id`
 - DeepSeek: recent conversation list and detail fetching through `/api/v0/chat_session/fetch_page` and `/api/v0/chat/history_messages`
-- Tongyi Qianwen and Doubao: current conversation export only until list/detail adapters are added
+- Tongyi Qianwen: recent conversation list and detail fetching through `https://chat.qwen.ai/api/v2/chats/` and `https://chat2-api.qianwen.com/api/v1/session/msg/list`
+- Doubao: recent conversation list and detail fetching through `/samantha/chat/completion/list` and `/samantha/im/chain/single`
 
 The old Tampermonkey userscript remains as migration reference material.
