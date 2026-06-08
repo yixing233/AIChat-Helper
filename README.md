@@ -28,6 +28,10 @@ Claude 导出已做专项适配：
 
 ## 安装教程（Tampermonkey）
 
+## 浏览器扩展迁移
+
+项目正在从 Tampermonkey 用户脚本迁移到 Chrome / Microsoft Edge Manifest V3 浏览器扩展。扩展源码位于 `extension/`，新的功能开发以扩展版为主；根目录的 `AIChat-Helper.user.js` 保留为迁移参考。
+
 ### 1. 安装 Tampermonkey 扩展
 
 1. 通过对应浏览器商店安装 Tampermonkey：
