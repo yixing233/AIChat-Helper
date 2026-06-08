@@ -389,6 +389,130 @@ body.ai-chat-helper-hide-qwen-ads [class*="container-3D4Pp"] {
   color: #111827 !important;
 }
 
+.ai-chat-helper-update-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 2147483647;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgb(15 23 42 / 40%);
+}
+
+.ai-chat-helper-update-modal__box {
+  width: 100%;
+  max-width: 520px;
+  padding: 20px 20px 16px;
+  background: #fff;
+  border-radius: 16px;
+  box-shadow: 0 20px 60px rgb(15 23 42 / 22%);
+  color: #0f172a;
+}
+
+.ai-chat-helper-update-modal__title {
+  color: #0f172a;
+  font-size: 18px;
+  font-weight: 800;
+}
+
+.ai-chat-helper-update-modal__meta {
+  margin-top: 12px;
+  color: #334155;
+  font-size: 13px;
+  line-height: 1.8;
+}
+
+.ai-chat-helper-update-modal__section {
+  margin-top: 14px;
+}
+
+.ai-chat-helper-update-modal__label {
+  margin-bottom: 8px;
+  color: #475569;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.ai-chat-helper-update-modal__log {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 260px;
+  overflow: auto;
+  padding: 10px;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  background: #f8fafc;
+}
+
+.ai-chat-helper-update-modal__entry {
+  padding: 10px 12px;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  background: #fff;
+}
+
+.ai-chat-helper-update-modal__entry-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.ai-chat-helper-update-modal__entry-head span {
+  color: #0f172a;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.ai-chat-helper-update-modal__entry-head small,
+.ai-chat-helper-update-modal__empty {
+  color: #64748b;
+  font-size: 11px;
+}
+
+.ai-chat-helper-update-modal__entry ul {
+  margin: 0;
+  padding-left: 18px;
+  color: #334155;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.ai-chat-helper-update-modal__entry li {
+  margin: 0 0 6px;
+}
+
+.ai-chat-helper-update-modal__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 18px;
+}
+
+.ai-chat-helper-update-modal__actions button {
+  min-width: 86px;
+  height: 36px;
+  border-radius: 10px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.ai-chat-helper-update-modal__cancel {
+  border: 1px solid #cbd5e1;
+  background: #fff;
+  color: #475569;
+}
+
+.ai-chat-helper-update-modal__confirm {
+  border: 1px solid #2563eb;
+  background: #2563eb;
+  color: #fff;
+}
+
 .ai-chat-helper-export-modal {
   position: fixed;
   inset: 0;

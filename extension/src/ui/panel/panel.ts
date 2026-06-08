@@ -161,3 +161,19 @@ export function setPanelStatus(panel: HTMLElement, message: string): void {
   status.textContent = message;
   status.hidden = message.length === 0;
 }
+
+export function setPanelVersionUpdateBadge(panel: HTMLElement, latestVersion: string): void {
+  const badge = panel.querySelector<HTMLElement>("[data-ai-chat-helper-version-badge]");
+  const trigger = panel.querySelector<HTMLElement>("[data-ai-chat-helper-version]");
+  if (!badge || !trigger) return;
+
+  const currentVersion = trigger.textContent?.match(/v([0-9][^\s]*)/)?.[1] || "0.0.0";
+  const availableVersion = String(latestVersion || "").trim();
+  const hasUpdate = availableVersion.length > 0;
+
+  badge.style.opacity = hasUpdate ? "1" : "0";
+  badge.style.transform = hasUpdate ? "scale(1)" : "scale(.7)";
+  trigger.title = hasUpdate
+    ? `New version v${availableVersion} available. Click to update.`
+    : `Current version v${currentVersion}. Click to check updates.`;
+}

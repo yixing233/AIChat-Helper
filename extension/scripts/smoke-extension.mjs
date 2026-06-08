@@ -57,12 +57,14 @@ async function main() {
     });
     await installMockRoutes(page);
     await installQwenApiRoutes(page);
+    await installUpdateRoutes(context);
 
     for (const platformCase of platformCases) {
       await page.goto(platformCase.url, { waitUntil: "domcontentloaded" });
       await assertPanel(page, platformCase.id, platformCase.name, expectedExtensionVersion);
       await assertToggleVisibility(page, platformCase);
       if (platformCase.id === "chatgpt") {
+        await assertVersionUpdateCheck(page, expectedExtensionVersion);
         await assertCurrentHtmlExport(page, context);
         await assertBatchZipExport(page, context, { selectedCount: 3, exportedCount: 2, failedCount: 1 });
       }
@@ -184,6 +186,37 @@ async function installQwenApiRoutes(page) {
       contentType: "application/json",
       headers: qwenCorsHeaders(),
       body: JSON.stringify({ error: "Unhandled Qwen smoke route" })
+    });
+  });
+}
+
+async function installUpdateRoutes(context) {
+  await context.route("https://raw.githubusercontent.com/yixing233/AIChat-Helper/master/AIChat-Helper.user.js**", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "text/plain",
+      body: [
+        "// ==UserScript==",
+        "// @name AI Chat Helper",
+        "// @version 9.9.9",
+        "// ==/UserScript=="
+      ].join("\n")
+    });
+  });
+
+  await context.route("https://raw.githubusercontent.com/yixing233/AIChat-Helper/master/update.json**", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        versions: [
+          {
+            version: "9.9.9",
+            date: "2026-06-08",
+            changes: ["Smoke update modal parity"]
+          }
+        ]
+      })
     });
   });
 }
@@ -618,6 +651,32 @@ async function assertCurrentHtmlExport(page, context) {
   if (!chromeDownload) {
     throw new Error("Current HTML export reported success but no completed Chrome HTML download record was observed.");
   }
+}
+
+async function assertVersionUpdateCheck(page, expectedExtensionVersion) {
+  await page.locator("[data-ai-chat-helper-version]").click();
+  await page.waitForSelector("#ai-chat-helper-update-modal", { timeout: 10000 });
+
+  const modalText = await page.locator("#ai-chat-helper-update-modal").innerText();
+  if (!modalText.includes("Update available")
+    || !modalText.includes(`Current version: ${expectedExtensionVersion}`)
+    || !modalText.includes("Latest version: 9.9.9")
+    || !modalText.includes("Smoke update modal parity")) {
+    throw new Error(`Expected userscript-style update modal content, got: ${modalText}`);
+  }
+
+  const badgeStyle = await page.locator("[data-ai-chat-helper-version-badge]").evaluate((element) => {
+    return {
+      opacity: element.style.opacity,
+      inlineTransform: element.style.transform
+    };
+  });
+  if (badgeStyle.opacity !== "1" || badgeStyle.inlineTransform !== "scale(1)") {
+    throw new Error(`Expected version badge to be active, got opacity ${badgeStyle.opacity} transform ${badgeStyle.inlineTransform}.`);
+  }
+
+  await page.locator("[data-ai-chat-helper-update-cancel]").click();
+  await page.waitForSelector("#ai-chat-helper-update-modal", { state: "detached", timeout: 10000 });
 }
 
 async function assertBatchZipExport(page, context, expectation) {

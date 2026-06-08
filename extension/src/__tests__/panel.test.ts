@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createPanel, setPanelStatus } from "../ui/panel/panel";
+import { createPanel, setPanelStatus, setPanelVersionUpdateBadge } from "../ui/panel/panel";
 
 describe("createPanel", () => {
   it("creates one root panel element for a platform", () => {
@@ -103,5 +103,23 @@ describe("createPanel", () => {
     setPanelStatus(panel, "Exporting recent conversations...");
 
     expect(status?.textContent).toBe("Exporting recent conversations...");
+  });
+
+  it("toggles the userscript-style version update badge", () => {
+    const panel = createPanel({ platformName: "ChatGPT", extensionVersion: "3.0.0" });
+    const versionButton = panel.querySelector<HTMLElement>("[data-ai-chat-helper-version]");
+    const badge = panel.querySelector<HTMLElement>("[data-ai-chat-helper-version-badge]");
+
+    setPanelVersionUpdateBadge(panel, "3.1.0");
+
+    expect(badge?.style.opacity).toBe("1");
+    expect(badge?.style.transform).toBe("scale(1)");
+    expect(versionButton?.title).toBe("New version v3.1.0 available. Click to update.");
+
+    setPanelVersionUpdateBadge(panel, "");
+
+    expect(badge?.style.opacity).toBe("0");
+    expect(badge?.style.transform).toBe("scale(.7)");
+    expect(versionButton?.title).toBe("Current version v3.0.0. Click to check updates.");
   });
 });

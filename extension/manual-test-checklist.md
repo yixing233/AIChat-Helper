@@ -11,6 +11,7 @@ Build the extension with `npm run build`, then load `E:\Code\AI-Chat-Nodes\exten
 - [ ] Doubao page shows the AI Chat Helper panel.
 - [ ] DeepSeek page shows the AI Chat Helper panel.
 - [ ] Main panel visually matches the Tampermonkey settings popup: narrow glass panel, 12px radius, header version marker, platform favicon card, custom switch controls, GitHub project action, and red/blue icon actions.
+- [ ] Clicking the header version marker checks for updates, lights the red badge when a newer version is found, and opens the Tampermonkey-style update dialog.
 - [ ] Node list renders on a loaded conversation page.
 - [ ] Clicking a node scrolls the matching conversation message into view.
 - [ ] Search filters the node list by typed text.

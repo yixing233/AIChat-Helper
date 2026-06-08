@@ -7,11 +7,18 @@ import { collectBatchSnapshots } from "./batch-export";
 import { createCapturedEventBuffer } from "./captured-event-buffer";
 import { createConversationSnapshot } from "./conversation-snapshot";
 import { downloadExportFiles } from "./export-downloads";
+import {
+  getUpdateLogEntriesBetweenVersions,
+  parseScriptVersionFromSource,
+  summarizeVersionCheck,
+  type ChangelogEntry
+} from "./version-check";
 import { exportBatchSnapshots, exportSnapshot, type SnapshotExportFormat } from "../exporters/snapshot-export";
 import { filterConversationNodes, getNextSearchIndex, renderNodeList, scrollNodeIntoView } from "../ui/controls/node-list";
 import { openBatchExportModal, openExportModal } from "../ui/modals/export-modal";
+import { openVersionUpdateModal } from "../ui/modals/version-update-modal";
 import { attachPanelDrag } from "../ui/panel/drag";
-import { createPanel, setPanelStatus } from "../ui/panel/panel";
+import { createPanel, setPanelStatus, setPanelVersionUpdateBadge } from "../ui/panel/panel";
 import type { ConversationNode, ConversationSummary } from "../shared/types";
 
 function injectPageHooks(): void {
@@ -27,6 +34,9 @@ const adapter = getPlatformAdapter(new URL(window.location.href));
 const capturedEvents = createCapturedEventBuffer();
 const settingsStorage = createExtensionStorage("settings");
 const PROJECT_REPO_URL = "https://github.com/yixing233/AIChat-Helper";
+const SCRIPT_UPDATE_URL = "https://raw.githubusercontent.com/yixing233/AIChat-Helper/master/AIChat-Helper.user.js";
+const SCRIPT_CHANGELOG_URL = "https://raw.githubusercontent.com/yixing233/AIChat-Helper/master/update.json";
+const SCRIPT_DOWNLOAD_URL = "https://github.com/yixing233/AIChat-Helper/raw/master/AIChat-Helper.user.js";
 
 async function mountPanel(): Promise<void> {
   if (!adapter || document.getElementById("ai-chat-helper-panel")) return;
@@ -178,6 +188,9 @@ async function mountPanel(): Promise<void> {
   panel.querySelector("[data-ai-chat-helper-batch-export]")?.addEventListener("click", () => {
     void openRecentConversationPicker(panel, batchLimit);
   });
+  panel.querySelector("[data-ai-chat-helper-version]")?.addEventListener("click", () => {
+    void checkForExtensionUpdate(panel, extensionVersion);
+  });
   panel.querySelector("[data-ai-chat-helper-github]")?.addEventListener("click", () => {
     window.open(PROJECT_REPO_URL, "_blank", "noopener,noreferrer");
   });
@@ -223,6 +236,66 @@ async function getExtensionVersion(): Promise<string> {
   } catch {
     return "0.0.0";
   }
+}
+
+async function checkForExtensionUpdate(panel: HTMLElement, currentVersion: string): Promise<void> {
+  setPanelStatus(panel, "Checking for updates...");
+
+  try {
+    const latestSource = await requestRemoteText(`${SCRIPT_UPDATE_URL}?t=${Date.now()}`);
+    const latestVersion = parseScriptVersionFromSource(latestSource);
+    const summary = summarizeVersionCheck(currentVersion, latestVersion);
+
+    if (!summary.hasUpdate) {
+      setPanelVersionUpdateBadge(panel, "");
+      setPanelStatus(panel, `Already latest version v${summary.currentVersion}.`);
+      return;
+    }
+
+    setPanelVersionUpdateBadge(panel, summary.latestVersion);
+    setPanelStatus(panel, `New version v${summary.latestVersion} available.`);
+    openVersionUpdateModal({
+      currentVersion: summary.currentVersion,
+      latestVersion: summary.latestVersion,
+      changelogEntries: await fetchUpdateChangelog(summary.currentVersion, summary.latestVersion),
+      onUpdate: () => {
+        window.open(SCRIPT_DOWNLOAD_URL, "_blank", "noopener,noreferrer");
+      }
+    });
+  } catch (error) {
+    console.warn("[AI Chat Helper] update check failed", error);
+    setPanelStatus(panel, `Update check failed: ${getErrorMessage(error)}`);
+  }
+}
+
+async function fetchUpdateChangelog(currentVersion: string, latestVersion: string): Promise<ChangelogEntry[]> {
+  try {
+    const text = await requestRemoteText(`${SCRIPT_CHANGELOG_URL}?t=${Date.now()}`);
+    return getUpdateLogEntriesBetweenVersions(JSON.parse(text), currentVersion, latestVersion);
+  } catch (error) {
+    console.warn("[AI Chat Helper] update changelog fetch failed", error);
+    return [];
+  }
+}
+
+async function requestRemoteText(url: string): Promise<string> {
+  const response = await sendBackgroundRequest<{
+    status: number;
+    statusText: string;
+    text: string;
+  }>({
+    type: "http-request",
+    payload: {
+      url,
+      method: "GET"
+    }
+  });
+
+  if (!response.ok) throw new Error(response.error);
+  if (response.value.status < 200 || response.value.status >= 300) {
+    throw new Error(`HTTP ${response.value.status || "ERR"}`);
+  }
+  return response.value.text;
 }
 
 function applyPlatformSettings(settings: ReturnType<typeof normalizeExtensionSettings>): void {
