@@ -6,6 +6,7 @@ export interface PanelOptions {
   platformName: string;
   canBatchExport?: boolean;
   visibleLimit?: number;
+  batchLimit?: number;
   readingLineOffset?: number;
   dotGap?: number;
   removeQwenAds?: boolean;
@@ -34,6 +35,12 @@ export function createPanel(options: PanelOptions): HTMLElement {
       <span>Visible</span>
       <input type="number" min="1" max="100" step="1" value="${Number(options.visibleLimit || 20)}" data-ai-chat-helper-visible-limit />
     </label>
+    ${options.canBatchExport ? `
+      <label class="ai-chat-helper-panel__setting">
+        <span>Batch limit</span>
+        <input type="number" min="1" max="100" step="1" value="${Number(options.batchLimit || 20)}" data-ai-chat-helper-batch-limit />
+      </label>
+    ` : ""}
     <label class="ai-chat-helper-panel__setting">
       <span>Reading line</span>
       <input type="number" min="10" max="500" step="10" value="${Number(options.readingLineOffset || 150)}" data-ai-chat-helper-reading-line />

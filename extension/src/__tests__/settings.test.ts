@@ -11,6 +11,12 @@ describe("extension settings", () => {
     expect(normalizeExtensionSettings({ visibleLimit: 500 }).visibleLimit).toBe(100);
   });
 
+  it("clamps batch export limit to a practical range", () => {
+    expect(normalizeExtensionSettings({ batchLimit: 0 }).batchLimit).toBe(1);
+    expect(normalizeExtensionSettings({ batchLimit: 500 }).batchLimit).toBe(100);
+    expect(normalizeExtensionSettings({ batchLimit: "35" }).batchLimit).toBe(35);
+  });
+
   it("accepts numeric strings from legacy userscript storage", () => {
     expect(normalizeExtensionSettings({ visibleLimit: "25" }).visibleLimit).toBe(25);
   });

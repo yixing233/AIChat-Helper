@@ -12,8 +12,8 @@
   z-index: 2147483647;
   width: 260px;
   max-height: min(620px, calc(100vh - 128px));
-  display: grid;
-  grid-template-rows: auto auto auto auto auto 1fr auto auto;
+  display: flex;
+  flex-direction: column;
   background: var(--ai-chat-helper-bg);
   color: var(--ai-chat-helper-text);
   border: 1px solid var(--ai-chat-helper-border);
@@ -32,6 +32,8 @@
 }
 
 .ai-chat-helper-panel__nodes {
+  flex: 1 1 auto;
+  min-height: 0;
   overflow: auto;
   padding: 4px 8px;
 }

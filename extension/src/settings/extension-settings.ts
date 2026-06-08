@@ -1,5 +1,6 @@
 export interface ExtensionSettings {
   visibleLimit: number;
+  batchLimit: number;
   readingLineOffset: number;
   dotGap: number;
   removeQwenAds: boolean;
@@ -8,6 +9,7 @@ export interface ExtensionSettings {
 
 export const DEFAULT_EXTENSION_SETTINGS: ExtensionSettings = {
   visibleLimit: 20,
+  batchLimit: 20,
   readingLineOffset: 150,
   dotGap: 36,
   removeQwenAds: false,
@@ -31,6 +33,7 @@ export const LEGACY_SETTING_MIGRATIONS: Array<[string, keyof ExtensionSettings]>
 export function normalizeExtensionSettings(value: Partial<Record<keyof ExtensionSettings, unknown>>): ExtensionSettings {
   return {
     visibleLimit: normalizeVisibleLimit(value.visibleLimit),
+    batchLimit: normalizeBatchLimit(value.batchLimit),
     readingLineOffset: normalizeReadingLineOffset(value.readingLineOffset),
     dotGap: normalizeDotGap(value.dotGap),
     removeQwenAds: normalizeBoolean(value.removeQwenAds, DEFAULT_EXTENSION_SETTINGS.removeQwenAds),
@@ -41,6 +44,12 @@ export function normalizeExtensionSettings(value: Partial<Record<keyof Extension
 function normalizeVisibleLimit(value: unknown): number {
   const parsed = Number(value ?? DEFAULT_EXTENSION_SETTINGS.visibleLimit);
   if (!Number.isFinite(parsed)) return DEFAULT_EXTENSION_SETTINGS.visibleLimit;
+  return Math.max(1, Math.min(Math.round(parsed), 100));
+}
+
+function normalizeBatchLimit(value: unknown): number {
+  const parsed = Number(value ?? DEFAULT_EXTENSION_SETTINGS.batchLimit);
+  if (!Number.isFinite(parsed)) return DEFAULT_EXTENSION_SETTINGS.batchLimit;
   return Math.max(1, Math.min(Math.round(parsed), 100));
 }
 

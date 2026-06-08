@@ -14,6 +14,7 @@ describe("createPanel", () => {
     expect(panel.querySelector("[data-ai-chat-helper-visible-limit]")).toBeTruthy();
     expect(panel.querySelector("[data-ai-chat-helper-reading-line]")).toBeTruthy();
     expect(panel.querySelector("[data-ai-chat-helper-dot-gap]")).toBeTruthy();
+    expect(panel.querySelector("[data-ai-chat-helper-batch-limit]")).toBeFalsy();
     expect(panel.querySelector("[data-ai-chat-helper-nodes]")).toBeTruthy();
     expect(panel.querySelector("[data-ai-chat-helper-export]")).toBeTruthy();
     expect(panel.querySelector("[data-ai-chat-helper-batch-export]")).toBeFalsy();
@@ -38,9 +39,10 @@ describe("createPanel", () => {
   });
 
   it("renders batch export action when supported", () => {
-    const panel = createPanel({ platformName: "ChatGPT", canBatchExport: true });
+    const panel = createPanel({ platformName: "ChatGPT", canBatchExport: true, batchLimit: 35 });
 
     expect(panel.querySelector("[data-ai-chat-helper-batch-export]")).toBeTruthy();
+    expect(panel.querySelector<HTMLInputElement>("[data-ai-chat-helper-batch-limit]")?.value).toBe("35");
   });
 
   it("renders and updates export status", () => {

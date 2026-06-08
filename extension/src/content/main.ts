@@ -35,6 +35,7 @@ async function mountPanel(): Promise<void> {
     platformName: adapter.name,
     canBatchExport,
     visibleLimit: settings.visibleLimit,
+    batchLimit: settings.batchLimit,
     readingLineOffset: settings.readingLineOffset,
     dotGap: settings.dotGap,
     removeQwenAds: settings.removeQwenAds,
@@ -50,6 +51,7 @@ async function mountPanel(): Promise<void> {
   const searchPrevButton = panel.querySelector<HTMLButtonElement>("[data-ai-chat-helper-search-prev]");
   const searchNextButton = panel.querySelector<HTMLButtonElement>("[data-ai-chat-helper-search-next]");
   const visibleLimitInput = panel.querySelector<HTMLInputElement>("[data-ai-chat-helper-visible-limit]");
+  const batchLimitInput = panel.querySelector<HTMLInputElement>("[data-ai-chat-helper-batch-limit]");
   const readingLineInput = panel.querySelector<HTMLInputElement>("[data-ai-chat-helper-reading-line]");
   const dotGapInput = panel.querySelector<HTMLInputElement>("[data-ai-chat-helper-dot-gap]");
   const removeQwenAdsInput = panel.querySelector<HTMLInputElement>("[data-ai-chat-helper-remove-qwen-ads]");
@@ -58,6 +60,7 @@ async function mountPanel(): Promise<void> {
   let currentSearchResults: ConversationNode[] = [];
   let currentSearchIndex = -1;
   let visibleLimit = settings.visibleLimit;
+  let batchLimit = settings.batchLimit;
   let readingLineOffset = settings.readingLineOffset;
   let dotGap = settings.dotGap;
 
@@ -100,6 +103,15 @@ async function mountPanel(): Promise<void> {
     visibleLimitInput.value = String(visibleLimit);
     renderCurrentNodes();
     void settingsStorage.set("visibleLimit", visibleLimit).catch((error) => {
+      console.error("[AI Chat Helper] settings save failed", error);
+      setPanelStatus(panel, `Settings save failed: ${getErrorMessage(error)}`);
+    });
+  });
+  batchLimitInput?.addEventListener("change", () => {
+    const nextSettings = normalizeExtensionSettings({ batchLimit: batchLimitInput.value });
+    batchLimit = nextSettings.batchLimit;
+    batchLimitInput.value = String(batchLimit);
+    void settingsStorage.set("batchLimit", batchLimit).catch((error) => {
       console.error("[AI Chat Helper] settings save failed", error);
       setPanelStatus(panel, `Settings save failed: ${getErrorMessage(error)}`);
     });
@@ -148,7 +160,7 @@ async function mountPanel(): Promise<void> {
   });
   panel.querySelector("[data-ai-chat-helper-batch-export]")?.addEventListener("click", () => {
     openExportModal((format) => {
-      void exportRecentConversations(format, panel);
+      void exportRecentConversations(format, panel, batchLimit);
     });
   });
 
@@ -230,12 +242,12 @@ async function exportCurrentConversation(format: SnapshotExportFormat, panel: HT
   }
 }
 
-async function exportRecentConversations(format: SnapshotExportFormat, panel: HTMLElement): Promise<void> {
+async function exportRecentConversations(format: SnapshotExportFormat, panel: HTMLElement, limit: number): Promise<void> {
   if (!adapter?.fetchConversationList || !adapter.fetchConversationDetail) return;
   setPanelStatus(panel, "Fetching recent conversations...");
 
   try {
-    const summaries = await adapter.fetchConversationList({ limit: 20 });
+    const summaries = await adapter.fetchConversationList({ limit });
     const snapshots = [];
 
     for (const [index, summary] of summaries.entries()) {
