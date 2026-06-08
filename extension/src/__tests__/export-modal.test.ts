@@ -68,4 +68,32 @@ describe("createExportModal", () => {
 
     expect(zipButton?.disabled).toBe(true);
   });
+
+  it("toggles all batch conversations and updates the selected count", () => {
+    const modal = createBatchExportModal([
+      { platformId: "deepseek", conversationId: "conv-1", title: "First" },
+      { platformId: "deepseek", conversationId: "conv-2", title: "Second" }
+    ], vi.fn());
+    const toggle = modal.querySelector<HTMLButtonElement>("[data-ai-chat-helper-batch-toggle]");
+    const status = modal.querySelector("[data-ai-chat-helper-batch-selection-status]");
+    const zipButton = modal.querySelector<HTMLButtonElement>("[data-format='zip']");
+    const checkboxes = modal.querySelectorAll<HTMLInputElement>("[data-ai-chat-helper-batch-item]");
+
+    expect(status?.textContent).toBe("2/2 selected");
+    expect(toggle?.textContent).toBe("Clear");
+
+    toggle?.click();
+
+    expect(Array.from(checkboxes).every((item) => !item.checked)).toBe(true);
+    expect(status?.textContent).toBe("0/2 selected");
+    expect(toggle?.textContent).toBe("Select all");
+    expect(zipButton?.disabled).toBe(true);
+
+    toggle?.click();
+
+    expect(Array.from(checkboxes).every((item) => item.checked)).toBe(true);
+    expect(status?.textContent).toBe("2/2 selected");
+    expect(toggle?.textContent).toBe("Clear");
+    expect(zipButton?.disabled).toBe(false);
+  });
 });

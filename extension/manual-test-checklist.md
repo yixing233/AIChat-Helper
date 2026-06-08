@@ -42,6 +42,8 @@ Build the extension with `npm run build`, then load `E:\Code\AI-Chat-Nodes\exten
 - [ ] Tongyi Qianwen page shows the Batch action.
 - [ ] Doubao page shows the Batch action.
 - [ ] Batch action opens a recent conversation list with conversations selected by default.
+- [ ] Batch list shows selected count and the Clear/Select all control updates all conversations.
+- [ ] Batch export modal visually matches the Tampermonkey batch window: wide centered panel, dark blurred overlay, pale header, white list card, blue selection controls.
 - [ ] Unchecking a conversation excludes it from the next batch export.
 - [ ] If one selected conversation fails to load, the batch export still downloads successful conversations and reports the failure count.
 - [ ] ChatGPT Batch export downloads one ZIP containing recent conversations.

@@ -29,8 +29,9 @@ The extension currently includes:
 - node search, reading line, draggable panel position, visible node limit, dot gap, and platform-specific settings controls
 - HTML, Markdown, TXT, and stored ZIP export modules, including attachment metadata and inline attachment content files when available
 - captured API hydration for current conversations on ChatGPT, Claude, Tongyi Qianwen, Doubao, and DeepSeek
-- selectable, configurable batch export for all supported adapters that expose conversation list/detail APIs
+- selectable, configurable batch export with selected-count and select-all controls for all supported adapters that expose conversation list/detail APIs
 - per-conversation batch export failure isolation, so successful conversations still download when a selected item fails
+- Tampermonkey-style batch export modal sizing, selection controls, list framing, and overlay treatment
 
 Current batch coverage:
 

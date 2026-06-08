@@ -199,7 +199,9 @@ body.ai-chat-helper-hide-qwen-ads [class*="container-3D4Pp"] {
   z-index: 2147483647;
   display: grid;
   place-items: center;
-  background: rgb(0 0 0 / 20%);
+  padding: 24px;
+  background: rgb(2 6 23 / 55%);
+  backdrop-filter: blur(3px);
 }
 
 .ai-chat-helper-export-modal__box {
@@ -213,8 +215,14 @@ body.ai-chat-helper-hide-qwen-ads [class*="container-3D4Pp"] {
 }
 
 .ai-chat-helper-export-modal__box--batch {
-  width: min(420px, calc(100vw - 32px));
-  max-height: min(680px, calc(100vh - 48px));
+  width: min(980px, 94vw);
+  height: min(82vh, 860px);
+  max-height: calc(100vh - 48px);
+  padding: 0;
+  gap: 0;
+  overflow: hidden;
+  border-radius: 16px;
+  box-shadow: 0 20px 60px rgb(0 0 0 / 25%);
 }
 
 .ai-chat-helper-export-modal__header {
@@ -222,31 +230,103 @@ body.ai-chat-helper-hide-qwen-ads [class*="container-3D4Pp"] {
   justify-content: space-between;
   gap: 12px;
   align-items: center;
+  padding: 16px 20px;
+  border-bottom: 1px solid #e5e7eb;
+  background: linear-gradient(180deg, #f8fafc 0%, #ffffff 100%);
+}
+
+.ai-chat-helper-export-modal__header > div {
+  display: grid;
+  gap: 3px;
+}
+
+.ai-chat-helper-export-modal__header strong {
+  color: #0f172a;
+  font-size: 16px;
+  font-weight: 700;
 }
 
 .ai-chat-helper-export-modal__header span,
+.ai-chat-helper-export-modal__batch-topline span,
 .ai-chat-helper-export-modal__batch-item small,
 .ai-chat-helper-export-modal__empty {
   color: #667085;
   font-size: 12px;
 }
 
+.ai-chat-helper-export-modal__close {
+  width: 32px;
+  min-height: 32px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: #e5e7eb;
+  color: #1f2937;
+  font-size: 16px;
+  line-height: 1;
+}
+
+.ai-chat-helper-export-modal__batch-body {
+  min-height: 0;
+  overflow: auto;
+  padding: 16px 20px;
+  background: #f8fafc;
+}
+
+.ai-chat-helper-export-modal__batch-card {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  background: #fff;
+}
+
+.ai-chat-helper-export-modal__batch-topline,
+.ai-chat-helper-export-modal__batch-toolbar {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+}
+
+.ai-chat-helper-export-modal__batch-topline strong {
+  color: #0f172a;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.ai-chat-helper-export-modal__batch-toolbar button {
+  min-height: 34px;
+  padding: 8px 12px;
+  border: 1px solid #93c5fd;
+  border-radius: 8px;
+  background: #eff6ff;
+  color: #1d4ed8;
+  font-size: 12px;
+  font-weight: 600;
+}
+
 .ai-chat-helper-export-modal__batch-list {
   display: grid;
   gap: 0;
-  max-height: 360px;
+  max-height: 520px;
   overflow: auto;
-  border: 1px solid var(--ai-chat-helper-border, #d9e2f2);
-  border-radius: 8px;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  background: #fff;
 }
 
 .ai-chat-helper-export-modal__batch-item {
   display: grid;
-  grid-template-columns: auto 1fr;
+  grid-template-columns: 16px minmax(0, 1fr);
   gap: 10px;
   align-items: start;
-  padding: 10px;
-  border-bottom: 1px solid var(--ai-chat-helper-border, #d9e2f2);
+  padding: 10px 12px;
+  border-bottom: 1px solid #f1f5f9;
+  background: #fff;
 }
 
 .ai-chat-helper-export-modal__batch-item:last-child {
@@ -255,6 +335,7 @@ body.ai-chat-helper-hide-qwen-ads [class*="container-3D4Pp"] {
 
 .ai-chat-helper-export-modal__batch-item input {
   margin-top: 3px;
+  accent-color: #2563eb;
 }
 
 .ai-chat-helper-export-modal__batch-item span {
@@ -264,6 +345,10 @@ body.ai-chat-helper-hide-qwen-ads [class*="container-3D4Pp"] {
 }
 
 .ai-chat-helper-export-modal__batch-item strong {
+  color: #0f172a;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.5;
   overflow-wrap: anywhere;
 }
 
@@ -280,4 +365,11 @@ body.ai-chat-helper-hide-qwen-ads [class*="container-3D4Pp"] {
 .ai-chat-helper-export-modal__formats {
   display: flex;
   gap: 8px;
+}
+
+.ai-chat-helper-export-modal__box--batch .ai-chat-helper-export-modal__formats {
+  justify-content: flex-end;
+  padding: 12px 20px 16px;
+  border-top: 1px solid #e5e7eb;
+  background: #fff;
 }

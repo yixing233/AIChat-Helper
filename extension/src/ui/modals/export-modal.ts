@@ -46,13 +46,27 @@ export function createBatchExportModal(
   modal.innerHTML = `
     <div class="ai-chat-helper-export-modal__box ai-chat-helper-export-modal__box--batch">
       <div class="ai-chat-helper-export-modal__header">
-        <strong>Batch export</strong>
-        <span>${summaries.length} conversations</span>
+        <div>
+          <strong>Batch export</strong>
+          <span>${summaries.length} conversations</span>
+        </div>
+        <button type="button" class="ai-chat-helper-export-modal__close" data-ai-chat-helper-close-export aria-label="Close" title="Close">x</button>
       </div>
-      <div class="ai-chat-helper-export-modal__batch-list">
-        ${summaries.length ? summaries.map((summary, index) => renderBatchSummary(summary, index)).join("") : `
-          <div class="ai-chat-helper-export-modal__empty">No recent conversations found.</div>
-        `}
+      <div class="ai-chat-helper-export-modal__batch-body">
+        <div class="ai-chat-helper-export-modal__batch-card">
+          <div class="ai-chat-helper-export-modal__batch-topline">
+            <strong>Recent conversations</strong>
+            <span data-ai-chat-helper-batch-selection-status>0/${summaries.length} selected</span>
+          </div>
+          <div class="ai-chat-helper-export-modal__batch-toolbar">
+            <button type="button" data-ai-chat-helper-batch-toggle>Select all</button>
+          </div>
+          <div class="ai-chat-helper-export-modal__batch-list">
+            ${summaries.length ? summaries.map((summary, index) => renderBatchSummary(summary, index)).join("") : `
+              <div class="ai-chat-helper-export-modal__empty">No recent conversations found.</div>
+            `}
+          </div>
+        </div>
       </div>
       <div class="ai-chat-helper-export-modal__formats">
         <button type="button" data-format="html">HTML</button>
@@ -60,20 +74,36 @@ export function createBatchExportModal(
         <button type="button" data-format="txt">TXT</button>
         <button type="button" data-format="zip">ZIP</button>
       </div>
-      <button type="button" data-ai-chat-helper-close-export>Close</button>
     </div>
   `;
 
   const itemInputs = Array.from(modal.querySelectorAll<HTMLInputElement>("[data-ai-chat-helper-batch-item]"));
   const formatButtons = Array.from(modal.querySelectorAll<HTMLButtonElement>("[data-format]"));
-  const updateFormatButtons = () => {
-    const hasSelection = itemInputs.some((input) => input.checked);
+  const selectionStatus = modal.querySelector<HTMLElement>("[data-ai-chat-helper-batch-selection-status]");
+  const toggleButton = modal.querySelector<HTMLButtonElement>("[data-ai-chat-helper-batch-toggle]");
+  const updateSelectionState = () => {
+    const selectedCount = itemInputs.filter((input) => input.checked).length;
+    const hasSelection = selectedCount > 0;
     formatButtons.forEach((button) => {
       button.disabled = !hasSelection;
     });
+    if (selectionStatus) {
+      selectionStatus.textContent = `${selectedCount}/${itemInputs.length} selected`;
+    }
+    if (toggleButton) {
+      toggleButton.disabled = itemInputs.length === 0;
+      toggleButton.textContent = selectedCount === itemInputs.length && itemInputs.length > 0 ? "Clear" : "Select all";
+    }
   };
 
-  itemInputs.forEach((input) => input.addEventListener("change", updateFormatButtons));
+  itemInputs.forEach((input) => input.addEventListener("change", updateSelectionState));
+  toggleButton?.addEventListener("click", () => {
+    const allSelected = itemInputs.length > 0 && itemInputs.every((input) => input.checked);
+    itemInputs.forEach((input) => {
+      input.checked = !allSelected;
+    });
+    updateSelectionState();
+  });
   formatButtons.forEach((button) => {
     button.addEventListener("click", () => {
       const selectedSummaries = itemInputs
@@ -86,7 +116,7 @@ export function createBatchExportModal(
     });
   });
   modal.querySelector("[data-ai-chat-helper-close-export]")?.addEventListener("click", () => modal.remove());
-  updateFormatButtons();
+  updateSelectionState();
   return modal;
 }
 

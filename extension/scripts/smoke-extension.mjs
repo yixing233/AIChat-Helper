@@ -489,6 +489,30 @@ async function assertBatchZipExport(page, context, expectation) {
     await page.waitForFunction((count) => {
       return document.querySelectorAll("[data-ai-chat-helper-batch-item]:checked").length === count;
     }, expected.selectedCount, { timeout: 10000 });
+    await page.waitForFunction((count) => {
+      const status = document.querySelector("[data-ai-chat-helper-batch-selection-status]");
+      const toggle = document.querySelector("[data-ai-chat-helper-batch-toggle]");
+      return status?.textContent?.includes(`${count}/${count} selected`) && toggle?.textContent === "Clear";
+    }, expected.selectedCount, { timeout: 10000 });
+    await assertBatchModalStyle(page);
+    await page.locator("[data-ai-chat-helper-batch-toggle]").click();
+    await page.waitForFunction((count) => {
+      const status = document.querySelector("[data-ai-chat-helper-batch-selection-status]");
+      const toggle = document.querySelector("[data-ai-chat-helper-batch-toggle]");
+      const zipButton = document.querySelector("#ai-chat-helper-export-modal [data-format='zip']");
+      return document.querySelectorAll("[data-ai-chat-helper-batch-item]:checked").length === 0
+        && status?.textContent?.includes(`0/${count} selected`)
+        && toggle?.textContent === "Select all"
+        && zipButton?.disabled;
+    }, expected.selectedCount, { timeout: 10000 });
+    await page.locator("[data-ai-chat-helper-batch-toggle]").click();
+    await page.waitForFunction((count) => {
+      const status = document.querySelector("[data-ai-chat-helper-batch-selection-status]");
+      const toggle = document.querySelector("[data-ai-chat-helper-batch-toggle]");
+      return document.querySelectorAll("[data-ai-chat-helper-batch-item]:checked").length === count
+        && status?.textContent?.includes(`${count}/${count} selected`)
+        && toggle?.textContent === "Clear";
+    }, expected.selectedCount, { timeout: 10000 });
   } catch (error) {
     const modalText = await page.locator("#ai-chat-helper-export-modal").innerText().catch(() => "");
     const selectedBatchItems = await page.locator("[data-ai-chat-helper-batch-item]:checked").count();
@@ -521,6 +545,27 @@ async function assertBatchZipExport(page, context, expectation) {
   const chromeDownload = await findLatestChromeDownload(context, "application/zip", "data:application/zip", existingDownloadIds);
   if (!chromeDownload) {
     throw new Error("Batch ZIP export reported success but no completed Chrome ZIP download record was observed.");
+  }
+}
+
+async function assertBatchModalStyle(page) {
+  const style = await page.locator(".ai-chat-helper-export-modal__box--batch").evaluate((element) => {
+    const computed = window.getComputedStyle(element);
+    return {
+      width: element.getBoundingClientRect().width,
+      borderRadius: computed.borderRadius,
+      boxShadow: computed.boxShadow
+    };
+  });
+
+  if (style.width < 900) {
+    throw new Error(`Expected Tampermonkey-style wide batch modal, got width ${style.width}.`);
+  }
+  if (style.borderRadius !== "16px") {
+    throw new Error(`Expected Tampermonkey-style 16px batch modal radius, got ${style.borderRadius}.`);
+  }
+  if (!style.boxShadow || style.boxShadow === "none") {
+    throw new Error("Expected Tampermonkey-style batch modal shadow.");
   }
 }
 
