@@ -1,0 +1,16 @@
+import type { PlatformAdapter } from "../../shared/types";
+import { scanTextNodes } from "../shared/dom-scan";
+
+export const doubaoAdapter: PlatformAdapter = {
+  id: "doubao",
+  name: "Doubao",
+  matches(url) {
+    return url.hostname === "www.doubao.com" && /^\/chat(?:\/[^/?#]+)?\/?$/i.test(url.pathname);
+  },
+  getConversationId(url = new URL(window.location.href)) {
+    return url.pathname.split("/").filter(Boolean).pop() || "current";
+  },
+  scanDomNodes(root = document) {
+    return scanTextNodes(root, ["[class*='message']", "[data-testid*='message']", "article"], "doubao");
+  }
+};

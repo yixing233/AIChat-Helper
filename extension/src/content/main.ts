@@ -1,5 +1,9 @@
 import { isInjectedMessage } from "../messaging/bridge";
-import { detectPlatform } from "../shared/platform-detection";
+import { getPlatformAdapter } from "../platforms";
+import { createCapturedEventBuffer } from "./captured-event-buffer";
+import { renderNodeList } from "../ui/controls/node-list";
+import { openExportModal } from "../ui/modals/export-modal";
+import { createPanel } from "../ui/panel/panel";
 
 function injectPageHooks(): void {
   const script = document.createElement("script");
@@ -10,13 +14,39 @@ function injectPageHooks(): void {
   script.remove();
 }
 
-const platform = detectPlatform(new URL(window.location.href));
+const adapter = getPlatformAdapter(new URL(window.location.href));
+const capturedEvents = createCapturedEventBuffer();
 
-if (platform) {
+function mountPanel(): void {
+  if (!adapter || document.getElementById("ai-chat-helper-panel")) return;
+
+  const panel = createPanel({ platformName: adapter.name });
+  document.body.appendChild(panel);
+
+  const nodesContainer = panel.querySelector<HTMLElement>("[data-ai-chat-helper-nodes]");
+  const refreshNodes = () => {
+    if (nodesContainer) renderNodeList(nodesContainer, adapter.scanDomNodes(document));
+  };
+
+  refreshNodes();
+  panel.querySelector("[data-ai-chat-helper-refresh]")?.addEventListener("click", refreshNodes);
+  panel.querySelector("[data-ai-chat-helper-export]")?.addEventListener("click", openExportModal);
+}
+
+if (adapter) {
   injectPageHooks();
-  document.documentElement.dataset.aiChatHelperPlatform = platform.id;
+  document.documentElement.dataset.aiChatHelperPlatform = adapter.id;
   window.addEventListener("message", (event) => {
     if (event.source !== window || !isInjectedMessage(event.data)) return;
+    if (event.data.type === "captured-network-event") {
+      capturedEvents.push(event.data.payload);
+    }
     console.debug("[AI Chat Helper] injected message", event.data.type);
   });
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", mountPanel, { once: true });
+  } else {
+    mountPanel();
+  }
 }

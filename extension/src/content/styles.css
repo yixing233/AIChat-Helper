@@ -1,3 +1,83 @@
 :root[data-ai-chat-helper-platform] {
   --ai-chat-helper-accent: #1457d9;
+  --ai-chat-helper-bg: #ffffff;
+  --ai-chat-helper-border: #d9e2f2;
+  --ai-chat-helper-text: #172033;
+}
+
+.ai-chat-helper-panel {
+  position: fixed;
+  right: 16px;
+  top: 96px;
+  z-index: 2147483647;
+  width: 260px;
+  max-height: min(620px, calc(100vh - 128px));
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  background: var(--ai-chat-helper-bg);
+  color: var(--ai-chat-helper-text);
+  border: 1px solid var(--ai-chat-helper-border);
+  border-radius: 8px;
+  box-shadow: 0 16px 48px rgb(20 87 217 / 18%);
+  font: 13px/1.4 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.ai-chat-helper-panel__header,
+.ai-chat-helper-panel__actions {
+  padding: 10px;
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  align-items: center;
+}
+
+.ai-chat-helper-panel__nodes {
+  overflow: auto;
+  padding: 4px 8px;
+}
+
+.ai-chat-helper-node,
+.ai-chat-helper-panel button {
+  border: 1px solid var(--ai-chat-helper-border);
+  background: #fff;
+  color: var(--ai-chat-helper-text);
+  border-radius: 6px;
+  min-height: 32px;
+}
+
+.ai-chat-helper-node {
+  width: 100%;
+  display: block;
+  text-align: left;
+  margin: 4px 0;
+  padding: 6px 8px;
+}
+
+.ai-chat-helper-empty {
+  margin: 8px;
+  color: #667085;
+}
+
+.ai-chat-helper-export-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 2147483647;
+  display: grid;
+  place-items: center;
+  background: rgb(0 0 0 / 20%);
+}
+
+.ai-chat-helper-export-modal__box {
+  width: 320px;
+  background: #fff;
+  color: var(--ai-chat-helper-text, #172033);
+  border-radius: 8px;
+  padding: 16px;
+  display: grid;
+  gap: 12px;
+}
+
+.ai-chat-helper-export-modal__formats {
+  display: flex;
+  gap: 8px;
 }
