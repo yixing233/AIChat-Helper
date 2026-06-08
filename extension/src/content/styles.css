@@ -146,6 +146,17 @@
   padding: 6px 8px;
 }
 
+.ai-chat-helper-node--match {
+  border-color: #93c5fd;
+  background: #eff6ff;
+}
+
+.ai-chat-helper-node--active {
+  border-color: var(--ai-chat-helper-accent);
+  box-shadow: inset 3px 0 0 var(--ai-chat-helper-accent);
+  font-weight: 700;
+}
+
 .ai-chat-helper-empty {
   margin: 8px;
   color: #667085;

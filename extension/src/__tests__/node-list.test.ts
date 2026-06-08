@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { filterConversationNodes, getNextSearchIndex, getReadingLineScrollTop } from "../ui/controls/node-list";
+import { filterConversationNodes, getNextSearchIndex, getReadingLineScrollTop, renderNodeList } from "../ui/controls/node-list";
 import type { ConversationNode } from "../shared/types";
 
 const nodes: ConversationNode[] = [
@@ -39,5 +39,20 @@ describe("filterConversationNodes", () => {
     expect(getNextSearchIndex(2, 3, 1)).toBe(0);
     expect(getNextSearchIndex(0, 3, -1)).toBe(2);
     expect(getNextSearchIndex(0, 0, 1)).toBe(-1);
+  });
+
+  it("marks search matches and the active search result", () => {
+    const container = document.createElement("div");
+
+    renderNodeList(container, nodes, {
+      highlightedNodeIds: new Set(["1", "2"]),
+      activeNodeId: "2"
+    });
+
+    const buttons = Array.from(container.querySelectorAll("button"));
+    expect(buttons[0].classList.contains("ai-chat-helper-node--match")).toBe(true);
+    expect(buttons[1].classList.contains("ai-chat-helper-node--match")).toBe(true);
+    expect(buttons[1].classList.contains("ai-chat-helper-node--active")).toBe(true);
+    expect(buttons[2].classList.contains("ai-chat-helper-node--match")).toBe(false);
   });
 });

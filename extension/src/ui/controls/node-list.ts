@@ -2,6 +2,8 @@ import type { ConversationNode } from "../../shared/types";
 
 export interface NodeListOptions {
   readingLineOffset?: number;
+  highlightedNodeIds?: Set<string>;
+  activeNodeId?: string;
 }
 
 export function filterConversationNodes(nodes: ConversationNode[], query: string): ConversationNode[] {
@@ -50,6 +52,12 @@ function createNodeButton(node: ConversationNode, options: NodeListOptions): HTM
   const button = document.createElement("button");
   button.type = "button";
   button.className = "ai-chat-helper-node";
+  if (options.highlightedNodeIds?.has(node.id)) {
+    button.classList.add("ai-chat-helper-node--match");
+  }
+  if (options.activeNodeId === node.id) {
+    button.classList.add("ai-chat-helper-node--active");
+  }
   button.textContent = `${node.index + 1}. ${node.title}`;
   button.addEventListener("click", () => {
     scrollNodeIntoView(node, options.readingLineOffset || 150);

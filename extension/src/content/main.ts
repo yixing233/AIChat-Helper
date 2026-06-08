@@ -59,7 +59,12 @@ async function mountPanel(): Promise<void> {
     else if (currentSearchIndex < 0 || currentSearchIndex >= currentSearchResults.length) currentSearchIndex = 0;
     updateSearchStatus(searchStatus, currentSearchIndex, currentSearchResults.length);
     const filteredNodes = currentSearchResults.slice(0, visibleLimit);
-    renderNodeList(nodesContainer, filteredNodes, { readingLineOffset });
+    const activeNodeId = currentSearchIndex >= 0 ? currentSearchResults[currentSearchIndex]?.id : undefined;
+    renderNodeList(nodesContainer, filteredNodes, {
+      readingLineOffset,
+      highlightedNodeIds: new Set(currentSearchResults.map((node) => node.id)),
+      activeNodeId
+    });
   };
 
   const refreshNodes = () => {
