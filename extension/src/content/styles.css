@@ -345,6 +345,11 @@ body.ai-chat-helper-hide-qwen-ads [class*="container-3D4Pp"] {
   color: #fff !important;
 }
 
+.ai-chat-helper-panel__action--github {
+  border-color: #cbd5e1 !important;
+  color: #111827 !important;
+}
+
 .ai-chat-helper-export-modal {
   position: fixed;
   inset: 0;

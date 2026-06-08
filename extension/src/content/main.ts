@@ -26,6 +26,7 @@ function injectPageHooks(): void {
 const adapter = getPlatformAdapter(new URL(window.location.href));
 const capturedEvents = createCapturedEventBuffer();
 const settingsStorage = createExtensionStorage("settings");
+const PROJECT_REPO_URL = "https://github.com/yixing233/AIChat-Helper";
 
 async function mountPanel(): Promise<void> {
   if (!adapter || document.getElementById("ai-chat-helper-panel")) return;
@@ -174,6 +175,9 @@ async function mountPanel(): Promise<void> {
   });
   panel.querySelector("[data-ai-chat-helper-batch-export]")?.addEventListener("click", () => {
     void openRecentConversationPicker(panel, batchLimit);
+  });
+  panel.querySelector("[data-ai-chat-helper-github]")?.addEventListener("click", () => {
+    window.open(PROJECT_REPO_URL, "_blank", "noopener,noreferrer");
   });
 
   function jumpToSearchResult(direction: 1 | -1): void {

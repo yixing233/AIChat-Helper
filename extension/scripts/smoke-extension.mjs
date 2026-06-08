@@ -443,9 +443,11 @@ async function assertPanelStyle(page, expectedName) {
     const refreshButton = panel.querySelector(".ai-chat-helper-panel__action--refresh");
     const exportButton = panel.querySelector(".ai-chat-helper-panel__action--export");
     const batchButton = panel.querySelector(".ai-chat-helper-panel__action--batch");
+    const githubButton = panel.querySelector(".ai-chat-helper-panel__action--github");
     const refreshStyle = refreshButton ? window.getComputedStyle(refreshButton) : null;
     const exportStyle = exportButton ? window.getComputedStyle(exportButton) : null;
     const batchStyle = batchButton ? window.getComputedStyle(batchButton) : null;
+    const githubStyle = githubButton ? window.getComputedStyle(githubButton) : null;
 
     return {
       width: computed.width,
@@ -467,6 +469,8 @@ async function assertPanelStyle(page, expectedName) {
       exportBorderColor: exportStyle?.borderColor || "",
       batchBackground: batchStyle?.backgroundColor || "",
       batchColor: batchStyle?.color || "",
+      githubColor: githubStyle?.color || "",
+      githubBorderColor: githubStyle?.borderColor || "",
       actionIconCount: panel.querySelectorAll(".ai-chat-helper-panel__actions button svg").length
     };
   }, expectedName);
@@ -507,7 +511,10 @@ async function assertPanelStyle(page, expectedName) {
   if (style.batchColor !== "rgb(255, 255, 255)" || style.batchBackground !== "rgb(15, 118, 110)") {
     throw new Error(`Expected extension batch action to keep high-contrast styling, got ${style.batchColor} / ${style.batchBackground}.`);
   }
-  if (style.actionIconCount < 3) {
+  if (style.githubColor !== "rgb(17, 24, 39)" || style.githubBorderColor !== "rgb(203, 213, 225)") {
+    throw new Error(`Expected Tampermonkey-style GitHub button colors, got ${style.githubColor} / ${style.githubBorderColor}.`);
+  }
+  if (style.actionIconCount < 4) {
     throw new Error(`Expected Tampermonkey-style icon action buttons, got ${style.actionIconCount} icons.`);
   }
 }

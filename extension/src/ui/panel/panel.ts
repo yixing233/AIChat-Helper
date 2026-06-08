@@ -44,6 +44,12 @@ const batchIcon = `
   </svg>
 `;
 
+const githubIcon = `
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+    <path d="M12 .5C5.65.5.5 5.65.5 12a11.5 11.5 0 0 0 7.86 10.92c.58.1.79-.25.79-.56v-2.17c-3.2.7-3.88-1.36-3.88-1.36-.52-1.33-1.28-1.68-1.28-1.68-1.05-.72.08-.71.08-.71 1.16.08 1.77 1.19 1.77 1.19 1.03 1.76 2.71 1.25 3.37.96.1-.75.4-1.25.73-1.54-2.55-.29-5.24-1.27-5.24-5.67 0-1.25.45-2.28 1.18-3.08-.12-.29-.51-1.46.11-3.05 0 0 .97-.31 3.19 1.18a11.1 11.1 0 0 1 5.81 0c2.22-1.49 3.19-1.18 3.19-1.18.62 1.59.23 2.76.11 3.05.73.8 1.18 1.83 1.18 3.08 0 4.41-2.69 5.38-5.25 5.66.41.35.78 1.04.78 2.1v3.11c0 .31.21.67.8.56A11.5 11.5 0 0 0 23.5 12C23.5 5.65 18.35.5 12 .5z"></path>
+  </svg>
+`;
+
 export function createPanel(options: PanelOptions): HTMLElement {
   const root = document.createElement("aside");
   root.id = "ai-chat-helper-panel";
@@ -94,6 +100,7 @@ export function createPanel(options: PanelOptions): HTMLElement {
       <button type="button" class="ai-chat-helper-panel__action--refresh" title="Refresh nodes" aria-label="Refresh nodes" data-ai-chat-helper-refresh>${refreshIcon}</button>
       <button type="button" class="ai-chat-helper-panel__action--export" title="Export current conversation" aria-label="Export current conversation" data-ai-chat-helper-export>${exportIcon}</button>
       ${options.canBatchExport ? `<button type="button" class="ai-chat-helper-panel__action--batch" title="Batch export conversations" aria-label="Batch export conversations" data-ai-chat-helper-batch-export>${batchIcon}</button>` : ""}
+      <button type="button" class="ai-chat-helper-panel__action--github" title="Open GitHub project" aria-label="Open GitHub project" data-ai-chat-helper-github>${githubIcon}</button>
     </footer>
   `;
   if (options.panelPosition) {
