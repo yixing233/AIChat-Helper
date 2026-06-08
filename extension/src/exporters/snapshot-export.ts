@@ -22,3 +22,31 @@ export async function exportSnapshot(snapshot: ConversationSnapshot, format: Sna
     content: createZip(files)
   }];
 }
+
+export async function exportBatchSnapshots(snapshots: ConversationSnapshot[], format: SnapshotExportFormat): Promise<ExportFile[]> {
+  const entries: ExportFile[] = [];
+
+  for (const snapshot of snapshots) {
+    const folder = safeFileName(snapshot.title || snapshot.conversationId);
+    const files = format === "zip"
+      ? [
+        ...(await exporters.html.export(snapshot)),
+        ...(await exporters.markdown.export(snapshot)),
+        ...(await exporters.txt.export(snapshot))
+      ]
+      : await exporters[format].export(snapshot);
+
+    files.forEach((file) => {
+      entries.push({
+        ...file,
+        path: `${folder}/${file.path}`
+      });
+    });
+  }
+
+  return [{
+    path: "AI Chat Helper Batch Export.zip",
+    mimeType: "application/zip",
+    content: createZip(entries)
+  }];
+}

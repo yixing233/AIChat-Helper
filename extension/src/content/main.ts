@@ -3,7 +3,7 @@ import { sendBackgroundRequest } from "../messaging/bridge";
 import { getPlatformAdapter } from "../platforms";
 import { createCapturedEventBuffer } from "./captured-event-buffer";
 import { createConversationSnapshot } from "./conversation-snapshot";
-import { exportSnapshot, type SnapshotExportFormat } from "../exporters/snapshot-export";
+import { exportBatchSnapshots, exportSnapshot, type SnapshotExportFormat } from "../exporters/snapshot-export";
 import { renderNodeList } from "../ui/controls/node-list";
 import { openExportModal } from "../ui/modals/export-modal";
 import { createPanel } from "../ui/panel/panel";
@@ -23,7 +23,8 @@ const capturedEvents = createCapturedEventBuffer();
 function mountPanel(): void {
   if (!adapter || document.getElementById("ai-chat-helper-panel")) return;
 
-  const panel = createPanel({ platformName: adapter.name });
+  const canBatchExport = Boolean(adapter.fetchConversationList && adapter.fetchConversationDetail);
+  const panel = createPanel({ platformName: adapter.name, canBatchExport });
   document.body.appendChild(panel);
 
   const nodesContainer = panel.querySelector<HTMLElement>("[data-ai-chat-helper-nodes]");
@@ -38,6 +39,11 @@ function mountPanel(): void {
       void exportCurrentConversation(format);
     });
   });
+  panel.querySelector("[data-ai-chat-helper-batch-export]")?.addEventListener("click", () => {
+    openExportModal((format) => {
+      void exportRecentConversations(format);
+    });
+  });
 }
 
 async function exportCurrentConversation(format: SnapshotExportFormat): Promise<void> {
@@ -45,6 +51,27 @@ async function exportCurrentConversation(format: SnapshotExportFormat): Promise<
   const snapshot = await createConversationSnapshot(adapter, capturedEvents.snapshot(), document);
   const files = await exportSnapshot(snapshot, format);
 
+  for (const file of files) {
+    await sendBackgroundRequest({
+      type: "download-file",
+      payload: {
+        ...file,
+        fileName: file.path
+      }
+    });
+  }
+}
+
+async function exportRecentConversations(format: SnapshotExportFormat): Promise<void> {
+  if (!adapter?.fetchConversationList || !adapter.fetchConversationDetail) return;
+  const summaries = await adapter.fetchConversationList({ limit: 20 });
+  const snapshots = [];
+
+  for (const summary of summaries) {
+    snapshots.push(await adapter.fetchConversationDetail(summary.conversationId));
+  }
+
+  const files = await exportBatchSnapshots(snapshots, format);
   for (const file of files) {
     await sendBackgroundRequest({
       type: "download-file",

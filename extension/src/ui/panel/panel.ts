@@ -2,6 +2,7 @@ import { escapeHtml } from "../shared/escape-html";
 
 export interface PanelOptions {
   platformName: string;
+  canBatchExport?: boolean;
 }
 
 export function createPanel(options: PanelOptions): HTMLElement {
@@ -17,6 +18,7 @@ export function createPanel(options: PanelOptions): HTMLElement {
     <footer class="ai-chat-helper-panel__actions">
       <button type="button" data-ai-chat-helper-refresh>Refresh</button>
       <button type="button" data-ai-chat-helper-export>Export</button>
+      ${options.canBatchExport ? "<button type=\"button\" data-ai-chat-helper-batch-export>Batch</button>" : ""}
     </footer>
   `;
   return root;
