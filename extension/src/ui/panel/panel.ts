@@ -3,6 +3,7 @@ import { escapeHtml } from "../shared/escape-html";
 export interface PanelOptions {
   platformName: string;
   canBatchExport?: boolean;
+  visibleLimit?: number;
 }
 
 export function createPanel(options: PanelOptions): HTMLElement {
@@ -17,6 +18,10 @@ export function createPanel(options: PanelOptions): HTMLElement {
     <label class="ai-chat-helper-panel__search">
       <span>Search</span>
       <input type="search" data-ai-chat-helper-search placeholder="Search nodes" />
+    </label>
+    <label class="ai-chat-helper-panel__setting">
+      <span>Visible</span>
+      <input type="number" min="1" max="100" step="1" value="${Number(options.visibleLimit || 20)}" data-ai-chat-helper-visible-limit />
     </label>
     <div class="ai-chat-helper-panel__nodes" data-ai-chat-helper-nodes></div>
     <div class="ai-chat-helper-panel__status" data-ai-chat-helper-status aria-live="polite"></div>

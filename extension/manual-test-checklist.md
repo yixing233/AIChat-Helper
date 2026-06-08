@@ -12,6 +12,8 @@ Build the extension with `npm run build`, then load `E:\Code\AI-Chat-Nodes\exten
 - [ ] Node list renders on a loaded conversation page.
 - [ ] Clicking a node scrolls the matching conversation message into view.
 - [ ] Search filters the node list by typed text.
+- [ ] Visible node limit setting filters the rendered node count and survives reload.
+- [ ] Existing `ai-nodes-visible-limit` localStorage value migrates to extension storage once.
 - [ ] Refresh updates the node list.
 - [ ] Export HTML triggers a browser download.
 - [ ] Export Markdown triggers a browser download.

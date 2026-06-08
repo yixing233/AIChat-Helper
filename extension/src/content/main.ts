@@ -1,6 +1,8 @@
 import { isInjectedMessage } from "../messaging/bridge";
 import { sendBackgroundRequest } from "../messaging/bridge";
 import { getPlatformAdapter } from "../platforms";
+import { DEFAULT_EXTENSION_SETTINGS, LEGACY_VISIBLE_LIMIT_KEY, normalizeExtensionSettings } from "../settings/extension-settings";
+import { createExtensionStorage, migrateLocalStorageKey } from "../storage/extension-storage";
 import { createCapturedEventBuffer } from "./captured-event-buffer";
 import { createConversationSnapshot } from "./conversation-snapshot";
 import { exportBatchSnapshots, exportSnapshot, type SnapshotExportFormat } from "../exporters/snapshot-export";
@@ -20,21 +22,26 @@ function injectPageHooks(): void {
 
 const adapter = getPlatformAdapter(new URL(window.location.href));
 const capturedEvents = createCapturedEventBuffer();
+const settingsStorage = createExtensionStorage("settings");
 
-function mountPanel(): void {
+async function mountPanel(): Promise<void> {
   if (!adapter || document.getElementById("ai-chat-helper-panel")) return;
 
+  const settings = await loadSettings();
   const canBatchExport = Boolean(adapter.fetchConversationList && adapter.fetchConversationDetail);
-  const panel = createPanel({ platformName: adapter.name, canBatchExport });
+  const panel = createPanel({ platformName: adapter.name, canBatchExport, visibleLimit: settings.visibleLimit });
   document.body.appendChild(panel);
 
   const nodesContainer = panel.querySelector<HTMLElement>("[data-ai-chat-helper-nodes]");
   const searchInput = panel.querySelector<HTMLInputElement>("[data-ai-chat-helper-search]");
+  const visibleLimitInput = panel.querySelector<HTMLInputElement>("[data-ai-chat-helper-visible-limit]");
   let currentNodes: ConversationNode[] = [];
+  let visibleLimit = settings.visibleLimit;
 
   const renderCurrentNodes = () => {
     if (!nodesContainer) return;
-    renderNodeList(nodesContainer, filterConversationNodes(currentNodes, searchInput?.value || ""));
+    const filteredNodes = filterConversationNodes(currentNodes, searchInput?.value || "").slice(0, visibleLimit);
+    renderNodeList(nodesContainer, filteredNodes);
   };
 
   const refreshNodes = () => {
@@ -45,6 +52,16 @@ function mountPanel(): void {
   refreshNodes();
   panel.querySelector("[data-ai-chat-helper-refresh]")?.addEventListener("click", refreshNodes);
   searchInput?.addEventListener("input", renderCurrentNodes);
+  visibleLimitInput?.addEventListener("change", () => {
+    const nextSettings = normalizeExtensionSettings({ visibleLimit: visibleLimitInput.value });
+    visibleLimit = nextSettings.visibleLimit;
+    visibleLimitInput.value = String(visibleLimit);
+    renderCurrentNodes();
+    void settingsStorage.set("visibleLimit", visibleLimit).catch((error) => {
+      console.error("[AI Chat Helper] settings save failed", error);
+      setPanelStatus(panel, `Settings save failed: ${getErrorMessage(error)}`);
+    });
+  });
   panel.querySelector("[data-ai-chat-helper-export]")?.addEventListener("click", () => {
     openExportModal((format) => {
       void exportCurrentConversation(format, panel);
@@ -55,6 +72,17 @@ function mountPanel(): void {
       void exportRecentConversations(format, panel);
     });
   });
+}
+
+async function loadSettings() {
+  try {
+    await migrateLocalStorageKey(settingsStorage, LEGACY_VISIBLE_LIMIT_KEY, "visibleLimit");
+    const visibleLimit = await settingsStorage.get("visibleLimit", DEFAULT_EXTENSION_SETTINGS.visibleLimit);
+    return normalizeExtensionSettings({ visibleLimit });
+  } catch (error) {
+    console.error("[AI Chat Helper] settings load failed", error);
+    return DEFAULT_EXTENSION_SETTINGS;
+  }
 }
 
 async function exportCurrentConversation(format: SnapshotExportFormat, panel: HTMLElement): Promise<void> {
@@ -129,8 +157,10 @@ if (adapter) {
   });
 
   if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", mountPanel, { once: true });
+    document.addEventListener("DOMContentLoaded", () => {
+      void mountPanel();
+    }, { once: true });
   } else {
-    mountPanel();
+    void mountPanel();
   }
 }
