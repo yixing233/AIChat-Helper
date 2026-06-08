@@ -31,7 +31,7 @@ The extension currently includes:
 - captured API hydration for current conversations on ChatGPT, Claude, Tongyi Qianwen, Doubao, and DeepSeek
 - selectable, configurable batch export with selected-count and select-all controls for all supported adapters that expose conversation list/detail APIs
 - per-conversation batch export failure isolation, so successful conversations still download when a selected item fails
-- Tampermonkey-style main panel sizing, glass surface, platform favicon card, switch controls, GitHub project action, and icon action colors
+- Tampermonkey-style main panel sizing, glass surface, header version marker, platform favicon card, switch controls, GitHub project action, and icon action colors
 - Tampermonkey-style batch export modal sizing, selection controls, list framing, and overlay treatment
 
 Current batch coverage:

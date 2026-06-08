@@ -10,7 +10,7 @@ Build the extension with `npm run build`, then load `E:\Code\AI-Chat-Nodes\exten
 - [ ] Tongyi Qianwen page shows the AI Chat Helper panel.
 - [ ] Doubao page shows the AI Chat Helper panel.
 - [ ] DeepSeek page shows the AI Chat Helper panel.
-- [ ] Main panel visually matches the Tampermonkey settings popup: narrow glass panel, 12px radius, platform favicon card, custom switch controls, GitHub project action, and red/blue icon actions.
+- [ ] Main panel visually matches the Tampermonkey settings popup: narrow glass panel, 12px radius, header version marker, platform favicon card, custom switch controls, GitHub project action, and red/blue icon actions.
 - [ ] Node list renders on a loaded conversation page.
 - [ ] Clicking a node scrolls the matching conversation message into view.
 - [ ] Search filters the node list by typed text.

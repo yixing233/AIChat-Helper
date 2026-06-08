@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -25,6 +25,7 @@ async function main() {
   if (!existsSync(resolve(extensionDir, "manifest.json"))) {
     throw new Error(`Missing built extension at ${extensionDir}. Run npm run build first.`);
   }
+  const expectedExtensionVersion = getBuiltExtensionVersion();
 
   const executablePath = findEdgeExecutable();
   if (!executablePath) {
@@ -59,7 +60,7 @@ async function main() {
 
     for (const platformCase of platformCases) {
       await page.goto(platformCase.url, { waitUntil: "domcontentloaded" });
-      await assertPanel(page, platformCase.id, platformCase.name);
+      await assertPanel(page, platformCase.id, platformCase.name, expectedExtensionVersion);
       await assertToggleVisibility(page, platformCase);
       if (platformCase.id === "chatgpt") {
         await assertCurrentHtmlExport(page, context);
@@ -85,6 +86,11 @@ async function main() {
     rmSync(userDataDir, { recursive: true, force: true });
     rmSync(downloadsDir, { recursive: true, force: true });
   }
+}
+
+function getBuiltExtensionVersion() {
+  const manifest = JSON.parse(readFileSync(resolve(extensionDir, "manifest.json"), "utf8"));
+  return String(manifest.version || "");
 }
 
 main().catch((error) => {
@@ -413,7 +419,7 @@ async function fulfillChatGptApiRoute(route) {
   return false;
 }
 
-async function assertPanel(page, expectedPlatform, expectedName) {
+async function assertPanel(page, expectedPlatform, expectedName, expectedExtensionVersion) {
   await page.waitForSelector("#ai-chat-helper-panel", { timeout: 10000 });
 
   const platform = await page.locator("html").getAttribute("data-ai-chat-helper-platform");
@@ -430,12 +436,16 @@ async function assertPanel(page, expectedPlatform, expectedName) {
     throw new Error(`${expectedPlatform} panel rendered without expected title/platform text.`);
   }
 
-  await assertPanelStyle(page, expectedName);
+  await assertPanelStyle(page, expectedName, expectedExtensionVersion);
 }
 
-async function assertPanelStyle(page, expectedName) {
+async function assertPanelStyle(page, expectedName, expectedExtensionVersion) {
   const style = await page.locator("#ai-chat-helper-panel").evaluate((panel, platformName) => {
     const computed = window.getComputedStyle(panel);
+    const versionButton = panel.querySelector("[data-ai-chat-helper-version]");
+    const versionButtonStyle = versionButton ? window.getComputedStyle(versionButton) : null;
+    const versionBadge = panel.querySelector("[data-ai-chat-helper-version-badge]");
+    const versionBadgeStyle = versionBadge ? window.getComputedStyle(versionBadge) : null;
     const platformCard = panel.querySelector(".ai-chat-helper-panel__platform-card");
     const platformCardStyle = platformCard ? window.getComputedStyle(platformCard) : null;
     const platformIcon = panel.querySelector(".ai-chat-helper-panel__platform-icon");
@@ -455,6 +465,12 @@ async function assertPanelStyle(page, expectedName) {
       padding: computed.padding,
       boxShadow: computed.boxShadow,
       backdropFilter: computed.backdropFilter || computed.webkitBackdropFilter || "",
+      versionText: versionButton?.textContent || "",
+      versionColor: versionButtonStyle?.color || "",
+      versionBackground: versionButtonStyle?.backgroundColor || "",
+      versionBadgeWidth: versionBadgeStyle?.width || "",
+      versionBadgeHeight: versionBadgeStyle?.height || "",
+      versionBadgeBackground: versionBadgeStyle?.backgroundColor || "",
       platformCardText: platformCard?.textContent || "",
       platformCardBorderRadius: platformCardStyle?.borderRadius || "",
       platformCardBackground: platformCardStyle?.backgroundColor || "",
@@ -489,6 +505,15 @@ async function assertPanelStyle(page, expectedName) {
   }
   if (!style.backdropFilter.includes("blur")) {
     throw new Error(`Expected Tampermonkey-style panel backdrop blur, got ${style.backdropFilter || "none"}.`);
+  }
+  if (!style.versionText.includes(`v${expectedExtensionVersion}`)) {
+    throw new Error(`Expected Tampermonkey-style version marker v${expectedExtensionVersion}, got ${style.versionText || "missing"}.`);
+  }
+  if (style.versionColor !== "rgb(100, 116, 139)" || style.versionBackground !== "rgba(0, 0, 0, 0)") {
+    throw new Error(`Expected Tampermonkey-style transparent version button, got ${style.versionColor} / ${style.versionBackground}.`);
+  }
+  if (style.versionBadgeWidth !== "8px" || style.versionBadgeHeight !== "8px" || style.versionBadgeBackground !== "rgb(239, 68, 68)") {
+    throw new Error(`Expected Tampermonkey-style version badge, got ${style.versionBadgeWidth} x ${style.versionBadgeHeight} / ${style.versionBadgeBackground}.`);
   }
   if (!style.platformCardText.includes("Current AI platform:") || !style.hasPlatformName) {
     throw new Error(`Expected Tampermonkey-style platform card for ${expectedName}, got ${style.platformCardText || "missing"}.`);

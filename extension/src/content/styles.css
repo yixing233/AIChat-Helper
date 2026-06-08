@@ -60,6 +60,45 @@
   font-weight: 500;
 }
 
+.ai-chat-helper-panel__version {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 0 !important;
+  margin: 0;
+  padding: 0 10px 0 0;
+  border: none !important;
+  background: transparent !important;
+  color: #64748b !important;
+  border-radius: 0;
+  box-shadow: none;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.ai-chat-helper-panel__version svg {
+  display: block;
+  flex: none;
+  width: 12px;
+  height: 12px;
+}
+
+.ai-chat-helper-panel__version-badge {
+  position: absolute;
+  top: -2px;
+  right: 0;
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: #ef4444;
+  box-shadow: 0 0 0 2px rgb(255 255 255 / 98%);
+  opacity: 0;
+  transform: scale(.7);
+  transition: opacity .18s ease, transform .18s ease;
+  pointer-events: none;
+}
+
 .ai-chat-helper-panel__header [data-ai-chat-helper-drag-handle] {
   color: #667085;
   letter-spacing: 1px;

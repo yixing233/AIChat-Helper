@@ -33,11 +33,13 @@ async function mountPanel(): Promise<void> {
 
   const settings = await loadSettings();
   applyPlatformSettings(settings);
+  const extensionVersion = await getExtensionVersion();
   const canBatchExport = Boolean(adapter.fetchConversationList && adapter.fetchConversationDetail);
   const panel = createPanel({
     platformId: adapter.id,
     platformName: adapter.name,
     platformIconUrl: getPlatformIconUrl(adapter.id),
+    extensionVersion,
     canBatchExport,
     visibleLimit: settings.visibleLimit,
     batchLimit: settings.batchLimit,
@@ -209,6 +211,17 @@ async function loadSettings() {
   } catch (error) {
     console.error("[AI Chat Helper] settings load failed", error);
     return DEFAULT_EXTENSION_SETTINGS;
+  }
+}
+
+async function getExtensionVersion(): Promise<string> {
+  const response = await sendBackgroundRequest<string>({ type: "get-version" });
+  if (response.ok && response.value) return response.value;
+
+  try {
+    return chrome.runtime.getManifest().version || "0.0.0";
+  } catch {
+    return "0.0.0";
   }
 }
 

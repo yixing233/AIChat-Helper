@@ -3,10 +3,20 @@ import { createPanel, setPanelStatus } from "../ui/panel/panel";
 
 describe("createPanel", () => {
   it("creates one root panel element for a platform", () => {
-    const panel = createPanel({ platformName: "ChatGPT", platformIconUrl: "https://chatgpt.com/favicon.ico" });
+    const panel = createPanel({
+      platformName: "ChatGPT",
+      platformIconUrl: "https://chatgpt.com/favicon.ico",
+      extensionVersion: "3.0.0"
+    });
 
     expect(panel.id).toBe("ai-chat-helper-panel");
     expect(panel.textContent).toContain("ChatGPT");
+    const versionButton = panel.querySelector("[data-ai-chat-helper-version]");
+    expect(versionButton).toBeTruthy();
+    expect(versionButton?.textContent).toContain("v3.0.0");
+    expect(versionButton?.getAttribute("aria-label")).toBe("Extension version 3.0.0");
+    expect(panel.querySelector("[data-ai-chat-helper-version] svg")).toBeTruthy();
+    expect(panel.querySelector("[data-ai-chat-helper-version-badge]")).toBeTruthy();
     expect(panel.querySelector(".ai-chat-helper-panel__platform-card")?.textContent).toContain("Current AI platform:");
     expect(panel.querySelector(".ai-chat-helper-panel__platform-icon")?.getAttribute("src")).toBe("https://chatgpt.com/favicon.ico");
     expect(panel.querySelector(".ai-chat-helper-panel__platform-icon")?.getAttribute("alt")).toBe("ChatGPT");
