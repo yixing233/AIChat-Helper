@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { filterConversationNodes } from "../ui/controls/node-list";
+import { filterConversationNodes, getReadingLineScrollTop } from "../ui/controls/node-list";
 import type { ConversationNode } from "../shared/types";
 
 const nodes: ConversationNode[] = [
@@ -15,5 +15,22 @@ describe("filterConversationNodes", () => {
 
   it("returns all nodes for blank queries", () => {
     expect(filterConversationNodes(nodes, "   ")).toEqual(nodes);
+  });
+
+  it("computes scroll position that aligns an element to the reading line", () => {
+    const element = document.createElement("article");
+    element.getBoundingClientRect = () => ({
+      top: 320,
+      left: 0,
+      right: 0,
+      bottom: 520,
+      width: 0,
+      height: 200,
+      x: 0,
+      y: 320,
+      toJSON: () => ({})
+    });
+
+    expect(getReadingLineScrollTop(element, 150, 40)).toBe(210);
   });
 });

@@ -14,6 +14,8 @@ Build the extension with `npm run build`, then load `E:\Code\AI-Chat-Nodes\exten
 - [ ] Search filters the node list by typed text.
 - [ ] Visible node limit setting filters the rendered node count and survives reload.
 - [ ] Existing `ai-nodes-visible-limit` localStorage value migrates to extension storage once.
+- [ ] Reading line setting moves the on-page reading guide and survives reload.
+- [ ] Existing `ai-nodes-reading-line` localStorage value migrates to extension storage once.
 - [ ] Refresh updates the node list.
 - [ ] Export HTML triggers a browser download.
 - [ ] Export Markdown triggers a browser download.

@@ -14,4 +14,10 @@ describe("extension settings", () => {
   it("accepts numeric strings from legacy userscript storage", () => {
     expect(normalizeExtensionSettings({ visibleLimit: "25" }).visibleLimit).toBe(25);
   });
+
+  it("clamps reading line offset to the userscript-compatible range", () => {
+    expect(normalizeExtensionSettings({ readingLineOffset: 1 }).readingLineOffset).toBe(10);
+    expect(normalizeExtensionSettings({ readingLineOffset: 900 }).readingLineOffset).toBe(500);
+    expect(normalizeExtensionSettings({ readingLineOffset: "180" }).readingLineOffset).toBe(180);
+  });
 });

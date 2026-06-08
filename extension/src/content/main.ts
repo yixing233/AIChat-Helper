@@ -1,7 +1,7 @@
 import { isInjectedMessage } from "../messaging/bridge";
 import { sendBackgroundRequest } from "../messaging/bridge";
 import { getPlatformAdapter } from "../platforms";
-import { DEFAULT_EXTENSION_SETTINGS, LEGACY_VISIBLE_LIMIT_KEY, normalizeExtensionSettings } from "../settings/extension-settings";
+import { DEFAULT_EXTENSION_SETTINGS, LEGACY_READING_LINE_KEY, LEGACY_VISIBLE_LIMIT_KEY, normalizeExtensionSettings } from "../settings/extension-settings";
 import { createExtensionStorage, migrateLocalStorageKey } from "../storage/extension-storage";
 import { createCapturedEventBuffer } from "./captured-event-buffer";
 import { createConversationSnapshot } from "./conversation-snapshot";
@@ -29,19 +29,28 @@ async function mountPanel(): Promise<void> {
 
   const settings = await loadSettings();
   const canBatchExport = Boolean(adapter.fetchConversationList && adapter.fetchConversationDetail);
-  const panel = createPanel({ platformName: adapter.name, canBatchExport, visibleLimit: settings.visibleLimit });
+  const panel = createPanel({
+    platformName: adapter.name,
+    canBatchExport,
+    visibleLimit: settings.visibleLimit,
+    readingLineOffset: settings.readingLineOffset
+  });
   document.body.appendChild(panel);
+  const readingLine = createReadingLine(settings.readingLineOffset);
+  document.body.appendChild(readingLine);
 
   const nodesContainer = panel.querySelector<HTMLElement>("[data-ai-chat-helper-nodes]");
   const searchInput = panel.querySelector<HTMLInputElement>("[data-ai-chat-helper-search]");
   const visibleLimitInput = panel.querySelector<HTMLInputElement>("[data-ai-chat-helper-visible-limit]");
+  const readingLineInput = panel.querySelector<HTMLInputElement>("[data-ai-chat-helper-reading-line]");
   let currentNodes: ConversationNode[] = [];
   let visibleLimit = settings.visibleLimit;
+  let readingLineOffset = settings.readingLineOffset;
 
   const renderCurrentNodes = () => {
     if (!nodesContainer) return;
     const filteredNodes = filterConversationNodes(currentNodes, searchInput?.value || "").slice(0, visibleLimit);
-    renderNodeList(nodesContainer, filteredNodes);
+    renderNodeList(nodesContainer, filteredNodes, { readingLineOffset });
   };
 
   const refreshNodes = () => {
@@ -62,6 +71,17 @@ async function mountPanel(): Promise<void> {
       setPanelStatus(panel, `Settings save failed: ${getErrorMessage(error)}`);
     });
   });
+  readingLineInput?.addEventListener("change", () => {
+    const nextSettings = normalizeExtensionSettings({ readingLineOffset: readingLineInput.value });
+    readingLineOffset = nextSettings.readingLineOffset;
+    readingLineInput.value = String(readingLineOffset);
+    readingLine.style.top = `${readingLineOffset}px`;
+    renderCurrentNodes();
+    void settingsStorage.set("readingLineOffset", readingLineOffset).catch((error) => {
+      console.error("[AI Chat Helper] settings save failed", error);
+      setPanelStatus(panel, `Settings save failed: ${getErrorMessage(error)}`);
+    });
+  });
   panel.querySelector("[data-ai-chat-helper-export]")?.addEventListener("click", () => {
     openExportModal((format) => {
       void exportCurrentConversation(format, panel);
@@ -77,12 +97,24 @@ async function mountPanel(): Promise<void> {
 async function loadSettings() {
   try {
     await migrateLocalStorageKey(settingsStorage, LEGACY_VISIBLE_LIMIT_KEY, "visibleLimit");
+    await migrateLocalStorageKey(settingsStorage, LEGACY_READING_LINE_KEY, "readingLineOffset");
     const visibleLimit = await settingsStorage.get("visibleLimit", DEFAULT_EXTENSION_SETTINGS.visibleLimit);
-    return normalizeExtensionSettings({ visibleLimit });
+    const readingLineOffset = await settingsStorage.get("readingLineOffset", DEFAULT_EXTENSION_SETTINGS.readingLineOffset);
+    return normalizeExtensionSettings({ visibleLimit, readingLineOffset });
   } catch (error) {
     console.error("[AI Chat Helper] settings load failed", error);
     return DEFAULT_EXTENSION_SETTINGS;
   }
+}
+
+function createReadingLine(offset: number): HTMLElement {
+  document.getElementById("ai-chat-helper-reading-line")?.remove();
+  const line = document.createElement("div");
+  line.id = "ai-chat-helper-reading-line";
+  line.className = "ai-chat-helper-reading-line";
+  line.style.top = `${offset}px`;
+  line.setAttribute("aria-hidden", "true");
+  return line;
 }
 
 async function exportCurrentConversation(format: SnapshotExportFormat, panel: HTMLElement): Promise<void> {
