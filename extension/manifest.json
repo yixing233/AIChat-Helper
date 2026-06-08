@@ -10,6 +10,7 @@
   "host_permissions": [
     "https://chatgpt.com/*",
     "https://www.qianwen.com/*",
+    "https://chat2-api.qianwen.com/*",
     "https://www.doubao.com/*",
     "https://chat.deepseek.com/*",
     "https://claude.ai/*",
@@ -40,6 +41,7 @@
       "matches": [
         "https://chatgpt.com/*",
         "https://www.qianwen.com/*",
+        "https://chat2-api.qianwen.com/*",
         "https://www.doubao.com/*",
         "https://chat.deepseek.com/*",
         "https://claude.ai/*"
