@@ -1,0 +1,13 @@
+.vscode/
+test/
+.playwright*/
+temp*
+AIChat-Helper.gitee-migration.user.js
+Doubao-Nodes-Test.user.js
+node_modules/
+extension/dist/
+extension/node_modules/
+remote/node_modules/
+remote/web/node_modules/
+remote/server/node_modules/
+remote/shared/node_modules/
