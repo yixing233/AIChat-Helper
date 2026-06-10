@@ -92,7 +92,7 @@ describe("node-list controls", () => {
     expect(buttons[0].textContent?.trim()).toBe("");
     expect(buttons[1].textContent?.trim()).toBe("");
     expect(buttons[0].getAttribute("aria-label")).toBe("Plan Alpha");
-    expect(container.querySelector<HTMLElement>(".ai-chat-helper-node-indicator")?.style.getPropertyValue("--ai-chat-helper-node-indicator-y")).toBe("38px");
+    expect(container.querySelector<HTMLElement>(".ai-chat-helper-node-indicator")?.style.getPropertyValue("--ai-chat-helper-node-indicator-y")).toBe("54px");
   });
 
   it("delegates node clicks to the provided navigation handler", () => {
@@ -114,10 +114,50 @@ describe("node-list controls", () => {
     const buttons = Array.from(container.querySelectorAll<HTMLButtonElement>("button"));
     const indicator = container.querySelector<HTMLElement>(".ai-chat-helper-node-indicator");
     expect(container.style.getPropertyValue("--ai-chat-helper-dot-gap")).toBe("42px");
-    expect(buttons[0].style.top).toBe("13px");
-    expect(buttons[1].style.top).toBe("55px");
-    expect(buttons[2].style.top).toBe("97px");
+    expect(container.style.height).toBe("142px");
+    expect(buttons[0].style.top).toBe("29px");
+    expect(buttons[1].style.top).toBe("71px");
+    expect(buttons[2].style.top).toBe("113px");
     expect(indicator?.hidden).toBe(true);
+  });
+
+  it("caps the rail viewport height by the configured visible limit while keeping all node positions", () => {
+    const container = document.createElement("div");
+    const moreNodes: ConversationNode[] = [
+      ...nodes,
+      { id: "4", index: 3, title: "fourth", text: "fourth body", role: "user" },
+      { id: "5", index: 4, title: "fifth", text: "fifth body", role: "assistant" }
+    ];
+
+    renderNodeList(container, moreNodes, {
+      dotGap: 42,
+      visibleLimit: 3
+    });
+
+    const buttons = Array.from(container.querySelectorAll<HTMLButtonElement>("button"));
+    expect(container.style.height).toBe("142px");
+    expect(buttons).toHaveLength(5);
+    expect(buttons[3].style.top).toBe("155px");
+    expect(buttons[4].style.top).toBe("197px");
+  });
+
+  it("uses a separate rail scroll position to reveal the active node when it exceeds the visible limit", () => {
+    const container = document.createElement("div");
+    const moreNodes: ConversationNode[] = [
+      ...nodes,
+      { id: "4", index: 3, title: "fourth", text: "fourth body", role: "user" },
+      { id: "5", index: 4, title: "fifth", text: "fifth body", role: "assistant" }
+    ];
+
+    renderNodeList(container, moreNodes, {
+      dotGap: 42,
+      visibleLimit: 3,
+      activeNodeId: "5"
+    });
+
+    expect(container.style.height).toBe("142px");
+    expect(container.scrollTop).toBeGreaterThan(0);
+    expect(container.querySelector<HTMLElement>(".ai-chat-helper-node-indicator")?.style.getPropertyValue("--ai-chat-helper-node-indicator-y")).toBe("186px");
   });
 
   it("centers a single node in the orbital rail", () => {

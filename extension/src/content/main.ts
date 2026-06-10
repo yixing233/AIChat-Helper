@@ -147,10 +147,10 @@ async function mountPanel(): Promise<MountedPanelContext> {
 
   const renderCurrentNodes = () => {
     if (!nodesContainer) return;
-    const visibleNodes = currentNodes.slice(0, visibleLimit);
-    renderNodeList(nodesContainer, visibleNodes, {
+    renderNodeList(nodesContainer, currentNodes, {
       readingLineOffset,
       dotGap,
+      visibleLimit,
       activeNodeId,
       onNodeClick: jumpToNode
     });
@@ -334,13 +334,23 @@ async function mountPanel(): Promise<MountedPanelContext> {
   function runAutoBackupTick(force = false): void {
     void autoBackupRunner.tick(force)
       .then((result) => {
-        if (result.status !== "created") return;
-        showToast(`已自动备份：${result.record.title}`, {
-          id: "auto-backup",
-          title: "自动备份",
-          tone: "success",
-          duration: 1800
-        });
+        if (result.status === "created") {
+          showToast(`已自动备份：${result.record.title}`, {
+            id: "auto-backup",
+            title: "自动备份",
+            tone: "success",
+            duration: 1800
+          });
+          return;
+        }
+        if (result.status === "unchanged") {
+          showToast(`自动备份已检查：${result.record.title} 内容未变化`, {
+            id: "auto-backup",
+            title: "自动备份",
+            tone: "success",
+            duration: 1800
+          });
+        }
       })
       .catch((error) => {
         console.warn("[AI Chat Helper] automatic backup failed", error);
