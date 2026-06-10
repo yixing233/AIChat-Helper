@@ -17,6 +17,14 @@ describe("extension settings", () => {
     expect(normalizeExtensionSettings({ batchLimit: "35" }).batchLimit).toBe(35);
   });
 
+  it("normalizes automatic backup settings", () => {
+    expect(normalizeExtensionSettings({ autoBackupEnabled: "true" }).autoBackupEnabled).toBe(true);
+    expect(normalizeExtensionSettings({ autoBackupEnabled: "false" }).autoBackupEnabled).toBe(false);
+    expect(normalizeExtensionSettings({ autoBackupIntervalMinutes: 0 }).autoBackupIntervalMinutes).toBe(5);
+    expect(normalizeExtensionSettings({ autoBackupIntervalMinutes: 5000 }).autoBackupIntervalMinutes).toBe(1440);
+    expect(normalizeExtensionSettings({ autoBackupIntervalMinutes: "30" }).autoBackupIntervalMinutes).toBe(30);
+  });
+
   it("accepts numeric strings from legacy userscript storage", () => {
     expect(normalizeExtensionSettings({ visibleLimit: "25" }).visibleLimit).toBe(25);
   });

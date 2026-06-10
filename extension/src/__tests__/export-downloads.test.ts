@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { downloadExportFiles } from "../content/export-downloads";
 import type { BackgroundResponse } from "../messaging/protocol";
 import type { ExportFile } from "../shared/types";
@@ -12,6 +12,11 @@ const files: ExportFile[] = [
 ];
 
 describe("downloadExportFiles", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
   it("sends each export file to the background download handler", async () => {
     const send = vi.fn(async (): Promise<BackgroundResponse> => ({ ok: true, value: { downloadId: 7 } }));
 
@@ -45,5 +50,26 @@ describe("downloadExportFiles", () => {
     const send = vi.fn(async (): Promise<BackgroundResponse> => ({ ok: false, error: "downloads permission denied" }));
 
     await expect(downloadExportFiles(files, send)).rejects.toThrow("downloads permission denied");
+  });
+
+  it("falls back to userscript-style Blob downloads when the background receiver is unavailable", async () => {
+    vi.useFakeTimers();
+    const send = vi.fn(async (): Promise<BackgroundResponse> => ({
+      ok: false,
+      error: "Could not establish connection. Receiving end does not exist."
+    }));
+    Object.defineProperty(URL, "createObjectURL", { configurable: true, value: vi.fn() });
+    Object.defineProperty(URL, "revokeObjectURL", { configurable: true, value: vi.fn() });
+    const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => undefined);
+    const createObjectURL = vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:ai-chat-helper-export");
+    const revokeObjectURL = vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => undefined);
+
+    await downloadExportFiles(files, send);
+
+    expect(createObjectURL).toHaveBeenCalledWith(expect.any(Blob));
+    expect(click).toHaveBeenCalledTimes(1);
+    expect(revokeObjectURL).not.toHaveBeenCalled();
+    await vi.runAllTimersAsync();
+    expect(revokeObjectURL).toHaveBeenCalledWith("blob:ai-chat-helper-export");
   });
 });

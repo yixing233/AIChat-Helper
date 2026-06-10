@@ -21,6 +21,7 @@ export function attachPanelDrag(
 
   handle.addEventListener("pointerdown", (event) => {
     if (event.button !== 0) return;
+    if (event.target instanceof Element && event.target.closest("button, a, input, textarea, select")) return;
     const rect = panel.getBoundingClientRect();
     dragState = {
       pointerId: event.pointerId,
@@ -31,6 +32,7 @@ export function attachPanelDrag(
       last: readPanelPosition(panel)
     };
     handle.setPointerCapture?.(event.pointerId);
+    handle.classList.add("is-dragging");
     event.preventDefault();
   });
 
@@ -42,14 +44,18 @@ export function attachPanelDrag(
     dragState.last = applyPanelPosition(panel, { right, top });
   });
 
-  window.addEventListener("pointerup", (event) => {
+  const finishDrag = (event: PointerEvent) => {
     if (!dragState) return;
     const position = dragState.last;
     handle.releasePointerCapture?.(dragState.pointerId);
+    handle.classList.remove("is-dragging");
     dragState = null;
     onSave(position);
     event.preventDefault();
-  });
+  };
+
+  window.addEventListener("pointerup", finishDrag);
+  window.addEventListener("pointercancel", finishDrag);
 }
 
 export function applyPanelPosition(panel: HTMLElement, position: PanelPosition): PanelPosition {

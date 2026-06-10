@@ -1,4 +1,5 @@
 import type { ConversationMessage, ConversationSnapshot } from "../../shared/types";
+import { normalizeBatchTimestamp } from "../shared/timestamp";
 
 interface DeepSeekHistoryPayload {
   data?: {
@@ -6,8 +7,9 @@ interface DeepSeekHistoryPayload {
       chat_session?: {
         id?: string;
         title?: string;
-        inserted_at?: string;
-        updated_at?: string;
+        pinned?: boolean;
+        inserted_at?: string | number;
+        updated_at?: string | number;
       };
       chat_messages?: DeepSeekRawMessage[];
     };
@@ -24,6 +26,8 @@ interface DeepSeekRawMessage {
   is_user?: boolean;
   from_bot?: boolean;
   is_assistant?: boolean;
+  thinking_enabled?: boolean;
+  search_enabled?: boolean;
   status?: string;
   fragments?: DeepSeekFragment[];
   text?: string;
@@ -58,6 +62,8 @@ export function extractDeepSeekSnapshotFromHistory(payload: unknown): Conversati
   const session = bizData?.chat_session;
   const rawMessages = Array.isArray(bizData?.chat_messages) ? bizData.chat_messages : [];
   const messages = aggregateDeepSeekMessages(parseDeepSeekMessages(rawMessages));
+  const createdAtText = formatDeepSeekTimestampText(session?.inserted_at);
+  const updatedAtText = formatDeepSeekTimestampText(session?.updated_at);
 
   return {
     platformId: "deepseek",
@@ -65,8 +71,19 @@ export function extractDeepSeekSnapshotFromHistory(payload: unknown): Conversati
     title: String(session?.title || "DeepSeek Conversation"),
     attachments: [],
     messages,
-    createdAt: session?.inserted_at,
-    updatedAt: session?.updated_at
+    createdAt: stringifyDeepSeekValue(session?.inserted_at) || undefined,
+    updatedAt: stringifyDeepSeekValue(session?.updated_at) || undefined,
+    metadata: {
+      deepseek: {
+        sessionId: String(session?.id || ""),
+        title: String(session?.title || ""),
+        pinned: Boolean(session?.pinned),
+        createdAt: createdAtText,
+        updatedAt: updatedAtText,
+        thinkingEnabled: rawMessages.some((message) => Boolean(message.thinking_enabled)),
+        searchEnabled: rawMessages.some((message) => Boolean(message.search_enabled))
+      }
+    }
   };
 }
 
@@ -112,12 +129,24 @@ function parseDeepSeekMessages(rawMessages: DeepSeekRawMessage[]): DeepSeekParse
 
         if (fragmentType === "THINK") {
           pushFragment(adaptCitationText(String(fragment.content || ""), citationMap), fragmentType, "assistant", true, false, fragmentId);
+          return;
         }
+
+        if (fragmentType === "SEARCH") {
+          return;
+        }
+
+        if (isIgnoredDeepSeekFragmentType(fragmentType)) {
+          return;
+        }
+
+        const fallbackText = uniqueJoined(collectDeepSeekText(fragment));
+        pushFragment(fallbackText, fragmentType, baseRole, false, false, fragmentId);
       });
       return;
     }
 
-    const text = [message.text, message.content, message.message].map((value) => String(value || "").trim()).filter(Boolean).join("\n\n");
+    const text = uniqueJoined(collectDeepSeekText(message));
     pushFragment(text, "MESSAGE", baseRole);
   });
 
@@ -132,6 +161,7 @@ function aggregateDeepSeekMessages(messages: DeepSeekParsedMessage[]): Conversat
     userParts: string[];
     thoughtParts: string[];
     responseParts: string[];
+    fallbackParts: string[];
   }>();
 
   for (const message of messages) {
@@ -144,7 +174,8 @@ function aggregateDeepSeekMessages(messages: DeepSeekParsedMessage[]): Conversat
         status: message.status,
         userParts: [],
         thoughtParts: [],
-        responseParts: []
+        responseParts: [],
+        fallbackParts: []
       };
       groups.set(key, group);
     }
@@ -152,20 +183,64 @@ function aggregateDeepSeekMessages(messages: DeepSeekParsedMessage[]): Conversat
     if (message.role === "user") group.userParts.push(message.text);
     else if (message.isThought || message.fragmentType === "THINK") group.thoughtParts.push(message.text);
     else if (message.fragmentType === "RESPONSE" || message.fragmentType === "MESSAGE") group.responseParts.push(message.text);
+    else if (!isIgnoredDeepSeekFragmentType(message.fragmentType)) group.fallbackParts.push(message.text);
   }
 
   const out: ConversationMessage[] = [];
   Array.from(groups.values()).forEach((group, index) => {
     if (group.role === "user") {
       const text = uniqueJoined(group.userParts);
-      if (text) out.push({ id: `deepseek-export-${group.sourceMessageId || index + 1}`, role: "user", text });
+      if (text) {
+        out.push({
+          id: `deepseek-export-${group.sourceMessageId || index + 1}`,
+          sourceMessageId: group.sourceMessageId,
+          role: "user",
+          text,
+          status: group.status,
+          fragmentType: "REQUEST",
+          isThought: false,
+          isSearch: false,
+          hasThought: false,
+          textWithoutThought: text
+        });
+      }
       return;
     }
 
     const thoughtText = uniqueJoined(group.thoughtParts);
     const responseText = uniqueJoined(group.responseParts);
-    if (thoughtText) out.push({ id: `deepseek-export-${group.sourceMessageId || index + 1}-think`, role: "assistant", text: thoughtText });
-    if (responseText) out.push({ id: `deepseek-export-${group.sourceMessageId || index + 1}-response`, role: "assistant", text: responseText });
+    const fallbackText = uniqueJoined(group.fallbackParts);
+    if (thoughtText) {
+      out.push({
+        id: `deepseek-export-${group.sourceMessageId || index + 1}-think`,
+        sourceMessageId: group.sourceMessageId,
+        role: "assistant",
+        text: thoughtText,
+        fullText: thoughtText,
+        status: group.status,
+        fragmentType: "THINK",
+        isThought: true,
+        isSearch: false,
+        hasThought: true,
+        textWithoutThought: ""
+      });
+    }
+    const finalText = responseText || fallbackText;
+    if (finalText) {
+      out.push({
+        id: `deepseek-export-${group.sourceMessageId || index + 1}-response`,
+        sourceMessageId: group.sourceMessageId,
+        role: "assistant",
+        text: finalText,
+        fullText: finalText,
+        status: group.status,
+        fragmentType: responseText ? "RESPONSE" : "MESSAGE",
+        isThought: false,
+        isSearch: false,
+        hasThought: Boolean(thoughtText),
+        textWithoutThought: finalText
+      });
+    }
   });
 
   return out;
@@ -178,6 +253,8 @@ function orderFragments(fragments: DeepSeekFragment[], role: ConversationMessage
       if (type === "THINK") return 10;
       if (type === "RESPONSE") return 20;
       if (type === "SEARCH") return 30;
+      if (type === "REQUEST") return 90;
+      return 80;
     }
     if (type === "REQUEST") return 10;
     return 80;
@@ -185,6 +262,50 @@ function orderFragments(fragments: DeepSeekFragment[], role: ConversationMessage
   return fragments.map((fragment, index) => ({ fragment, index }))
     .sort((a, b) => rank(a.fragment) - rank(b.fragment) || a.index - b.index)
     .map(({ fragment }) => fragment);
+}
+
+function isIgnoredDeepSeekFragmentType(fragmentType: string): boolean {
+  const type = String(fragmentType || "").toUpperCase();
+  return type === "TIP"
+    || type.startsWith("TOOL_")
+    || type.includes("TOOL")
+    || type.includes("PLUGIN")
+    || type.includes("FUNCTION")
+    || type.includes("STATUS")
+    || type.includes("FINISHED")
+    || type.includes("OPEN");
+}
+
+function collectDeepSeekText(value: unknown): string[] {
+  const out: string[] = [];
+  const walk = (node: unknown): void => {
+    if (!node) return;
+    if (typeof node === "string") {
+      const text = node.trim();
+      if (text) out.push(text);
+      return;
+    }
+    if (Array.isArray(node)) {
+      node.forEach(walk);
+      return;
+    }
+    if (typeof node !== "object") return;
+
+    const obj = node as Record<string, unknown>;
+    ["text", "content", "message", "msg", "answer", "question", "value", "display_text"].forEach((key) => {
+      if (typeof obj[key] === "string") {
+        const text = obj[key].trim();
+        if (text) out.push(text);
+      }
+    });
+    Object.entries(obj).forEach(([key, nested]) => {
+      if (/^(id|type|content_type|message_id|fragment_id|role|sender_role|author_role|message_type|status|inserted_at|updated_at|created_at)$/i.test(key)) return;
+      walk(nested);
+    });
+  };
+
+  walk(value);
+  return out;
 }
 
 function guessDeepSeekRole(message: DeepSeekRawMessage): ConversationMessage["role"] {
@@ -234,4 +355,15 @@ function adaptCitationText(text: string, citationMap: Map<number, { title: strin
 
 function uniqueJoined(parts: string[]): string {
   return Array.from(new Set(parts.map((part) => part.trim()).filter(Boolean))).join("\n\n").trim();
+}
+
+function stringifyDeepSeekValue(value: string | number | undefined): string {
+  return value == null ? "" : String(value);
+}
+
+function formatDeepSeekTimestampText(value: string | number | undefined): string {
+  const normalized = normalizeBatchTimestamp(value);
+  if (normalized.text) return normalized.text;
+  const raw = value == null ? "" : String(value).trim();
+  return raw;
 }

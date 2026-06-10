@@ -4,6 +4,8 @@ export interface ExtensionSettings {
   readingLineOffset: number;
   dotGap: number;
   autoUpdateCheck: boolean;
+  autoBackupEnabled: boolean;
+  autoBackupIntervalMinutes: number;
   removeQwenAds: boolean;
   hideDeepSeekNativeNav: boolean;
   panelPosition: PanelPosition | null;
@@ -20,6 +22,8 @@ export const DEFAULT_EXTENSION_SETTINGS: ExtensionSettings = {
   readingLineOffset: 150,
   dotGap: 36,
   autoUpdateCheck: true,
+  autoBackupEnabled: false,
+  autoBackupIntervalMinutes: 15,
   removeQwenAds: false,
   hideDeepSeekNativeNav: false,
   panelPosition: null
@@ -50,6 +54,8 @@ export function normalizeExtensionSettings(value: Partial<Record<keyof Extension
     readingLineOffset: normalizeReadingLineOffset(value.readingLineOffset),
     dotGap: normalizeDotGap(value.dotGap),
     autoUpdateCheck: normalizeBoolean(value.autoUpdateCheck, DEFAULT_EXTENSION_SETTINGS.autoUpdateCheck),
+    autoBackupEnabled: normalizeBoolean(value.autoBackupEnabled, DEFAULT_EXTENSION_SETTINGS.autoBackupEnabled),
+    autoBackupIntervalMinutes: normalizeAutoBackupInterval(value.autoBackupIntervalMinutes),
     removeQwenAds: normalizeBoolean(value.removeQwenAds, DEFAULT_EXTENSION_SETTINGS.removeQwenAds),
     hideDeepSeekNativeNav: normalizeBoolean(value.hideDeepSeekNativeNav, DEFAULT_EXTENSION_SETTINGS.hideDeepSeekNativeNav),
     panelPosition: normalizePanelPosition(value.panelPosition)
@@ -78,6 +84,12 @@ function normalizeDotGap(value: unknown): number {
   const parsed = Number(value ?? DEFAULT_EXTENSION_SETTINGS.dotGap);
   if (!Number.isFinite(parsed)) return DEFAULT_EXTENSION_SETTINGS.dotGap;
   return Math.max(20, Math.min(Math.round(parsed), 50));
+}
+
+function normalizeAutoBackupInterval(value: unknown): number {
+  const parsed = Number(value ?? DEFAULT_EXTENSION_SETTINGS.autoBackupIntervalMinutes);
+  if (!Number.isFinite(parsed)) return DEFAULT_EXTENSION_SETTINGS.autoBackupIntervalMinutes;
+  return Math.max(5, Math.min(Math.round(parsed), 1440));
 }
 
 function normalizeBoolean(value: unknown, defaultValue: boolean): boolean {

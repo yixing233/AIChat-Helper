@@ -1,17 +1,31 @@
 {
   "manifest_version": 3,
   "name": "AI Chat Helper",
-  "version": "3.0.0",
-  "description": "Conversation navigation, search, reading helpers, and exports for AI chat websites.",
+  "version": "1.0.0",
+  "description": "为 ChatGPT、通义千问、豆包、DeepSeek、Claude 提供节点导航、搜索、阅读辅助、对话导出、自动备份和含图片预览的备份库。",
   "icons": {
-    "128": "icons/icon.svg"
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
   },
-  "permissions": ["storage", "downloads", "scripting"],
+  "action": {
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    },
+    "default_popup": "popup/popup.html",
+    "default_title": "AI Chat Helper 设置"
+  },
+  "permissions": ["storage", "downloads", "scripting", "activeTab", "unlimitedStorage"],
   "host_permissions": [
     "https://chatgpt.com/*",
     "https://www.qianwen.com/*",
     "https://chat2-api.qianwen.com/*",
     "https://www.doubao.com/*",
+    "https://mcs.doubao.com/*",
     "https://chat.deepseek.com/*",
     "https://claude.ai/*",
     "https://github.com/*",
