@@ -1,8 +1,0 @@
-.vscode/
-test/
-.playwright*/
-temp*
-AIChat-Helper.gitee-migration.user.js
-Doubao-Nodes-Test.user.js
-extension/node_modules/
-extension/dist/
