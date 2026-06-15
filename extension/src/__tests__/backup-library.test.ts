@@ -7,6 +7,10 @@ import type { ConversationSnapshot, ExportFile } from "../shared/types";
 
 const popupCss = readFileSync(resolve(process.cwd(), "src/popup/styles.css"), "utf8");
 
+async function waitForDialogClose(): Promise<void> {
+  await new Promise((resolve) => window.setTimeout(resolve, 240));
+}
+
 const chatgptSnapshot: ConversationSnapshot = {
   platformId: "chatgpt",
   conversationId: "chatgpt-1",
@@ -442,6 +446,7 @@ describe("backup library page", () => {
     root.querySelector<HTMLButtonElement>("[data-ai-chat-helper-backup-delete-confirm-action]")?.click();
     await Promise.resolve();
     await new Promise((resolve) => window.setTimeout(resolve, 0));
+    await waitForDialogClose();
 
     expect(onDelete).toHaveBeenCalledTimes(3);
     expect(onDelete).toHaveBeenNthCalledWith(1, latest.id);
@@ -760,6 +765,7 @@ describe("backup library page", () => {
     root.querySelector<HTMLButtonElement>("[data-ai-chat-helper-backup-delete-confirm-action]")?.click();
     await Promise.resolve();
     await new Promise((resolve) => window.setTimeout(resolve, 0));
+    await waitForDialogClose();
 
     expect(root.querySelector("[data-ai-chat-helper-backup-detail]")?.textContent).toContain("Newer answer");
     expect(root.querySelector("[data-ai-chat-helper-backup-detail]")?.textContent).not.toContain("Older answer");
@@ -806,7 +812,52 @@ describe("backup library page", () => {
     const viewer = root.querySelector<HTMLElement>("[data-ai-chat-helper-backup-image-viewer]");
     expect(viewer?.querySelector("img")?.getAttribute("src")).toBe("data:image/png;base64,aW1hZ2UgY29udGVudA==");
     viewer?.querySelector<HTMLButtonElement>("[data-ai-chat-helper-backup-image-viewer-close]")?.click();
+    await waitForDialogClose();
     expect(root.querySelector("[data-ai-chat-helper-backup-image-viewer]")).toBeFalsy();
+  });
+
+  it("opens a pasted text attachment preview from backup detail messages", () => {
+    const record = buildConversationBackupRecord({
+      ...chatgptSnapshot,
+      messages: [{
+        id: "user-paste",
+        role: "user",
+        text: "请查看这个文本附件\n\n[附件1: 粘贴的文本 (1).txt]",
+        attachments: [{
+          id: "file-text-1",
+          fileName: "粘贴的文本 (1).txt",
+          mimeType: "text/plain",
+          content: "第一行\n第二行\n第三行"
+        }]
+      }]
+    }, "zip", [file], {
+      createdAt: "2026-06-09T10:00:00.000Z",
+      source: "auto"
+    });
+    const root = createBackupLibraryPopup([record]);
+    document.body.appendChild(root);
+
+    bindBackupLibraryPopup(root, [record], {
+      onBack: vi.fn(),
+      onDownload: vi.fn(),
+      onDelete: vi.fn()
+    });
+
+    const attachmentButton = root.querySelector<HTMLButtonElement>("[data-ai-chat-helper-backup-text-attachment]");
+    expect(attachmentButton).toBeTruthy();
+
+    attachmentButton?.click();
+
+    const preview = root.querySelector<HTMLElement>("[data-ai-chat-helper-backup-text-viewer]");
+    const previewBox = root.querySelector<HTMLElement>(".ai-chat-helper-backup-text-viewer__box");
+    const previewContent = root.querySelector<HTMLElement>(".ai-chat-helper-backup-text-viewer__content");
+    expect(preview?.textContent).toContain("附件内容预览");
+    expect(preview?.textContent).toContain("粘贴的文本 (1).txt");
+    expect(preview?.textContent).toContain("text/plain");
+    expect(preview?.textContent).toContain("第一行");
+    expect(preview?.textContent).toContain("第三行");
+    expect(previewBox).toBeTruthy();
+    expect(previewContent?.textContent).toContain("第二行");
   });
 
   it("does not render the same ChatGPT user image twice in backup previews", () => {
@@ -1044,6 +1095,7 @@ describe("backup library page", () => {
     expect(dialog?.textContent).toContain("ChatGPT backup");
 
     root.querySelector<HTMLButtonElement>("[data-ai-chat-helper-backup-delete-cancel]")?.click();
+    await waitForDialogClose();
     expect(root.querySelector("[data-ai-chat-helper-backup-delete-confirm]")).toBeFalsy();
     expect(onDelete).not.toHaveBeenCalled();
 
@@ -1150,6 +1202,14 @@ describe("backup library page", () => {
     expect(popupCss).toMatch(/\.ai-chat-helper-backup-version-row\s*\{[^}]*display:\s*grid;[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\) auto;[^}]*align-items:\s*center;[^}]*gap:\s*4px;/s);
     expect(popupCss).toMatch(/\.ai-chat-helper-backup-version-delete\s*\{[^}]*width:\s*18px;[^}]*height:\s*18px;[^}]*border:\s*none;[^}]*background:\s*transparent;/s);
     expect(popupCss).toMatch(/\.ai-chat-helper-backup-version-delete\s*\{[^}]*box-shadow:\s*none;/s);
+    expect(popupCss).toMatch(/\.ai-chat-helper-backup-version-manager__meta-top\s*\{[^}]*display:\s*grid;[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\) auto;[^}]*align-items:\s*start;/s);
+    expect(popupCss).toMatch(/\.ai-chat-helper-backup-version-manager__meta-top strong\s*\{[^}]*overflow:\s*hidden;[^}]*text-overflow:\s*ellipsis;[^}]*white-space:\s*nowrap;/s);
+    expect(popupCss).toMatch(/\.ai-chat-helper-backup-version-manager__meta p\s*\{[^}]*display:\s*-webkit-box;[^}]*overflow:\s*hidden;[^}]*-webkit-line-clamp:\s*2;/s);
+    expect(popupCss).toMatch(/@keyframes ai-chat-helper-dialog-overlay-in\s*\{/s);
+    expect(popupCss).toMatch(/@keyframes ai-chat-helper-dialog-surface-in\s*\{/s);
+    expect(popupCss).toMatch(/\.ai-chat-helper-backup-delete-confirm,\s*\.ai-chat-helper-backup-version-manager,\s*\.ai-chat-helper-backup-image-viewer,\s*\.ai-chat-helper-backup-text-viewer\s*\{[^}]*animation:\s*ai-chat-helper-dialog-overlay-in/s);
+    expect(popupCss).toMatch(/\.ai-chat-helper-backup-version-manager__box,\s*\.ai-chat-helper-backup-image-viewer__box,\s*\.ai-chat-helper-backup-delete-confirm__box\s*\{[^}]*animation:\s*ai-chat-helper-dialog-surface-in/s);
+    expect(popupCss).toMatch(/\.ai-chat-helper-backup-delete-confirm\.is-closing,\s*\.ai-chat-helper-backup-version-manager\.is-closing,\s*\.ai-chat-helper-backup-image-viewer\.is-closing,\s*\.ai-chat-helper-backup-text-viewer\.is-closing\s*\{[^}]*animation:\s*ai-chat-helper-dialog-overlay-out/s);
   });
 
   it("keeps the backup page html and body background unified", () => {

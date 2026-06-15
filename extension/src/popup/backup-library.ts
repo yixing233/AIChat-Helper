@@ -95,6 +95,29 @@ export function bindBackupLibraryPopup(root: HTMLElement, records: ConversationB
     hideNodeTooltip();
     root.innerHTML = renderBackupWorkbench(localRecords, state, options);
   };
+  const closeDialogLayer = (layer: Element | null, onClosed?: () => void) => {
+    if (!layer || layer.classList.contains("is-closing")) return;
+    layer.classList.add("is-closing");
+    window.setTimeout(() => {
+      layer.remove();
+      onClosed?.();
+    }, 220);
+  };
+  const closeVersionManagerDialog = () => {
+    const layer = root.querySelector("[data-ai-chat-helper-backup-version-manager]");
+    if (layer && !layer.classList.contains("is-closing")) {
+      layer.classList.add("is-closing");
+      window.setTimeout(() => {
+        state.versionManagerOpen = false;
+        state.versionManagerSelection = [];
+        render();
+      }, 220);
+    } else if (!layer) {
+      state.versionManagerOpen = false;
+      state.versionManagerSelection = [];
+      render();
+    }
+  };
   const closeVersionDropdown = (animate = false) => {
     if (!state.versionDropdownOpen && !state.versionDropdownClosing) return;
     if (animate) {
@@ -188,9 +211,7 @@ export function bindBackupLibraryPopup(root: HTMLElement, records: ConversationB
     }
 
     if (target.closest("[data-ai-chat-helper-backup-version-manager-close]")) {
-      state.versionManagerOpen = false;
-      state.versionManagerSelection = [];
-      render();
+      closeVersionManagerDialog();
       return;
     }
 
@@ -225,6 +246,17 @@ export function bindBackupLibraryPopup(root: HTMLElement, records: ConversationB
       return;
     }
 
+    const textAttachmentButton = target.closest<HTMLButtonElement>("[data-ai-chat-helper-backup-text-attachment]");
+    if (textAttachmentButton) {
+      renderTextAttachmentViewer(
+        root,
+        textAttachmentButton.dataset.attachmentTitle || "附件",
+        textAttachmentButton.dataset.attachmentMimeType || "text/plain",
+        textAttachmentButton.dataset.attachmentContent || ""
+      );
+      return;
+    }
+
     const messageNode = target.closest<HTMLButtonElement>("[data-ai-chat-helper-backup-message-node]");
     if (messageNode) {
       focusBackupPreviewMessage(root, messageNode.dataset.messageIndex || "");
@@ -232,13 +264,24 @@ export function bindBackupLibraryPopup(root: HTMLElement, records: ConversationB
     }
 
     if (target.closest("[data-ai-chat-helper-backup-image-viewer-close]")) {
-      root.querySelector("[data-ai-chat-helper-backup-image-viewer]")?.remove();
+      closeDialogLayer(root.querySelector("[data-ai-chat-helper-backup-image-viewer]"));
+      return;
+    }
+
+    if (target.closest("[data-ai-chat-helper-backup-text-viewer-close]")) {
+      closeDialogLayer(root.querySelector("[data-ai-chat-helper-backup-text-viewer]"));
       return;
     }
 
     const imageViewer = target.closest("[data-ai-chat-helper-backup-image-viewer]");
     if (imageViewer && target === imageViewer) {
-      imageViewer.remove();
+      closeDialogLayer(imageViewer);
+      return;
+    }
+
+    const textViewer = target.closest("[data-ai-chat-helper-backup-text-viewer]");
+    if (textViewer && target === textViewer) {
+      closeDialogLayer(textViewer);
       return;
     }
 
@@ -263,14 +306,14 @@ export function bindBackupLibraryPopup(root: HTMLElement, records: ConversationB
     }
 
     if (target.closest("[data-ai-chat-helper-backup-delete-cancel]")) {
-      root.querySelector("[data-ai-chat-helper-backup-delete-confirm]")?.remove();
+      closeDialogLayer(root.querySelector("[data-ai-chat-helper-backup-delete-confirm]"));
       return;
     }
 
     const deleteConfirmAction = target.closest<HTMLButtonElement>("[data-ai-chat-helper-backup-delete-confirm-action]");
     if (deleteConfirmAction) {
       const backupIds = parseBackupIds(deleteConfirmAction.dataset.backupIds || deleteConfirmAction.dataset.backupId || "");
-      root.querySelector("[data-ai-chat-helper-backup-delete-confirm]")?.remove();
+      closeDialogLayer(root.querySelector("[data-ai-chat-helper-backup-delete-confirm]"));
       if (!backupIds.length) return;
       const versionDeleteSource = root.querySelector<HTMLButtonElement>(`[data-ai-chat-helper-backup-version-delete][data-backup-id="${escapeAttributeValue(backupIds[0])}"]`);
       if (backupIds.length === 1 && versionDeleteSource && state.versionDropdownOpen) {
@@ -300,22 +343,20 @@ export function bindBackupLibraryPopup(root: HTMLElement, records: ConversationB
         state.versionManagerOpen = false;
         state.versionManagerSelection = [];
       }, "delete").then(() => {
-        render();
+        closeVersionManagerDialog();
       });
       return;
     }
 
     const deleteConfirmLayer = target.closest("[data-ai-chat-helper-backup-delete-confirm]");
     if (deleteConfirmLayer && target === deleteConfirmLayer) {
-      deleteConfirmLayer.remove();
+      closeDialogLayer(deleteConfirmLayer);
       return;
     }
 
     const versionManagerLayer = target.closest("[data-ai-chat-helper-backup-version-manager]");
     if (versionManagerLayer && target === versionManagerLayer) {
-      state.versionManagerOpen = false;
-      state.versionManagerSelection = [];
-      render();
+      closeVersionManagerDialog();
       return;
     }
 
@@ -885,6 +926,22 @@ function renderMessageText(text: string, platformId?: PlatformId): string {
 }
 
 function renderAttachmentPreview(attachment: ExportAttachment): string {
+  if (isPreviewableTextAttachment(attachment)) {
+    return `
+      <button
+        type="button"
+        class="ai-chat-helper-backup-attachment ai-chat-helper-backup-attachment--text"
+        data-ai-chat-helper-backup-text-attachment
+        data-attachment-title="${escapeText(attachment.fileName || attachment.id || "附件")}"
+        data-attachment-mime-type="${escapeText(attachment.mimeType || "text/plain")}"
+        data-attachment-content="${escapeText(String(attachment.content || "").trim())}"
+        data-ai-chat-helper-tooltip="查看附件内容"
+      >
+        <strong>${escapeText(attachment.fileName || attachment.id || "附件")}</strong>
+        <span>${escapeText(attachment.mimeType || "附件")}</span>
+      </button>
+    `;
+  }
   if (!isImageAttachment(attachment)) {
     return `
       <div class="ai-chat-helper-backup-attachment">
@@ -1039,6 +1096,26 @@ function renderImageViewer(root: HTMLElement, src: string, title: string): void 
         <button type="button" aria-label="关闭图片预览" data-ai-chat-helper-tooltip="关闭" data-ai-chat-helper-backup-image-viewer-close>${closeIcon}</button>
       </header>
       <img src="${escapeText(src)}" alt="${escapeText(title || "图片")}" />
+    </div>
+  `;
+  root.appendChild(layer);
+}
+
+function renderTextAttachmentViewer(root: HTMLElement, title: string, mimeType: string, content: string): void {
+  root.querySelector("[data-ai-chat-helper-backup-text-viewer]")?.remove();
+  const layer = document.createElement("section");
+  layer.className = "ai-chat-helper-backup-image-viewer";
+  layer.dataset.aiChatHelperBackupTextViewer = "true";
+  layer.innerHTML = `
+    <div class="ai-chat-helper-backup-image-viewer__box ai-chat-helper-backup-text-viewer__box" role="dialog" aria-modal="true" aria-label="附件内容预览">
+      <header>
+        <div class="ai-chat-helper-backup-text-viewer__title">
+          <strong>附件内容预览</strong>
+          <span>${escapeText(title)} · ${escapeText(mimeType || "text/plain")}</span>
+        </div>
+        <button type="button" aria-label="关闭附件内容预览" data-ai-chat-helper-tooltip="关闭" data-ai-chat-helper-backup-text-viewer-close>${closeIcon}</button>
+      </header>
+      <pre class="ai-chat-helper-backup-text-viewer__content">${escapeText(content || "")}</pre>
     </div>
   `;
   root.appendChild(layer);
@@ -1361,6 +1438,12 @@ function isImageAttachment(attachment: ExportAttachment): boolean {
   const mimeType = String(attachment.mimeType || "").toLowerCase();
   if (mimeType.startsWith("image/")) return true;
   return /\.(?:png|jpe?g|gif|webp|svg|bmp|ico|avif)(?:$|[?#])/i.test(attachment.fileName || attachment.url || "");
+}
+
+function isPreviewableTextAttachment(attachment: ExportAttachment): boolean {
+  return /^text\/plain/i.test(String(attachment.mimeType || "").trim())
+    && typeof attachment.content === "string"
+    && attachment.content.trim().length > 0;
 }
 
 function isDataImageUrl(value: string): boolean {

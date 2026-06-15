@@ -105,9 +105,10 @@ function extractMessagesFromMapping(mapping: Record<string, ChatGPTMappingNode>,
   const orderedNodes = currentNodeId && mapping[currentNodeId]
     ? collectActivePath(mapping, currentNodeId)
     : collectDepthFirstPath(mapping);
+  const pastedTextByMessageId = collectChatGPTPastedTextAttachmentContent(orderedNodes);
 
   return orderedNodes
-    .map((node) => nodeToMessage(node))
+    .map((node) => nodeToMessage(node, pastedTextByMessageId.get(String(node.message?.id || node.id || "")) || null))
     .filter((message): message is ConversationMessage => Boolean(message));
 }
 
@@ -144,14 +145,17 @@ function collectDepthFirstPath(mapping: Record<string, ChatGPTMappingNode>): Cha
   return out;
 }
 
-function nodeToMessage(node: ChatGPTMappingNode): ConversationMessage | null {
+function nodeToMessage(
+  node: ChatGPTMappingNode,
+  pastedTextAttachments: Map<string, string> | null
+): ConversationMessage | null {
   const msg = node.message;
   if (!msg) return null;
   if (!isExportableChatGPTMessage(msg)) return null;
   const role = normalizeRole(msg.author?.role);
   if (!role) return null;
   const id = String(msg.id || node.id || `${role}-${Math.random().toString(36).slice(2)}`);
-  const attachments = extractMessageAttachments(msg, id, role);
+  const attachments = extractMessageAttachments(msg, id, role, pastedTextAttachments);
   const attachmentText = msg.author?.role === "user" ? extractAttachmentText(msg) : "";
   const extractedText = [extractMessageText(msg), attachmentText].filter(Boolean).join("\n\n").trim();
   const text = extractedText || (attachments.length ? "" : formatChatGPTImageTitleText(msg));
@@ -527,17 +531,24 @@ function extractAttachmentText(msg: ChatGPTMessage): string {
     .join("\n");
 }
 
-function extractMessageAttachments(msg: ChatGPTMessage, messageId: string, role: ConversationMessage["role"]): ExportAttachment[] {
+function extractMessageAttachments(
+  msg: ChatGPTMessage,
+  messageId: string,
+  role: ConversationMessage["role"],
+  pastedTextAttachments: Map<string, string> | null
+): ExportAttachment[] {
   const attachments: ExportAttachment[] = [];
 
   (msg.metadata?.attachments || []).forEach((item, index) => {
     if (role !== "user" && !isRawChatGPTImageAttachment(item)) return;
     const fileName = String(item.name || item.filename || item.file_name || `file-${index + 1}`).trim();
     const id = String(item.id || `${messageId}-attachment-${index + 1}`).trim();
+    const content = pastedTextAttachments?.get(fileName);
     attachments.push({
       id,
       fileName,
       mimeType: String(item.mime_type || item.mimeType || "application/octet-stream"),
+      content: content || undefined,
       url: String(item.url || item.download_url || item.downloadUrl || "").trim() || undefined
     });
   });
@@ -706,4 +717,78 @@ function uniqueAttachments(attachments: ExportAttachment[]): ExportAttachment[] 
     seen.add(key);
     return true;
   });
+}
+
+function collectChatGPTPastedTextAttachmentContent(
+  orderedNodes: ChatGPTMappingNode[]
+): Map<string, Map<string, string>> {
+  const result = new Map<string, Map<string, string>>();
+  let currentVisibleUserMessageId = "";
+
+  orderedNodes.forEach((node) => {
+    const message = node.message;
+    if (!message) return;
+
+    if (isExportableChatGPTMessage(message) && normalizeRole(message.author?.role) === "user") {
+      currentVisibleUserMessageId = String(message.id || node.id || "").trim();
+      return;
+    }
+
+    if (!currentVisibleUserMessageId) return;
+    const pastedText = extractChatGPTPastedTextFromHiddenMessage(message);
+    if (!pastedText) return;
+
+    const entry = result.get(currentVisibleUserMessageId) || new Map<string, string>();
+    entry.set(pastedText.title, pastedText.content);
+    result.set(currentVisibleUserMessageId, entry);
+  });
+
+  return result;
+}
+
+function extractChatGPTPastedTextFromHiddenMessage(msg: ChatGPTMessage): { title: string; content: string } | null {
+  const metadata = msg.metadata || {};
+  if (!metadata.is_visually_hidden_from_conversation && metadata.can_save !== false) return null;
+  const content = msg.content && typeof msg.content === "object"
+    ? msg.content as Record<string, unknown>
+    : null;
+  if (!content) return null;
+
+  const contentType = String(content.content_type || content.type || "").trim().toLowerCase();
+  if (contentType !== "tether_quote") return null;
+
+  const title = String(content.title || content.name || "").trim();
+  if (!title) return null;
+
+  const rawText = typeof content.text === "string"
+    ? content.text
+    : (typeof content.content === "string" ? content.content : "");
+  const normalized = normalizeChatGPTPastedTextContent(rawText);
+  if (!normalized) return null;
+
+  return { title, content: normalized };
+}
+
+function normalizeChatGPTPastedTextContent(value: string): string {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  if (!/<[a-z][\s\S]*>/i.test(raw)) return raw;
+
+  if (typeof DOMParser !== "undefined") {
+    const doc = new DOMParser().parseFromString(raw, "text/html");
+    doc.querySelectorAll("script, style, noscript, template, svg").forEach((node) => node.remove());
+    const preBlocks = Array.from(doc.querySelectorAll("pre"))
+      .map((element) => String(element.textContent || "").replace(/\r\n/g, "\n").trim())
+      .filter(Boolean);
+    if (preBlocks.length) return preBlocks.join("\n\n");
+    const bodyText = String(doc.body?.innerText || doc.body?.textContent || "").replace(/\r\n/g, "\n");
+    return bodyText.replace(/\n{3,}/g, "\n\n").trim();
+  }
+
+  return raw
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/p>/gi, "\n")
+    .replace(/<[^>]+>/g, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
 }

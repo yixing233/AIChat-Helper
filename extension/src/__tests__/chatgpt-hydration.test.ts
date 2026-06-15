@@ -1600,4 +1600,159 @@ describe("ChatGPT mapping hydration", () => {
       text: "## 总结\n内容如下\n---"
     });
   });
+
+  it("hydrates ChatGPT pasted text attachments from contextual tether_quote messages", () => {
+    const snapshot = extractChatGPTSnapshotFromConversation({
+      id: "conv-pasted-text",
+      title: "Pasted Text Conversation",
+      current_node: "assistant-final",
+      mapping: {
+        root: { id: "root", parent: null, children: ["user-paste"] },
+        "user-paste": {
+          id: "user-paste",
+          parent: "root",
+          children: ["context-paste"],
+          message: {
+            id: "msg-user-paste",
+            author: { role: "user" },
+            content: {
+              content_type: "text",
+              parts: ["请基于这段粘贴文本继续处理"]
+            },
+            metadata: {
+              attachments: [{
+                id: "file-text-1",
+                name: "粘贴的文本 (1).txt",
+                mime_type: "text/plain"
+              }]
+            },
+            create_time: 11
+          }
+        },
+        "context-paste": {
+          id: "context-paste",
+          parent: "user-paste",
+          children: ["assistant-final"],
+          message: {
+            id: "msg-context-paste",
+            author: { role: "assistant" },
+            content: {
+              content_type: "tether_quote",
+              title: "粘贴的文本 (1).txt",
+              text: "<html><body><pre>第一行\n第二行\n第三行</pre></body></html>"
+            },
+            metadata: {
+              is_visually_hidden_from_conversation: true,
+              can_save: false
+            },
+            create_time: 12
+          }
+        },
+        "assistant-final": {
+          id: "assistant-final",
+          parent: "context-paste",
+          children: [],
+          message: {
+            id: "msg-assistant-final",
+            author: { role: "assistant" },
+            content: {
+              content_type: "text",
+              parts: ["已收到，我会基于文本处理。"]
+            },
+            create_time: 13
+          }
+        }
+      }
+    });
+
+    expect(snapshot.messages).toEqual([
+      {
+        id: "msg-user-paste",
+        sourceMessageId: "msg-user-paste",
+        role: "user",
+        text: "请基于这段粘贴文本继续处理\n\n[附件1: 粘贴的文本 (1).txt]",
+        createdAt: "11",
+        attachments: [{
+          id: "file-text-1",
+          fileName: "粘贴的文本 (1).txt",
+          mimeType: "text/plain",
+          content: "第一行\n第二行\n第三行",
+          url: undefined
+        }]
+      },
+      {
+        id: "msg-assistant-final",
+        sourceMessageId: "msg-assistant-final",
+        role: "assistant",
+        text: "已收到，我会基于文本处理。",
+        createdAt: "13"
+      }
+    ]);
+  });
+
+  it("strips script and style noise from ChatGPT pasted text attachment html payloads", () => {
+    const snapshot = extractChatGPTSnapshotFromConversation({
+      id: "conv-pasted-text-noise",
+      title: "Pasted Text Noise Conversation",
+      current_node: "assistant-final",
+      mapping: {
+        root: { id: "root", parent: null, children: ["user-paste"] },
+        "user-paste": {
+          id: "user-paste",
+          parent: "root",
+          children: ["context-paste"],
+          message: {
+            id: "msg-user-paste",
+            author: { role: "user" },
+            content: {
+              content_type: "text",
+              parts: ["这里有一段粘贴文本"]
+            },
+            metadata: {
+              attachments: [{
+                id: "file-text-1",
+                name: "粘贴的文本 (1).txt",
+                mime_type: "text/plain"
+              }]
+            },
+            create_time: 11
+          }
+        },
+        "context-paste": {
+          id: "context-paste",
+          parent: "user-paste",
+          children: ["assistant-final"],
+          message: {
+            id: "msg-context-paste",
+            author: { role: "assistant" },
+            content: {
+              content_type: "tether_quote",
+              title: "粘贴的文本 (1).txt",
+              text: "<html><head><style>body{color:red}</style><script>console.log('x')</script></head><body><pre>API returned 403\nJust a moment...\nCloudflare</pre></body></html>"
+            },
+            metadata: {
+              can_save: false
+            },
+            create_time: 12
+          }
+        },
+        "assistant-final": {
+          id: "assistant-final",
+          parent: "context-paste",
+          children: [],
+          message: {
+            id: "msg-assistant-final",
+            author: { role: "assistant" },
+            content: {
+              content_type: "text",
+              parts: ["好的"]
+            },
+            create_time: 13
+          }
+        }
+      }
+    });
+
+    expect(snapshot.messages[0]?.attachments?.[0]?.content).toBe("API returned 403\nJust a moment...\nCloudflare");
+  });
 });
