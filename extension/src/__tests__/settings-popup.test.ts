@@ -37,9 +37,11 @@ describe("settings popup", () => {
     expect(root.querySelector<HTMLInputElement>("[data-ai-chat-helper-auto-update-check]")?.checked).toBe(false);
     expect(root.querySelector<HTMLInputElement>("[data-ai-chat-helper-auto-backup-enabled]")?.checked).toBe(false);
     expect(root.querySelector<HTMLInputElement>("[data-ai-chat-helper-auto-backup-interval]")?.value).toBe("15");
+    expect(root.querySelector<HTMLInputElement>("[data-ai-chat-helper-auto-backup-url-delay]")?.value).toBe("5");
     expect(root.textContent).toContain("备份");
     expect(root.textContent).toContain("自动备份");
     expect(root.textContent).toContain("备份间隔");
+    expect(root.textContent).toContain("切换延迟");
     expect(root.querySelector("[data-ai-chat-helper-popup-action='open-backups']")).toBeTruthy();
     expect(root.querySelector("[data-ai-chat-helper-popup-action='backup-current-now']")).toBeTruthy();
     expect(root.querySelector("[data-ai-chat-helper-popup-action='backup-platform-now']")).toBeTruthy();
@@ -259,6 +261,7 @@ describe("settings popup", () => {
       autoUpdateCheck: DEFAULT_EXTENSION_SETTINGS.autoUpdateCheck,
       autoBackupEnabled: DEFAULT_EXTENSION_SETTINGS.autoBackupEnabled,
       autoBackupIntervalMinutes: DEFAULT_EXTENSION_SETTINGS.autoBackupIntervalMinutes,
+      autoBackupUrlChangeDelaySeconds: DEFAULT_EXTENSION_SETTINGS.autoBackupUrlChangeDelaySeconds,
       removeQwenAds: DEFAULT_EXTENSION_SETTINGS.removeQwenAds,
       hideDeepSeekNativeNav: DEFAULT_EXTENSION_SETTINGS.hideDeepSeekNativeNav,
       panelPosition: DEFAULT_EXTENSION_SETTINGS.panelPosition
@@ -278,20 +281,25 @@ describe("settings popup", () => {
     bindSettingsPopup(root, DEFAULT_EXTENSION_SETTINGS, onChange);
     const enabledInput = root.querySelector<HTMLInputElement>("[data-ai-chat-helper-auto-backup-enabled]");
     const intervalInput = root.querySelector<HTMLInputElement>("[data-ai-chat-helper-auto-backup-interval]");
+    const urlDelayInput = root.querySelector<HTMLInputElement>("[data-ai-chat-helper-auto-backup-url-delay]");
     expect(enabledInput).toBeTruthy();
     expect(intervalInput).toBeTruthy();
+    expect(urlDelayInput).toBeTruthy();
 
     enabledInput!.checked = true;
     enabledInput!.dispatchEvent(new Event("change", { bubbles: true }));
     intervalInput!.value = "30";
     intervalInput!.dispatchEvent(new Event("change", { bubbles: true }));
+    urlDelayInput!.value = "9";
+    urlDelayInput!.dispatchEvent(new Event("change", { bubbles: true }));
 
     expect(onChange).toHaveBeenCalledWith(expect.objectContaining<Partial<ExtensionSettings>>({
       autoBackupEnabled: true
     }));
     expect(onChange).toHaveBeenLastCalledWith(expect.objectContaining<Partial<ExtensionSettings>>({
       autoBackupEnabled: true,
-      autoBackupIntervalMinutes: 30
+      autoBackupIntervalMinutes: 30,
+      autoBackupUrlChangeDelaySeconds: 9
     }));
   });
 

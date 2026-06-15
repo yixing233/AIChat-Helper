@@ -161,6 +161,7 @@ export function createSettingsPopup(options: SettingsPopupOptions): HTMLElement 
       ${renderSwitchSetting("自动备份", "data-ai-chat-helper-auto-backup-enabled", settings.autoBackupEnabled)}
       ${renderLastBackupStatus(options.lastBackupAt)}
       ${renderNumberSetting("备份间隔", "data-ai-chat-helper-auto-backup-interval", settings.autoBackupIntervalMinutes, 5, 1440, 5)}
+      ${renderNumberSetting("切换延迟", "data-ai-chat-helper-auto-backup-url-delay", settings.autoBackupUrlChangeDelaySeconds, 0, 60, 1)}
     </section>
 
     <section class="ai-chat-helper-popup__section">
@@ -431,6 +432,7 @@ function readSettingsFromPopup(root: HTMLElement, previousSettings: ExtensionSet
     autoUpdateCheck: readChecked(root, "[data-ai-chat-helper-auto-update-check]", previousSettings.autoUpdateCheck),
     autoBackupEnabled: readChecked(root, "[data-ai-chat-helper-auto-backup-enabled]", previousSettings.autoBackupEnabled),
     autoBackupIntervalMinutes: readInputValue(root, "[data-ai-chat-helper-auto-backup-interval]"),
+    autoBackupUrlChangeDelaySeconds: readInputValue(root, "[data-ai-chat-helper-auto-backup-url-delay]"),
     removeQwenAds: readChecked(root, "[data-ai-chat-helper-remove-qwen-ads]", previousSettings.removeQwenAds),
     hideDeepSeekNativeNav: readChecked(root, "[data-ai-chat-helper-hide-deepseek-native-nav]", previousSettings.hideDeepSeekNativeNav)
   });
@@ -444,6 +446,7 @@ function writeSettingsToPopup(root: HTMLElement, settings: ExtensionSettings): v
   writeChecked(root, "[data-ai-chat-helper-auto-update-check]", settings.autoUpdateCheck);
   writeChecked(root, "[data-ai-chat-helper-auto-backup-enabled]", settings.autoBackupEnabled);
   writeInputValue(root, "[data-ai-chat-helper-auto-backup-interval]", settings.autoBackupIntervalMinutes);
+  writeInputValue(root, "[data-ai-chat-helper-auto-backup-url-delay]", settings.autoBackupUrlChangeDelaySeconds);
   writeChecked(root, "[data-ai-chat-helper-remove-qwen-ads]", settings.removeQwenAds);
   writeChecked(root, "[data-ai-chat-helper-hide-deepseek-native-nav]", settings.hideDeepSeekNativeNav);
 }

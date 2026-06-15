@@ -6,6 +6,7 @@ export interface ExtensionSettings {
   autoUpdateCheck: boolean;
   autoBackupEnabled: boolean;
   autoBackupIntervalMinutes: number;
+  autoBackupUrlChangeDelaySeconds: number;
   removeQwenAds: boolean;
   hideDeepSeekNativeNav: boolean;
   panelPosition: PanelPosition | null;
@@ -24,6 +25,7 @@ export const DEFAULT_EXTENSION_SETTINGS: ExtensionSettings = {
   autoUpdateCheck: true,
   autoBackupEnabled: false,
   autoBackupIntervalMinutes: 15,
+  autoBackupUrlChangeDelaySeconds: 5,
   removeQwenAds: false,
   hideDeepSeekNativeNav: false,
   panelPosition: null
@@ -56,6 +58,7 @@ export function normalizeExtensionSettings(value: Partial<Record<keyof Extension
     autoUpdateCheck: normalizeBoolean(value.autoUpdateCheck, DEFAULT_EXTENSION_SETTINGS.autoUpdateCheck),
     autoBackupEnabled: normalizeBoolean(value.autoBackupEnabled, DEFAULT_EXTENSION_SETTINGS.autoBackupEnabled),
     autoBackupIntervalMinutes: normalizeAutoBackupInterval(value.autoBackupIntervalMinutes),
+    autoBackupUrlChangeDelaySeconds: normalizeAutoBackupUrlChangeDelaySeconds(value.autoBackupUrlChangeDelaySeconds),
     removeQwenAds: normalizeBoolean(value.removeQwenAds, DEFAULT_EXTENSION_SETTINGS.removeQwenAds),
     hideDeepSeekNativeNav: normalizeBoolean(value.hideDeepSeekNativeNav, DEFAULT_EXTENSION_SETTINGS.hideDeepSeekNativeNav),
     panelPosition: normalizePanelPosition(value.panelPosition)
@@ -90,6 +93,12 @@ function normalizeAutoBackupInterval(value: unknown): number {
   const parsed = Number(value ?? DEFAULT_EXTENSION_SETTINGS.autoBackupIntervalMinutes);
   if (!Number.isFinite(parsed)) return DEFAULT_EXTENSION_SETTINGS.autoBackupIntervalMinutes;
   return Math.max(5, Math.min(Math.round(parsed), 1440));
+}
+
+function normalizeAutoBackupUrlChangeDelaySeconds(value: unknown): number {
+  const parsed = Number(value ?? DEFAULT_EXTENSION_SETTINGS.autoBackupUrlChangeDelaySeconds);
+  if (!Number.isFinite(parsed)) return DEFAULT_EXTENSION_SETTINGS.autoBackupUrlChangeDelaySeconds;
+  return Math.max(0, Math.min(Math.round(parsed), 60));
 }
 
 function normalizeBoolean(value: unknown, defaultValue: boolean): boolean {

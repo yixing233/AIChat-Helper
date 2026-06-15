@@ -34,6 +34,8 @@ export function escapeHtml(value: string): string {
 
 export function formatAttachmentText(attachment: ExportAttachment): string {
   const label = attachment.fileName || attachment.id || "attachment";
+  const textBlock = formatInlineTextAttachmentText(attachment);
+  if (textBlock) return textBlock;
   return attachment.url ? `附件: ${label} <${attachment.url}>` : `附件: ${label}`;
 }
 
@@ -60,8 +62,10 @@ export function formatMessageExportText(snapshot: ConversationSnapshot, message:
 export function getMessageAttachmentsForExport(snapshot: ConversationSnapshot, message: ConversationMessage, mode: MessageExportMode = "markdown"): ExportAttachment[] {
   const attachments = message.attachments || [];
   const representedAttachments = new Set(attachments.filter((attachment) => (
+    !shouldAlwaysInlineAttachment(attachment) && (
     isAttachmentRepresentedInText(message.text, attachment)
       || (snapshot.platformId === "claude" && isClaudeImageAttachmentRepresentedInText(message.text, attachment))
+    )
   )));
   if (snapshot.platformId !== "chatgpt" || !hasChatGPTImageEvidence(message)) {
     if (hasImagePlaceholderWithAttachment(message)) {
@@ -283,6 +287,8 @@ function formatClaudeRepresentedImageTextLine(attachment: ExportAttachment, text
 
 export function formatAttachmentMarkdown(attachment: ExportAttachment): string {
   const label = attachment.fileName || attachment.id || "attachment";
+  const textBlock = formatInlineTextAttachmentMarkdown(attachment, label);
+  if (textBlock) return textBlock;
   const htmlSnapshot = formatInlineHtmlAttachmentMarkdown(attachment, label);
   if (htmlSnapshot) return htmlSnapshot;
   if (attachment.url && isImageAttachment(attachment)) {
@@ -371,6 +377,8 @@ function escapeRegExp(value: string): string {
 export function formatRepresentedAttachmentHtmlBlock(attachment: ExportAttachment): string {
   const label = escapeHtml(attachment.fileName || attachment.id || "attachment");
   const mimeType = attachment.mimeType ? ` <small>${escapeHtml(attachment.mimeType)}</small>` : "";
+  const textSnapshot = formatInlineTextAttachmentHtml(attachment, label);
+  if (textSnapshot) return textSnapshot;
   const htmlSnapshot = formatInlineHtmlAttachmentFigure(attachment, label);
   if (htmlSnapshot) return htmlSnapshot;
   if (attachment.url && isImageAttachment(attachment)) {
@@ -448,6 +456,8 @@ function formatInlineHtmlAttachmentMarkdown(attachment: ExportAttachment, label:
 export function formatAttachmentHtml(attachment: ExportAttachment): string {
   const label = escapeHtml(attachment.fileName || attachment.id || "attachment");
   const mimeType = attachment.mimeType ? ` <small>${escapeHtml(attachment.mimeType)}</small>` : "";
+  const textSnapshot = formatInlineTextAttachmentHtml(attachment, label);
+  if (textSnapshot) return `<li>${textSnapshot}</li>`;
 
   const htmlSnapshot = formatInlineHtmlAttachmentSnapshot(attachment, label);
   if (htmlSnapshot) return htmlSnapshot;
@@ -461,6 +471,53 @@ export function formatAttachmentHtml(attachment: ExportAttachment): string {
   }
 
   return `<li>${label}${mimeType}</li>`;
+}
+
+function formatInlineTextAttachmentMarkdown(attachment: ExportAttachment, label: string): string {
+  const raw = getInlineTextAttachmentContent(attachment);
+  if (!raw) return "";
+  const lines = [
+    `**附件内容：${label}**`,
+    "",
+    `MIME: ${attachment.mimeType || "text/plain"}`,
+    "",
+    "```text",
+    raw,
+    "```"
+  ];
+  if (attachment.url) lines.push("", `[${label}](${attachment.url})`);
+  return lines.join("\n");
+}
+
+function formatInlineTextAttachmentText(attachment: ExportAttachment): string {
+  const raw = getInlineTextAttachmentContent(attachment);
+  if (!raw) return "";
+  const lines = [
+    `附件: ${attachment.fileName || attachment.id || "attachment"}`,
+    `MIME: ${attachment.mimeType || "text/plain"}`,
+    raw
+  ];
+  if (attachment.url) lines.splice(1, 0, `链接: ${attachment.url}`);
+  return lines.join("\n");
+}
+
+function formatInlineTextAttachmentHtml(attachment: ExportAttachment, label: string): string {
+  const raw = getInlineTextAttachmentContent(attachment);
+  if (!raw) return "";
+  const mimeType = attachment.mimeType ? `<div class="attachment-text-meta">${escapeHtml(attachment.mimeType)}</div>` : "";
+  const link = attachment.url
+    ? `<p><a href="${escapeHtml(attachment.url)}" target="_blank" rel="noreferrer">${label}</a></p>`
+    : "";
+  return `<figure class="attachment-text-block"><figcaption>${label}</figcaption>${mimeType}<pre>${escapeHtml(raw)}</pre>${link}</figure>`;
+}
+
+function getInlineTextAttachmentContent(attachment: ExportAttachment): string {
+  if (!isPlainTextAttachment(attachment)) return "";
+  return String(attachment.content || "").replace(/\r\n/g, "\n").trim();
+}
+
+function shouldAlwaysInlineAttachment(attachment: ExportAttachment): boolean {
+  return isPlainTextAttachment(attachment);
 }
 
 function formatInlineHtmlAttachmentSnapshot(attachment: ExportAttachment, label: string): string {
@@ -553,6 +610,12 @@ function isImageAttachment(attachment: ExportAttachment): boolean {
 function isHtmlAttachment(attachment: ExportAttachment): boolean {
   const mimeType = String(attachment.mimeType || "").toLowerCase();
   return mimeType.includes("html") || /\.html?$/i.test(attachment.fileName || "");
+}
+
+function isPlainTextAttachment(attachment: ExportAttachment): boolean {
+  const mimeType = String(attachment.mimeType || "").toLowerCase();
+  if (!mimeType.startsWith("text/plain")) return false;
+  return typeof attachment.content === "string" && attachment.content.trim().length > 0;
 }
 
 interface ClaudeImageAttachmentReference {

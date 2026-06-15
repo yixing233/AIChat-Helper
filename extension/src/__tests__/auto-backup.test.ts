@@ -229,7 +229,7 @@ describe("auto backup runner", () => {
     resolveReady();
     await expect(tickPromise).resolves.toMatchObject({ status: "created" });
     expect(createSnapshot).toHaveBeenCalledTimes(2);
-    expect(calls).toEqual(["snapshot", "find", "wait:start", "wait:done", "snapshot"]);
+    expect(calls).toEqual(["snapshot", "find", "wait:start", "wait:done", "snapshot", "find"]);
   });
 
   it("skips ticks until the configured interval has elapsed", async () => {
@@ -300,6 +300,31 @@ describe("auto backup runner", () => {
     expect(createSnapshot).toHaveBeenCalledTimes(1);
   });
 
+  it("does not start backup loading feedback while only checking for content changes", async () => {
+    const existing = buildConversationBackupRecord(snapshot, "zip", [zipFile], {
+      createdAt: "2026-06-09T09:00:00.000Z",
+      source: "auto"
+    });
+    const onCheckStart = vi.fn();
+    const onStart = vi.fn();
+    const runner = createAutoBackupRunner({
+      getSettings: () => makeSettings(),
+      createSnapshot: vi.fn(async () => snapshot),
+      findExistingRecord: vi.fn(async () => existing),
+      exportSnapshot: vi.fn(async () => [zipFile]),
+      saveRecord: vi.fn(async (record): Promise<BackupSaveResult> => ({ record, created: true })),
+      onCheckStart,
+      onStart,
+      now: () => 1000,
+      createTimestamp: () => "2026-06-09T10:00:00.000Z"
+    });
+
+    await expect(runner.tick(true)).resolves.toEqual({ status: "unchanged", record: existing });
+
+    expect(onCheckStart).toHaveBeenCalledOnce();
+    expect(onStart).not.toHaveBeenCalled();
+  });
+
   it("still starts automatic backup feedback when content has changed", async () => {
     const onStart = vi.fn();
     const createSnapshot = vi.fn(async () => snapshot);
@@ -323,6 +348,49 @@ describe("auto backup runner", () => {
     expect(onStart).toHaveBeenCalledOnce();
     expect(exportSnapshot).toHaveBeenCalledOnce();
     expect(saveRecord).toHaveBeenCalledOnce();
+  });
+
+  it("re-checks for unchanged content after waitForReady before starting auto backup", async () => {
+    const existing = buildConversationBackupRecord(snapshot, "zip", [zipFile], {
+      createdAt: "2026-06-09T09:00:00.000Z",
+      source: "auto"
+    });
+    const transientSnapshot: ConversationSnapshot = {
+      ...snapshot,
+      messages: [
+        ...snapshot.messages,
+        { id: "assistant-loading", role: "assistant", text: "Loading..." }
+      ]
+    };
+    const createSnapshot = vi.fn()
+      .mockResolvedValueOnce(transientSnapshot)
+      .mockResolvedValueOnce(snapshot);
+    const findExistingRecord = vi.fn()
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(existing);
+    const onStart = vi.fn();
+    const exportSnapshot = vi.fn(async () => [zipFile]);
+    const saveRecord = vi.fn(async (record): Promise<BackupSaveResult> => ({ record, created: true }));
+    const runner = createAutoBackupRunner({
+      getSettings: () => makeSettings(),
+      waitForReady: vi.fn(async () => undefined),
+      createSnapshot,
+      findExistingRecord,
+      exportSnapshot,
+      saveRecord,
+      onStart,
+      now: () => 1000,
+      createTimestamp: () => "2026-06-09T10:00:00.000Z"
+    });
+
+    await expect(runner.tick(true)).resolves.toEqual({ status: "unchanged", record: existing });
+
+    expect(createSnapshot).toHaveBeenCalledTimes(2);
+    expect(findExistingRecord).toHaveBeenNthCalledWith(1, transientSnapshot, "zip");
+    expect(findExistingRecord).toHaveBeenNthCalledWith(2, snapshot, "zip");
+    expect(onStart).not.toHaveBeenCalled();
+    expect(exportSnapshot).not.toHaveBeenCalled();
+    expect(saveRecord).not.toHaveBeenCalled();
   });
 
   it("treats timestamp-only snapshot changes as unchanged automatic backups", async () => {

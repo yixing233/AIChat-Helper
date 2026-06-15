@@ -10,6 +10,7 @@ import { createCapturedEventBuffer } from "./captured-event-buffer";
 import { createConversationSnapshot } from "./conversation-snapshot";
 import { downloadExportFiles } from "./export-downloads";
 import { installNodeAutoRefresh } from "./node-auto-refresh";
+import { createUrlChangeAutoBackupScheduler } from "./url-change-auto-backup";
 import {
   getUpdateLogEntriesBetweenVersions,
   parseScriptVersionFromSource,
@@ -152,6 +153,14 @@ async function mountPanel(): Promise<MountedPanelContext> {
     },
     exportSnapshot,
     saveRecord: (record) => backupStore.save(record),
+    onCheckStart: () => {
+      showToast("正在检查对话是否有变化", {
+        id: "auto-backup",
+        title: "自动备份",
+        loading: true,
+        duration: 10000
+      });
+    },
     onStart: () => {
       showToast("自动备份中，请勿退出当前页面，图片缓存完成后会自动保存。", {
         id: "auto-backup",
@@ -161,6 +170,12 @@ async function mountPanel(): Promise<MountedPanelContext> {
       });
     }
   });
+  const urlChangeAutoBackup = createUrlChangeAutoBackupScheduler({
+    getDelaySeconds: () => currentSettings.autoBackupUrlChangeDelaySeconds,
+    isEnabled: () => currentSettings.autoBackupEnabled && canAutoBackupCurrentConversation(),
+    onTrigger: () => runAutoBackupTick(true)
+  });
+  urlChangeAutoBackup.sync(window.location.href, currentConversationId);
 
   const renderCurrentNodes = () => {
     if (!nodesContainer) return;
@@ -183,6 +198,7 @@ async function mountPanel(): Promise<MountedPanelContext> {
     const nextConversationId = platformAdapter.getConversationId();
     if (nextConversationId && nextConversationId !== currentConversationId) {
       currentConversationId = nextConversationId;
+      urlChangeAutoBackup.sync(window.location.href, currentConversationId);
       currentNodes = [];
       currentNodeSignature = "";
       snapshotNodeCache = [];
@@ -309,6 +325,7 @@ async function mountPanel(): Promise<MountedPanelContext> {
       || readingLineChanged;
     const previousAutoBackupEnabled = currentSettings.autoBackupEnabled;
     const previousAutoBackupInterval = currentSettings.autoBackupIntervalMinutes;
+    const previousAutoBackupDelay = currentSettings.autoBackupUrlChangeDelaySeconds;
 
     currentSettings = normalized;
     visibleLimit = normalized.visibleLimit;
@@ -327,7 +344,11 @@ async function mountPanel(): Promise<MountedPanelContext> {
     if (currentSettings.autoUpdateCheck) scheduleSilentUpdateCheck();
     if (
       currentSettings.autoBackupEnabled
-      && (!previousAutoBackupEnabled || previousAutoBackupInterval !== currentSettings.autoBackupIntervalMinutes)
+      && (
+        !previousAutoBackupEnabled
+        || previousAutoBackupInterval !== currentSettings.autoBackupIntervalMinutes
+        || previousAutoBackupDelay !== currentSettings.autoBackupUrlChangeDelaySeconds
+      )
     ) {
       runAutoBackupTick(true);
     }
@@ -344,8 +365,16 @@ async function mountPanel(): Promise<MountedPanelContext> {
   function startAutoBackupScheduler(): void {
     window.setInterval(() => runAutoBackupTick(), 60 * 1000);
     if (currentSettings.autoBackupEnabled) {
-      window.setTimeout(() => runAutoBackupTick(true), 2500);
+      const scheduledConversationId = String(platformAdapter.getConversationId() || "").trim();
+      window.setTimeout(() => {
+        const nextConversationId = String(platformAdapter.getConversationId() || "").trim();
+        if (!scheduledConversationId || scheduledConversationId === "current" || nextConversationId !== scheduledConversationId) {
+          return;
+        }
+        runAutoBackupTick(true);
+      }, 2500);
     }
+    installAutoBackupUrlChangeListeners();
   }
 
   function runAutoBackupTick(force = false): void {
@@ -364,7 +393,7 @@ async function mountPanel(): Promise<MountedPanelContext> {
           return;
         }
         if (result.status === "unchanged") {
-          showToast(`自动备份已检查：${result.record.title} 内容未变化`, {
+          showToast(`当前对话暂无新增内容，已跳过自动备份：${result.record.title}`, {
             id: "auto-backup",
             title: "自动备份",
             tone: "success",
@@ -386,6 +415,32 @@ async function mountPanel(): Promise<MountedPanelContext> {
     if (!canAutoBackupCurrentConversation()) return;
     runAutoBackupTick(true);
   };
+
+  function installAutoBackupUrlChangeListeners(): void {
+    patchHistoryMethod("pushState");
+    patchHistoryMethod("replaceState");
+    window.addEventListener("popstate", handlePossibleConversationNavigation, { passive: true });
+  }
+
+  function patchHistoryMethod(method: "pushState" | "replaceState"): void {
+    const original = window.history[method];
+    if ((original as typeof original & { __aiChatHelperPatched?: boolean }).__aiChatHelperPatched) return;
+    const wrapped = function (this: History, ...args: Parameters<History["pushState"]>) {
+      const result = original.apply(this, args);
+      handlePossibleConversationNavigation();
+      return result;
+    } as History["pushState"] & { __aiChatHelperPatched?: boolean };
+    wrapped.__aiChatHelperPatched = true;
+    window.history[method] = wrapped as History[typeof method];
+  }
+
+  function handlePossibleConversationNavigation(): void {
+    const nextConversationId = String(platformAdapter.getConversationId() || "").trim();
+    urlChangeAutoBackup.handleNavigation(window.location.href, nextConversationId);
+    if (nextConversationId && nextConversationId !== currentConversationId) {
+      currentConversationId = nextConversationId;
+    }
+  }
 
   function canAutoBackupCurrentConversation(): boolean {
     const conversationId = String(platformAdapter.getConversationId() || "").trim();

@@ -23,6 +23,9 @@ describe("extension settings", () => {
     expect(normalizeExtensionSettings({ autoBackupIntervalMinutes: 0 }).autoBackupIntervalMinutes).toBe(5);
     expect(normalizeExtensionSettings({ autoBackupIntervalMinutes: 5000 }).autoBackupIntervalMinutes).toBe(1440);
     expect(normalizeExtensionSettings({ autoBackupIntervalMinutes: "30" }).autoBackupIntervalMinutes).toBe(30);
+    expect(normalizeExtensionSettings({ autoBackupUrlChangeDelaySeconds: -1 }).autoBackupUrlChangeDelaySeconds).toBe(0);
+    expect(normalizeExtensionSettings({ autoBackupUrlChangeDelaySeconds: 500 }).autoBackupUrlChangeDelaySeconds).toBe(60);
+    expect(normalizeExtensionSettings({ autoBackupUrlChangeDelaySeconds: "8" }).autoBackupUrlChangeDelaySeconds).toBe(8);
   });
 
   it("accepts numeric strings from legacy userscript storage", () => {

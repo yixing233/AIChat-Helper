@@ -308,6 +308,36 @@ describe("createExportModal", () => {
     expect(fullPreview?.textContent).toContain("第四行");
   });
 
+  it("opens a pasted text attachment preview dialog from the export modal", () => {
+    const modal = createExportModal({
+      ...snapshot,
+      messages: [{
+        id: "paste-1",
+        role: "user",
+        text: "请看这个文本附件\n\n[附件1: 粘贴的文本 (1).txt]",
+        attachments: [{
+          id: "file-text-1",
+          fileName: "粘贴的文本 (1).txt",
+          mimeType: "text/plain",
+          content: "第一行\n第二行\n第三行"
+        }]
+      }]
+    });
+    document.body.appendChild(modal);
+
+    const attachmentButton = modal.querySelector<HTMLButtonElement>("[data-ai-chat-helper-attachment-preview]");
+    expect(attachmentButton).toBeTruthy();
+
+    attachmentButton?.click();
+
+    const preview = document.querySelector<HTMLElement>("[data-ai-chat-helper-attachment-full-preview]");
+    expect(preview?.textContent).toContain("附件内容预览");
+    expect(preview?.textContent).toContain("粘贴的文本 (1).txt");
+    expect(preview?.textContent).toContain("text/plain");
+    expect(preview?.textContent).toContain("第一行");
+    expect(preview?.textContent).toContain("第三行");
+  });
+
   it("uses the shared custom tooltip for export modal icon buttons instead of native title", () => {
     const modal = createExportModal(snapshot);
     document.body.appendChild(modal);

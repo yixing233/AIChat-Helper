@@ -43,14 +43,18 @@ vi.mock("../messaging/bridge", async () => {
 });
 
 vi.mock("../storage/extension-storage", () => ({
-  createExtensionStorage: () => ({
+  createExtensionStorage: (namespace: string) => ({
     get: async <T>(key: string, defaultValue: T) => {
-      const scopedKey = `ai-chat-helper:settings:${key}`;
+      const scopedKey = `ai-chat-helper:${namespace}:${key}`;
       if (mocks.storageValues.has(scopedKey)) return mocks.storageValues.get(scopedKey) as T;
       return mocks.storageValues.has(key) ? mocks.storageValues.get(key) as T : defaultValue;
     },
-    set: async () => undefined,
-    remove: async () => undefined
+    set: async (key: string, value: unknown) => {
+      mocks.storageValues.set(`ai-chat-helper:${namespace}:${key}`, value);
+    },
+    remove: async (key: string) => {
+      mocks.storageValues.delete(`ai-chat-helper:${namespace}:${key}`);
+    }
   }),
   migrateLocalStorageKey: async () => false
 }));
@@ -60,6 +64,7 @@ describe("content main node auto refresh", () => {
     vi.useFakeTimers();
     vi.resetModules();
     document.body.innerHTML = "";
+    window.history.replaceState({}, "", "/c/current");
     document.documentElement.removeAttribute("data-ai-chat-helper-platform");
     mocks.platformId = "chatgpt";
     mocks.conversationId = "current";
@@ -121,6 +126,7 @@ describe("content main node auto refresh", () => {
     vi.restoreAllMocks();
     vi.resetModules();
     document.body.innerHTML = "";
+    window.history.replaceState({}, "", "/c/current");
     Reflect.deleteProperty(globalThis, "chrome");
   });
 
@@ -160,12 +166,16 @@ describe("content main node auto refresh", () => {
 
     expect(renderedNodeTitles()).toEqual(["First prompt", "Second answer"]);
     expect(mocks.storageChangeListeners.length).toBeGreaterThan(0);
+    const nodesContainer = document.querySelector<HTMLElement>("[data-ai-chat-helper-nodes]");
+    expect(nodesContainer?.style.height).toBe("98px");
 
     mocks.storageValues.set("ai-chat-helper:settings:visibleLimit", 1);
     emitStorageChange("visibleLimit", 20, 1);
     await flushMount();
+    await vi.advanceTimersByTimeAsync(10);
 
-    expect(renderedNodeTitles()).toEqual(["First prompt"]);
+    expect(renderedNodeTitles()).toEqual(["First prompt", "Second answer"]);
+    expect(nodesContainer?.style.height).toBe("96px");
   });
 
   it("keeps previously discovered rail nodes when a virtualized chat DOM recycles them", async () => {

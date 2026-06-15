@@ -1172,12 +1172,13 @@ describe("backup library page", () => {
 
   it("lets backup detail messages fill the available detail height", () => {
     expect(popupCss).toMatch(/\.ai-chat-helper-backup-workbench__header\s*\{[^}]*grid-template-columns:\s*minmax\(220px,\s*auto\) minmax\(0,\s*1fr\);[^}]*gap:\s*12px;[^}]*align-items:\s*center;/s);
-    expect(popupCss).toMatch(/\.ai-chat-helper-backup-workbench__summary-bar\s*\{[^}]*display:\s*flex;[^}]*align-items:\s*stretch;[^}]*gap:\s*8px;/s);
-    expect(popupCss).toMatch(/\.ai-chat-helper-backup-workbench__summary\s*\{[^}]*display:\s*flex;[^}]*align-items:\s*stretch;[^}]*gap:\s*8px;/s);
+    expect(popupCss).toMatch(/\.ai-chat-helper-backup-workbench__summary-bar\s*\{[^}]*display:\s*grid;[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)\s*auto;[^}]*gap:\s*8px;/s);
     expect(popupCss).toMatch(/\.ai-chat-helper-backup-workbench__brand\s*\{[^}]*width:\s*32px;[^}]*height:\s*32px;[^}]*border-radius:\s*10px;/s);
     expect(popupCss).toMatch(/\.ai-chat-helper-backup-workbench__brand img\s*\{[^}]*width:\s*18px;[^}]*height:\s*18px;[^}]*object-fit:\s*contain;/s);
-    expect(popupCss).toMatch(/\.ai-chat-helper-backup-workbench__summary-tools\s*\{[^}]*flex:\s*1 1 auto;[^}]*grid-template-columns:\s*minmax\(240px,\s*1fr\);[^}]*gap:\s*8px;/s);
-    expect(popupCss).toMatch(/\.ai-chat-helper-backup-workbench__search input\s*\{[^}]*height:\s*32px;[^}]*border:\s*1px solid #d7e1ed;[^}]*background:\s*#f8fafc;/s);
+    expect(popupCss).toMatch(/\.ai-chat-helper-backup-workbench__storage-summary\s*\{[^}]*margin-top:\s*auto;[^}]*display:\s*flex;[^}]*align-items:\s*center;/s);
+    expect(popupCss).toMatch(/\.ai-chat-helper-backup-refresh\s*\{[^}]*display:\s*flex;[^}]*align-items:\s*center;[^}]*justify-content:\s*center;[^}]*width:\s*38px;[^}]*height:\s*38px;/s);
+    expect(popupCss).toMatch(/\.ai-chat-helper-backup-workbench__search\s*\{[^}]*display:\s*flex;[^}]*align-items:\s*center;[^}]*gap:\s*8px;[^}]*border:\s*1px solid #d7e1ed;/s);
+    expect(popupCss).toMatch(/\.ai-chat-helper-backup-workbench__search input\s*\{[^}]*height:\s*32px;[^}]*border:\s*none;[^}]*background:\s*transparent;/s);
     expect(popupCss).not.toMatch(/\.ai-chat-helper-backup-workbench__title p\s*\{/s);
     expect(popupCss).not.toMatch(/\.ai-chat-helper-backup-workbench__status\s*\{/s);
     expect(popupCss).toMatch(/\.ai-chat-helper-backup-workbench__title h1\s*\{[^}]*font-size:\s*18px;/s);
@@ -1219,5 +1220,41 @@ describe("backup library page", () => {
   it("styles the backup node hover information card like the page tooltip", () => {
     expect(popupCss).toMatch(/\.ai-chat-helper-node-tooltip\s*\{[\s\S]*position:\s*fixed;[\s\S]*max-width:\s*280px;[\s\S]*pointer-events:\s*none;[\s\S]*-webkit-line-clamp:\s*4;/s);
     expect(popupCss).toMatch(/\.ai-chat-helper-node-tooltip\.is-visible\s*\{[\s\S]*opacity:\s*1;/s);
+  });
+
+  it("triggers the onRefresh callback and shows loading spinner when clicking the refresh button", async () => {
+    const chatgpt = buildConversationBackupRecord(chatgptSnapshot, "zip", [file], {
+      createdAt: "2026-06-09T10:00:00.000Z",
+      source: "auto"
+    });
+    const root = createBackupLibraryPopup([chatgpt]);
+    const onRefresh = vi.fn().mockResolvedValue([chatgpt]);
+
+    bindBackupLibraryPopup(root, [chatgpt], {
+      onBack: vi.fn(),
+      onDownload: vi.fn(),
+      onDelete: vi.fn(),
+      onRefresh
+    });
+
+    const refreshButton = root.querySelector<HTMLButtonElement>("[data-ai-chat-helper-backup-refresh]");
+    expect(refreshButton).toBeTruthy();
+
+    refreshButton?.click();
+
+    // 应该立即显示 loading
+    const loadingButton = root.querySelector<HTMLButtonElement>("[data-ai-chat-helper-backup-refresh]");
+    expect(loadingButton).toBeTruthy();
+    expect(loadingButton?.disabled).toBe(true);
+    expect(root.querySelector(".ai-chat-helper-backup-refresh .fa-spin")).toBeTruthy();
+
+    // 等待 refresh 异步完成并且加载状态完全清除
+    await vi.waitFor(() => {
+      expect(onRefresh).toHaveBeenCalledTimes(1);
+      expect(root.querySelector(".ai-chat-helper-backup-refresh .fa-spin")).toBeFalsy();
+    });
+
+    const finalButton = root.querySelector<HTMLButtonElement>("[data-ai-chat-helper-backup-refresh]");
+    expect(finalButton?.disabled).toBe(false);
   });
 });

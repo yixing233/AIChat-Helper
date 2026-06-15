@@ -15,7 +15,7 @@ export interface AutoBackupRunner {
 }
 
 export interface AutoBackupRunnerOptions {
-  getSettings: () => Pick<ExtensionSettings, "autoBackupEnabled" | "autoBackupIntervalMinutes">;
+  getSettings: () => Pick<ExtensionSettings, "autoBackupEnabled" | "autoBackupIntervalMinutes" | "autoBackupUrlChangeDelaySeconds">;
   shouldRun?: () => boolean;
   waitForReady?: () => Promise<void>;
   createSnapshot: () => Promise<ConversationSnapshot>;
@@ -23,6 +23,7 @@ export interface AutoBackupRunnerOptions {
   exportSnapshot: (snapshot: ConversationSnapshot, format: SnapshotExportFormat) => Promise<ExportFile[]>;
   saveRecord: (record: ConversationBackupRecord) => Promise<BackupSaveResult>;
   fetchImage?: PreviewImageFetcher;
+  onCheckStart?: () => void;
   onStart?: () => void;
   now?: () => number;
   createTimestamp?: () => string;
@@ -47,6 +48,7 @@ export function createAutoBackupRunner(options: AutoBackupRunnerOptions): AutoBa
       lastAttemptAt = currentTime;
 
       const format: SnapshotExportFormat = "zip";
+      options.onCheckStart?.();
       const initialSnapshot = await options.createSnapshot();
       if (options.findExistingRecord) {
         const existingRecord = await options.findExistingRecord(initialSnapshot, format);
@@ -55,11 +57,17 @@ export function createAutoBackupRunner(options: AutoBackupRunnerOptions): AutoBa
         }
       }
 
-      options.onStart?.();
       if (options.waitForReady) {
         await options.waitForReady();
       }
       const snapshot = options.waitForReady ? await options.createSnapshot() : initialSnapshot;
+      if (options.waitForReady && options.findExistingRecord) {
+        const existingRecord = await options.findExistingRecord(snapshot, format);
+        if (existingRecord) {
+          return { status: "unchanged", record: existingRecord };
+        }
+      }
+      options.onStart?.();
       const files = await options.exportSnapshot(snapshot, format);
       const result = await options.saveRecord(await createConversationBackupRecord(snapshot, format, files, {
         createdAt: createTimestamp(),

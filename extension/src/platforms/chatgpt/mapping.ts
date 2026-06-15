@@ -43,9 +43,12 @@ interface ChatGPTMessage {
     }>;
     serialization_metadata?: {
       content_references?: Array<{
+        start_idx?: number;
+        end_idx?: number;
         matched_text?: string;
         render_as?: string;
         alt?: string;
+        text?: string;
       }>;
     };
     citations?: Array<{
@@ -450,22 +453,115 @@ function applyChatGPTMessageReferences(text: string, msg: ChatGPTMessage): strin
 
 function applyChatGPTMathReferences(text: string, msg: ChatGPTMessage): string {
   let output = String(text || "");
-  const refs = Array.isArray(msg.metadata?.content_references)
-    ? msg.metadata.content_references
-    : (Array.isArray(msg.metadata?.serialization_metadata?.content_references)
-      ? msg.metadata.serialization_metadata.content_references
-      : []);
+  const refs = collectChatGPTLatexReferences(msg);
+  const indexedItems: Array<{ start: number; end: number; matchedText: string; latex: string }> = [];
+  const fallbackItems: Array<{ matchedText: string; latex: string }> = [];
 
   refs.forEach((ref) => {
     if (!ref || String(ref.render_as || "").trim().toLowerCase() !== "latex") return;
     const matchedText = String(ref.matched_text || "").trim();
     const alt = normalizeChatGPTLatexReferenceText(ref);
     if (!matchedText || !alt) return;
-    const replacement = `\n\n$$\n${alt}\n$$\n\n`;
-    if (output.includes(matchedText)) output = output.split(matchedText).join(replacement);
+    const start = Number(ref.start_idx);
+    const end = Number(ref.end_idx);
+    const hasValidIndex = Number.isFinite(start) && Number.isFinite(end) && end > start;
+    const segment = hasValidIndex ? output.slice(start, end) : "";
+    if (hasValidIndex && segment === matchedText) {
+      indexedItems.push({ start, end, matchedText, latex: alt });
+      return;
+    }
+    if (canFallbackReplaceChatGPTLatexReference(matchedText)) {
+      fallbackItems.push({ matchedText, latex: alt });
+    }
+  });
+
+  indexedItems
+    .sort((a, b) => b.start - a.start)
+    .forEach((item) => {
+      const replacement = formatChatGPTLatexReference(output, item.start, item.end - item.start, item.latex);
+      output = output.slice(0, item.start) + replacement + output.slice(item.end);
+    });
+
+  fallbackItems.forEach((item) => {
+    output = replaceChatGPTLatexReference(output, item.matchedText, item.latex);
   });
 
   return output;
+}
+
+function collectChatGPTLatexReferences(msg: ChatGPTMessage): unknown[] {
+  const refs: unknown[] = [];
+  const seenIndexedRefs = new Map<string, number>();
+  const addRefs = (items: unknown[], replaceIndexedDuplicates: boolean) => {
+    items.forEach((ref) => {
+      if (!ref || typeof ref !== "object") {
+        refs.push(ref);
+        return;
+      }
+      const item = ref as { start_idx?: number; end_idx?: number; matched_text?: string };
+      const start = Number(item.start_idx);
+      const end = Number(item.end_idx);
+      const matchedText = String(item.matched_text || "").trim();
+      const hasValidIndex = Number.isFinite(start) && Number.isFinite(end) && end > start;
+      if (!hasValidIndex || !matchedText) {
+        refs.push(ref);
+        return;
+      }
+      const key = `${start}:${end}:${matchedText}`;
+      const existingIndex = seenIndexedRefs.get(key);
+      if (existingIndex === undefined) {
+        seenIndexedRefs.set(key, refs.length);
+        refs.push(ref);
+      } else if (replaceIndexedDuplicates) {
+        refs[existingIndex] = ref;
+      }
+    });
+  };
+
+  if (Array.isArray(msg.metadata?.content_references)) {
+    addRefs(msg.metadata.content_references, false);
+  }
+  if (Array.isArray(msg.metadata?.serialization_metadata?.content_references)) {
+    addRefs(msg.metadata.serialization_metadata.content_references, true);
+  }
+
+  return refs;
+}
+
+function replaceChatGPTLatexReference(text: string, matchedText: string, latex: string): string {
+  let cursor = 0;
+  let output = "";
+
+  while (cursor < text.length) {
+    const index = text.indexOf(matchedText, cursor);
+    if (index === -1) {
+      output += text.slice(cursor);
+      break;
+    }
+
+    output += text.slice(cursor, index);
+    output += formatChatGPTLatexReference(text, index, matchedText.length, latex);
+    cursor = index + matchedText.length;
+  }
+
+  return output;
+}
+
+function canFallbackReplaceChatGPTLatexReference(matchedText: string): boolean {
+  const value = matchedText.trim();
+  if (!value) return false;
+  return !/^\d+$/.test(value);
+}
+
+function formatChatGPTLatexReference(source: string, index: number, length: number, latex: string): string {
+  const lineStart = source.lastIndexOf("\n", index) + 1;
+  const nextLineBreak = source.indexOf("\n", index + length);
+  const lineEnd = nextLineBreak === -1 ? source.length : nextLineBreak;
+  const before = source.slice(lineStart, index);
+  const after = source.slice(index + length, lineEnd);
+  const isStandaloneLine = before.trim() === "" && after.trim() === "";
+
+  return isStandaloneLine ? `$$\n${latex}\n$$` : `\\(${latex}\\)`;
 }
 
 function normalizeChatGPTLatexReferenceText(reference: unknown): string {

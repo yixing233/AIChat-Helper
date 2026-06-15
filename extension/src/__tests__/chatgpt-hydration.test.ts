@@ -1465,7 +1465,7 @@ describe("ChatGPT mapping hydration", () => {
             id: "msg-math",
             author: { role: "assistant" },
             content: {
-              parts: ["Formula: MATH_REF"]
+              parts: ["Formula:\n\nMATH_REF"]
             },
             metadata: {
               content_references: [{
@@ -1485,6 +1485,66 @@ describe("ChatGPT mapping hydration", () => {
       role: "assistant",
       text: "Formula:\n\n$$\nE = mc^2\n$$"
     });
+  });
+
+  it("replaces ChatGPT genui math widget references with markdown math blocks", () => {
+    const widget = "genui{\"math_block_widget_always_prefetch_v2\":{\"content\":\"F=BIL\\\\sin\\\\theta\"}}";
+    const text = [
+      "因此：",
+      "",
+      widget,
+      "",
+      "其中：",
+      "",
+      "- \\(F\\)：电磁力（N）",
+      "- \\(B\\)：磁感应强度（T）"
+    ].join("\n");
+    const start = text.indexOf(widget);
+    const snapshot = extractChatGPTSnapshotFromConversation({
+      id: "conv-genui-math",
+      title: "Genui Math Conversation",
+      current_node: "assistant-genui-math",
+      mapping: {
+        root: { id: "root", parent: null, children: ["assistant-genui-math"] },
+        "assistant-genui-math": {
+          id: "assistant-genui-math",
+          parent: "root",
+          children: [],
+          message: {
+            id: "msg-genui-math",
+            author: { role: "assistant" },
+            content: {
+              parts: [text]
+            },
+            metadata: {
+              content_references: [{
+                matched_text: widget,
+                start_idx: start,
+                end_idx: start + widget.length,
+                alt: "F=BIL\\sin\\theta",
+                type: "alt_text",
+                render_as: "latex"
+              }]
+            },
+            create_time: 8
+          }
+        }
+      }
+    });
+
+    expect(snapshot.messages[0]?.text).toBe([
+      "因此：",
+      "",
+      "$$",
+      "F=BIL\\sin\\theta",
+      "$$",
+      "",
+      "其中：",
+      "",
+      "- \\(F\\)：电磁力（N）",
+      "- \\(B\\)：磁感应强度（T）"
+    ].join("\n"));
+    expect(snapshot.messages[0]?.text).not.toContain("genui");
   });
 
   it("replaces ChatGPT serialization latex references using matched formula text", () => {
@@ -1522,8 +1582,198 @@ describe("ChatGPT mapping hydration", () => {
     expect(snapshot.messages[0]).toMatchObject({
       id: "msg-serialization-math",
       role: "assistant",
-      text: "The identity is\n\n$$\na+b\n$$\n\n."
+      text: "The identity is \\(a+b\\)."
     });
+  });
+
+  it("keeps ChatGPT latex references inline inside variable lists", () => {
+    const snapshot = extractChatGPTSnapshotFromConversation({
+      id: "conv-inline-list-math",
+      title: "Inline List Math Conversation",
+      current_node: "assistant-inline-list-math",
+      mapping: {
+        root: { id: "root", parent: null, children: ["assistant-inline-list-math"] },
+        "assistant-inline-list-math": {
+          id: "assistant-inline-list-math",
+          parent: "root",
+          children: [],
+          message: {
+            id: "msg-inline-list-math",
+            author: { role: "assistant" },
+            content: {
+              parts: ["其中：\n- LATEX_F：电磁力（N）\n- LATEX_B：磁感应强度（T）"]
+            },
+            metadata: {
+              serialization_metadata: {
+                content_references: [
+                  {
+                    matched_text: "LATEX_F",
+                    render_as: "latex",
+                    text: "F"
+                  },
+                  {
+                    matched_text: "LATEX_B",
+                    render_as: "latex",
+                    text: "B"
+                  }
+                ]
+              }
+            },
+            create_time: 8
+          }
+        }
+      }
+    });
+
+    expect(snapshot.messages[0]).toMatchObject({
+      id: "msg-inline-list-math",
+      role: "assistant",
+      text: "其中：\n- \\(F\\)：电磁力（N）\n- \\(B\\)：磁感应强度（T）"
+    });
+    expect(snapshot.messages[0]?.text).not.toContain("$$");
+  });
+
+  it("uses ChatGPT latex reference indexes so numeric labels are not replaced globally", () => {
+    const text = "4 种常见公式如下。\n\n其中：\n- 4：电磁力（N）\n- 5：磁感应强度（T）";
+    const forceIndex = text.indexOf("- 4") + 2;
+    const fieldIndex = text.indexOf("- 5") + 2;
+    const snapshot = extractChatGPTSnapshotFromConversation({
+      id: "conv-indexed-list-math",
+      title: "Indexed List Math Conversation",
+      current_node: "assistant-indexed-list-math",
+      mapping: {
+        root: { id: "root", parent: null, children: ["assistant-indexed-list-math"] },
+        "assistant-indexed-list-math": {
+          id: "assistant-indexed-list-math",
+          parent: "root",
+          children: [],
+          message: {
+            id: "msg-indexed-list-math",
+            author: { role: "assistant" },
+            content: {
+              parts: [text]
+            },
+            metadata: {
+              serialization_metadata: {
+                content_references: [
+                  {
+                    matched_text: "4",
+                    start_idx: forceIndex,
+                    end_idx: forceIndex + 1,
+                    render_as: "latex",
+                    text: "F"
+                  },
+                  {
+                    matched_text: "5",
+                    start_idx: fieldIndex,
+                    end_idx: fieldIndex + 1,
+                    render_as: "latex",
+                    text: "B"
+                  }
+                ]
+              }
+            },
+            create_time: 8
+          }
+        }
+      }
+    });
+
+    expect(snapshot.messages[0]).toMatchObject({
+      id: "msg-indexed-list-math",
+      role: "assistant",
+      text: "4 种常见公式如下。\n\n其中：\n- \\(F\\)：电磁力（N）\n- \\(B\\)：磁感应强度（T）"
+    });
+    expect(snapshot.messages[0]?.text).not.toContain("$$");
+  });
+
+  it("keeps indexed variable-list latex separate from conflicting standalone formula references", () => {
+    const text = [
+      "吸力公式：",
+      "9",
+      "",
+      "其中：",
+      "- 4：电磁力（N）",
+      "- 5：磁感应强度（T）",
+      "- 6：电流（A）",
+      "- 7：导体有效长度（m）",
+      "- 8：电流方向与磁场方向夹角"
+    ].join("\n");
+    const refFor = (matchedText: string, latex: string) => {
+      const index = text.indexOf(matchedText);
+      return {
+        matched_text: matchedText,
+        start_idx: index,
+        end_idx: index + matchedText.length,
+        render_as: "latex",
+        text: latex
+      };
+    };
+    const listRefFor = (matchedText: string, latex: string) => {
+      const index = text.indexOf(`- ${matchedText}`) + 2;
+      return {
+        matched_text: matchedText,
+        start_idx: index,
+        end_idx: index + matchedText.length,
+        render_as: "latex",
+        text: latex
+      };
+    };
+    const snapshot = extractChatGPTSnapshotFromConversation({
+      id: "conv-indexed-list-with-formula",
+      title: "Indexed List With Formula",
+      current_node: "assistant-indexed-list-with-formula",
+      mapping: {
+        root: { id: "root", parent: null, children: ["assistant-indexed-list-with-formula"] },
+        "assistant-indexed-list-with-formula": {
+          id: "assistant-indexed-list-with-formula",
+          parent: "root",
+          children: [],
+          message: {
+            id: "msg-indexed-list-with-formula",
+            author: { role: "assistant" },
+            content: {
+              parts: [text]
+            },
+            metadata: {
+              content_references: [
+                refFor("9", "F = BIL\\sin\\theta"),
+                listRefFor("4", "F = BIL\\sin\\theta"),
+                listRefFor("5", "F = BIL\\sin\\theta"),
+                listRefFor("6", "F = BIL\\sin\\theta"),
+                listRefFor("7", "F = BIL\\sin\\theta"),
+                listRefFor("8", "F = BIL\\sin\\theta")
+              ],
+              serialization_metadata: {
+                content_references: [
+                  refFor("9", "F = BIL\\sin\\theta"),
+                  listRefFor("4", "F"),
+                  listRefFor("5", "B"),
+                  listRefFor("6", "I"),
+                  listRefFor("7", "L"),
+                  listRefFor("8", "\\theta")
+                ]
+              }
+            },
+            create_time: 8
+          }
+        }
+      }
+    });
+
+    expect(snapshot.messages[0]?.text).toBe([
+      "吸力公式：",
+      "$$",
+      "F = BIL\\sin\\theta",
+      "$$",
+      "",
+      "其中：",
+      "- \\(F\\)：电磁力（N）",
+      "- \\(B\\)：磁感应强度（T）",
+      "- \\(I\\)：电流（A）",
+      "- \\(L\\)：导体有效长度（m）",
+      "- \\(\\theta\\)：电流方向与磁场方向夹角"
+    ].join("\n"));
   });
 
   it("restores ChatGPT implicit short-line lists after Chinese intro markers", () => {

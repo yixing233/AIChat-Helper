@@ -270,6 +270,16 @@ describe("exporters", () => {
     expect(html).not.toContain("\\[F=");
   });
 
+  it("renders large number of math formulas without substring replacement conflicts (more than 10 tokens)", async () => {
+    const formulas = Array.from({ length: 12 }, (_, i) => `$x_{${i}}$`).join(" ");
+    const html = renderMessageMarkdown(formulas, "chatgpt");
+
+    for (let i = 0; i < 12; i++) {
+      expect(html).toContain(`data-latex="x_{${i}}"`);
+    }
+    expect(html).not.toContain("AI_MATH_TOKEN");
+  });
+
   it("exports attachment metadata in html", async () => {
     const [file] = await htmlExporter.export(attachmentSnapshot);
     const content = String(file.content);

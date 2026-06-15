@@ -125,7 +125,8 @@ export function renderMessageExportHtml(snapshot: ConversationSnapshot, message:
   });
 
   let html = renderMessageMarkdown(text, snapshot.platformId);
-  replacements.forEach(({ token, html: replacementHtml }) => {
+  const sortedReplacements = [...replacements].sort((a, b) => b.token.length - a.token.length);
+  sortedReplacements.forEach(({ token, html: replacementHtml }) => {
     html = html
       .replace(new RegExp(`<p>\\s*${token}\\s*</p>`, "g"), replacementHtml)
       .split(token)
@@ -222,7 +223,8 @@ export function renderMessageMarkdown(text: string, platformId?: ConversationSna
       : text;
   const tokenized = tokenizeMath(source || "", tokens);
   let html = markdown.render(tokenized).trim();
-  tokens.forEach((token) => {
+  const sortedTokens = [...tokens].sort((a, b) => b.key.length - a.key.length);
+  sortedTokens.forEach((token) => {
     if (token.block) html = html.replace(`<p>${token.key}</p>`, token.html);
     html = html.split(token.key).join(token.html);
   });

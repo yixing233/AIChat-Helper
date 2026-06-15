@@ -8,6 +8,7 @@ export interface BackupLibraryHandlers {
   onBack: () => void;
   onDownload: (id: string) => void | Promise<void>;
   onDelete: (id: string) => void | Promise<void>;
+  onRefresh?: () => Promise<ConversationBackupRecord[]> | ConversationBackupRecord[];
 }
 
 export interface BackupLibraryOptions {
@@ -30,6 +31,7 @@ interface BackupLibraryState {
   loadingDeleteId: string;
   status: string;
   error: string;
+  isRefreshing?: boolean;
 }
 
 interface SearchFocusSnapshot {
@@ -95,6 +97,35 @@ export function bindBackupLibraryPopup(root: HTMLElement, records: ConversationB
     hideNodeTooltip();
     root.innerHTML = renderBackupWorkbench(localRecords, state, options);
   };
+
+  let isRefreshing = false;
+  const runRefreshAction = async () => {
+    if (isRefreshing || !handlers.onRefresh) return;
+    isRefreshing = true;
+    state.isRefreshing = true;
+    state.status = "正在刷新备份列表...";
+    state.error = "";
+    render();
+    try {
+      const nextRecords = await handlers.onRefresh();
+      localRecords = [...nextRecords];
+      const entries = groupBackupRecordsByConversation(sortBackupsNewestFirst(localRecords));
+      const hasSelected = entries.some((e) => e.id === state.selectedEntryId);
+      if (!hasSelected) {
+        const entry = getDefaultSelectedEntry(localRecords, state.platform);
+        state.selectedEntryId = entry?.id || "";
+        state.selectedVersionId = entry?.latest.id || "";
+      }
+      state.status = "";
+    } catch (err) {
+      state.error = err instanceof Error ? err.message : String(err);
+      state.status = "";
+    } finally {
+      isRefreshing = false;
+      state.isRefreshing = false;
+      render();
+    }
+  };
   const closeDialogLayer = (layer: Element | null, onClosed?: () => void) => {
     if (!layer || layer.classList.contains("is-closing")) return;
     layer.classList.add("is-closing");
@@ -137,6 +168,11 @@ export function bindBackupLibraryPopup(root: HTMLElement, records: ConversationB
   root.addEventListener("click", (event) => {
     const target = event.target;
     if (!(target instanceof Element)) return;
+
+    if (target.closest("[data-ai-chat-helper-backup-refresh]")) {
+      void runRefreshAction();
+      return;
+    }
 
     if (target.closest("[data-ai-chat-helper-backup-back]")) {
       handlers.onBack();
@@ -447,7 +483,8 @@ function createInitialState(records: ConversationBackupRecord[]): BackupLibraryS
     loadingDownloadId: "",
     loadingDeleteId: "",
     status: "",
-    error: ""
+    error: "",
+    isRefreshing: false
   };
 }
 
@@ -468,10 +505,10 @@ function renderBackupWorkbench(records: ConversationBackupRecord[], state: Backu
           <h1>备份库</h1>
         </div>
       </div>
-      ${renderSummary(sortedRecords, state)}
+      ${renderSummary(state)}
     </header>
     <section class="ai-chat-helper-backup-workbench__body">
-      ${renderPlatformNav(entries, state.platform)}
+      ${renderPlatformNav(entries, state.platform, sortedRecords)}
       <section class="ai-chat-helper-backup-workbench__list-panel" aria-label="备份列表">
         <div class="ai-chat-helper-backup-workbench__panel-head">
           <strong>${escapeText(getFilterTitle(state.platform))}</strong>
@@ -491,41 +528,47 @@ function renderBackupWorkbench(records: ConversationBackupRecord[], state: Backu
   `;
 }
 
-function renderSummary(records: ConversationBackupRecord[], state: BackupLibraryState): string {
-  const size = records.reduce((sum, record) => sum + estimateRecordSize(record), 0);
+function renderSummary(state: BackupLibraryState): string {
+  const isRefreshing = Boolean(state.isRefreshing);
   return `
     <div class="ai-chat-helper-backup-workbench__summary-bar">
-      <dl class="ai-chat-helper-backup-workbench__summary" data-ai-chat-helper-backup-summary>
-        <div>
-          <dt>占用</dt>
-          <dd>${escapeText(formatBytes(size))}</dd>
-        </div>
-      </dl>
-      <div class="ai-chat-helper-backup-workbench__summary-tools">
-        <label class="ai-chat-helper-backup-workbench__search">
-          <span class="ai-chat-helper-backup-workbench__search-label">搜索</span>
-          <input
-            type="search"
-            value="${escapeAttributeValue(state.searchQuery)}"
-            placeholder="搜索标题、平台或对话内容"
-            aria-label="搜索备份会话"
-            autocomplete="off"
-            spellcheck="false"
-            data-ai-chat-helper-backup-search
-          >
-        </label>
-      </div>
+      <label class="ai-chat-helper-backup-workbench__search">
+        <i class="fas fa-search" aria-hidden="true"></i>
+        <input
+          type="search"
+          value="${escapeAttributeValue(state.searchQuery)}"
+          placeholder="搜索标题、平台或对话内容"
+          aria-label="搜索备份会话"
+          autocomplete="off"
+          spellcheck="false"
+          data-ai-chat-helper-backup-search
+        >
+      </label>
+      ${isRefreshing ? `
+        <button type="button" class="ai-chat-helper-backup-refresh" disabled aria-label="正在刷新" data-ai-chat-helper-tooltip="正在刷新" data-ai-chat-helper-backup-refresh>
+          <i class="fas fa-sync-alt fa-spin" aria-hidden="true"></i>
+        </button>
+      ` : `
+        <button type="button" class="ai-chat-helper-backup-refresh" aria-label="刷新" data-ai-chat-helper-tooltip="刷新" data-ai-chat-helper-backup-refresh>
+          <i class="fas fa-sync-alt" aria-hidden="true"></i>
+        </button>
+      `}
     </div>
   `;
 }
 
-function renderPlatformNav(entries: ConversationBackupEntry[], selectedPlatform: BackupPlatformFilter): string {
+function renderPlatformNav(entries: ConversationBackupEntry[], selectedPlatform: BackupPlatformFilter, records: ConversationBackupRecord[]): string {
+  const size = records.reduce((sum, record) => sum + estimateRecordSize(record), 0);
   return `
     <nav class="ai-chat-helper-backup-workbench__platforms" aria-label="备份平台" data-ai-chat-helper-backup-platform-nav>
       ${platformOrder.map((platformId) => {
         const platformEntries = entries.filter((entry) => entry.platformId === platformId);
         return renderPlatformButton(platformId, getPlatformName(platformId), platformEntries.length, platformEntries[0]?.latest.createdAt || "", selectedPlatform === platformId);
       }).join("")}
+      <div class="ai-chat-helper-backup-workbench__storage-summary" data-ai-chat-helper-backup-summary>
+        <i class="fas fa-database" aria-hidden="true"></i>
+        <span>占用 ${escapeText(formatBytes(size))}</span>
+      </div>
     </nav>
   `;
 }

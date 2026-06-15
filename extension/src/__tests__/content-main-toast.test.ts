@@ -14,11 +14,15 @@ describe("content main toast feedback", () => {
     expect(mainSource).toContain('showToast(`正在导出 ${index + 1}/${total}');
     expect(mainSource).toContain('showToast("正在准备立即备份"');
     expect(mainSource).toContain('showToast("正在备份当前对话"');
+    expect(mainSource).toContain('showToast("正在检查对话是否有变化"');
     expect(mainSource).toContain('showToast("自动备份中，请勿退出当前页面，图片缓存完成后会自动保存。"');
     expect(mainSource).toContain("saveLastAutoBackupAt(");
-    expect(mainSource).toContain('showToast(`自动备份已检查：${result.record.title} 内容未变化`');
+    expect(mainSource).toContain('showToast(`当前对话暂无新增内容，已跳过自动备份：${result.record.title}`');
     expect(mainSource).toContain('showToast(`正在备份 ${index + 1}/${total}');
     expect(mainSource).toContain('backup-current-now');
     expect(mainSource).toContain('backup-platform-now');
+    expect(mainSource.indexOf('showToast("正在检查对话是否有变化"')).toBeLessThan(
+      mainSource.indexOf('showToast("自动备份中，请勿退出当前页面，图片缓存完成后会自动保存。"')
+    );
   });
 });

@@ -142,6 +142,7 @@ export function createExportModal(
     updateSelectionState();
   });
   bindMessageFullPreviewButtons(modal, snapshot, textWithoutThoughtMessageIds, "[data-ai-chat-helper-message-view]");
+  bindAttachmentPreviewButtons(modal, snapshot, "[data-ai-chat-helper-attachment-preview]");
   bindTextTooltipHandlers(modal);
   formatButtons.forEach((button) => {
     button.addEventListener("click", () => {
@@ -371,6 +372,7 @@ export function createBatchExportModal(
     const assistantButton = preview.querySelector<HTMLButtonElement>("[data-ai-chat-helper-batch-preview-only-assistant]");
     const thoughtButton = preview.querySelector<HTMLButtonElement>("[data-ai-chat-helper-batch-preview-exclude-thought]");
     bindMessageFullPreviewButtons(preview, snapshot, textWithoutThoughtMessageIds, "[data-ai-chat-helper-batch-message-view]");
+    bindAttachmentPreviewButtons(preview, snapshot, "[data-ai-chat-helper-attachment-preview]");
 
     const persistSelection = () => {
       messageSelectionByConversation.set(
@@ -835,9 +837,10 @@ function renderFullPreviewMessageHtml(
   strippedMessageIds: Set<string>
 ): string {
   const imagePreview = getPreviewMessageImage(snapshot, message, strippedMessageIds);
-  if (imagePreview) return renderChatGPTPreviewImageHtml(imagePreview, message.role);
+  const attachmentPreview = renderInlineAttachmentPreviewList(message);
+  if (imagePreview) return `${renderChatGPTPreviewImageHtml(imagePreview, message.role)}${attachmentPreview}`;
   const text = renderMessageMarkdown(getPreviewMessageText(message, strippedMessageIds), snapshot.platformId);
-  return text || "(空消息)";
+  return `${text || "(空消息)"}${attachmentPreview}`;
 }
 
 function renderPreviewMessageTextElement(
@@ -854,7 +857,7 @@ function renderPreviewMessageTextElement(
   const html = preview
     ? renderChatGPTPreviewImageHtml(preview, message.role)
     : renderMessageMarkdown(getPreviewMessageText(message, strippedMessageIds), snapshot.platformId);
-  return `<div class="${className}" data-index="${index}" ${dataAttribute}>${html}</div>`;
+  return `<div class="${className}" data-index="${index}" ${dataAttribute}>${html}${renderInlineAttachmentPreviewList(message)}</div>`;
 }
 
 function getPreviewMessageImage(
@@ -875,6 +878,73 @@ function renderChatGPTPreviewImageHtml(
     ? `<span class="ai-chat-helper-export-modal__message-media-text">${escapeHtml(preview.text)}</span>`
     : "";
   return `<span class="ai-chat-helper-export-modal__message-media"><img src="${escapeHtml(preview.url)}" alt="${escapeHtml(preview.alt)}" loading="lazy">${text}</span>`;
+}
+
+function renderInlineAttachmentPreviewList(message: ConversationSnapshot["messages"][number]): string {
+  const attachments = (message.attachments || []).filter(isPreviewableTextAttachment);
+  if (!attachments.length) return "";
+  return `
+    <div class="ai-chat-helper-export-modal__attachment-list">
+      ${attachments.map((attachment, index) => `
+        <button
+          type="button"
+          class="ai-chat-helper-export-modal__attachment-preview"
+          data-ai-chat-helper-attachment-preview
+          data-attachment-index="${index}"
+        >
+          <strong>${escapeHtml(attachment.fileName || attachment.id || "附件")}</strong>
+          <span>${escapeHtml(attachment.mimeType || "text/plain")}</span>
+        </button>
+      `).join("")}
+    </div>
+  `;
+}
+
+function isPreviewableTextAttachment(attachment: NonNullable<ConversationSnapshot["messages"][number]["attachments"]>[number]): boolean {
+  return /^text\/plain/i.test(String(attachment.mimeType || "").trim()) && typeof attachment.content === "string" && attachment.content.trim().length > 0;
+}
+
+function bindAttachmentPreviewButtons(root: HTMLElement, snapshot: ConversationSnapshot, selector: string): void {
+  root.querySelectorAll<HTMLElement>(".ai-chat-helper-export-modal__message-item").forEach((row) => {
+    const messageIndex = Number(row.querySelector<HTMLInputElement>("input[data-index]")?.dataset.index);
+    const message = snapshot.messages[messageIndex];
+    if (!message) return;
+    const attachments = (message.attachments || []).filter(isPreviewableTextAttachment);
+    if (!attachments.length) return;
+
+    row.querySelectorAll<HTMLButtonElement>(selector).forEach((button) => {
+      button.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        const attachment = attachments[Number(button.dataset.attachmentIndex)];
+        if (!attachment) return;
+        openAttachmentPreview(attachment);
+      });
+    });
+  });
+}
+
+function openAttachmentPreview(attachment: NonNullable<ConversationSnapshot["messages"][number]["attachments"]>[number]): void {
+  const overlay = document.createElement("div");
+  overlay.className = "ai-chat-helper-export-modal__full-preview";
+  overlay.dataset.aiChatHelperAttachmentFullPreview = "true";
+  overlay.innerHTML = `
+    <div class="ai-chat-helper-export-modal__full-preview-box" role="dialog" aria-modal="true" aria-label="附件内容预览">
+      <div class="ai-chat-helper-export-modal__header">
+        <div>
+          <strong>附件内容预览</strong>
+          <span>${escapeHtml(attachment.fileName || attachment.id || "附件")} · ${escapeHtml(attachment.mimeType || "text/plain")}</span>
+        </div>
+        <button type="button" class="ai-chat-helper-export-modal__close" data-ai-chat-helper-attachment-preview-close aria-label="关闭" data-ai-chat-helper-tooltip="关闭">${closeIcon}</button>
+      </div>
+      <div class="ai-chat-helper-export-modal__full-preview-body">
+        <pre class="ai-chat-helper-export-modal__attachment-content">${escapeHtml(String(attachment.content || "").trim())}</pre>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+  const close = registerDismissLayer(overlay, () => overlay.remove());
+  overlay.querySelector("[data-ai-chat-helper-attachment-preview-close]")?.addEventListener("click", close);
 }
 
 function formatDate(value: string): string {
