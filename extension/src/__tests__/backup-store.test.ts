@@ -95,7 +95,7 @@ describe("backup store", () => {
       source: "auto"
     });
     first.previewSnapshot = snapshot;
-    first.assetStatus = { cachedImages: 1, failedImages: 3 };
+    first.assetStatus = { totalImages: 1, cachedImages: 1, failedImages: 3 };
     const improved = buildConversationBackupRecord(snapshot, "zip", [textFile], {
       createdAt: "2026-06-09T09:05:00.000Z",
       source: "auto"
@@ -104,7 +104,7 @@ describe("backup store", () => {
       ...snapshot,
       messages: [{ ...snapshot.messages[1], text: "Preview with cached images" }]
     };
-    improved.assetStatus = { cachedImages: 4, failedImages: 0 };
+    improved.assetStatus = { totalImages: 4, cachedImages: 4, failedImages: 0 };
 
     await expect(store.save(first)).resolves.toEqual({ record: first, created: true });
     await expect(store.save(improved)).resolves.toEqual({ record: improved, created: false });
@@ -249,7 +249,7 @@ describe("backup store", () => {
 
     expect(record.previewSnapshot?.attachments[0]?.url).toBe("data:image/png;base64,cmF3IGltYWdlIGJ5dGVz");
     expect(record.previewSnapshot?.messages[0]?.attachments?.[0]?.url).toBe("data:image/png;base64,bWVzc2FnZSBpbWFnZQ==");
-    expect(record.assetStatus).toEqual({ cachedImages: 2, failedImages: 0 });
+    expect(record.assetStatus).toEqual({ totalImages: 2, cachedImages: 2, failedImages: 0 });
   });
 
   it("keeps remote image urls when preview caching fails", async () => {
@@ -279,7 +279,7 @@ describe("backup store", () => {
 
     expect(record.previewSnapshot?.messages[0]?.text).toContain("https://example.test/image.png");
     expect(record.previewSnapshot?.messages[0]?.attachments?.[0]?.url).toBe("https://example.test/image.png");
-    expect(record.assetStatus).toEqual({ cachedImages: 0, failedImages: 1 });
+    expect(record.assetStatus).toEqual({ totalImages: 1, cachedImages: 0, failedImages: 1 });
   });
 
   it("retries remote preview image caching with fallback request options", async () => {
@@ -307,9 +307,50 @@ describe("backup store", () => {
       expect(fetchMock).toHaveBeenNthCalledWith(1, "https://example.test/image.png", { method: "GET", credentials: "include", cache: "no-store" });
       expect(fetchMock).toHaveBeenNthCalledWith(2, "https://example.test/image.png", { method: "GET", credentials: "same-origin", cache: "no-store" });
       expect(record.previewSnapshot?.messages[0]?.text).toContain("data:image/png;base64,AQID");
-      expect(record.assetStatus).toEqual({ cachedImages: 1, failedImages: 0 });
+      expect(record.assetStatus).toEqual({ totalImages: 1, cachedImages: 1, failedImages: 0 });
     } finally {
       globalThis.fetch = originalFetch;
     }
+  });
+
+  it("counts all snapshot image attachments even before preview caching succeeds", async () => {
+    const imageSnapshot: ConversationSnapshot = {
+      ...snapshot,
+      attachments: [{
+        id: "global-image",
+        fileName: "cover.png",
+        mimeType: "image/png",
+        url: "https://example.test/cover.png"
+      }],
+      messages: [{
+        id: "assistant-gallery",
+        role: "assistant",
+        text: "图库",
+        attachments: [
+          {
+            id: "message-image-1",
+            fileName: "result-1.png",
+            mimeType: "image/png",
+            url: "https://example.test/result-1.png"
+          },
+          {
+            id: "message-image-2",
+            fileName: "result-2.png",
+            mimeType: "image/png",
+            url: "https://example.test/result-2.png"
+          }
+        ]
+      }]
+    };
+
+    const record = await createConversationBackupRecord(imageSnapshot, "zip", [textFile], {
+      createdAt: "2026-06-09T09:00:00.000Z",
+      source: "auto",
+      fetchImage: async () => {
+        throw new Error("offline");
+      }
+    });
+
+    expect(record.assetStatus).toEqual({ totalImages: 3, cachedImages: 0, failedImages: 3 });
   });
 });

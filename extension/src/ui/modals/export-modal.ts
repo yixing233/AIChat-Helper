@@ -2,6 +2,7 @@ import type { SnapshotExportFormat } from "../../exporters/snapshot-export";
 import { renderMessageMarkdown } from "../../exporters/html";
 import { getChatGPTImagePreviewModel } from "../../exporters/shared";
 import type { BatchConversationSelection, ConversationSnapshot, ConversationSummary } from "../../shared/types";
+import { bindTextTooltipHandlers } from "../controls/node-tooltip";
 import { escapeHtml } from "../shared/escape-html";
 
 type ExportHandlerResult = void | Promise<void>;
@@ -141,6 +142,7 @@ export function createExportModal(
     updateSelectionState();
   });
   bindMessageFullPreviewButtons(modal, snapshot, textWithoutThoughtMessageIds, "[data-ai-chat-helper-message-view]");
+  bindTextTooltipHandlers(modal);
   formatButtons.forEach((button) => {
     button.addEventListener("click", () => {
       if (isExporting(modal)) return;
@@ -270,6 +272,7 @@ export function createBatchExportModal(
     });
   });
   bindExportMenu(modal);
+  bindTextTooltipHandlers(modal);
   bindClose(modal, closeModal);
   updateSelectionState();
   return modal;
@@ -536,7 +539,7 @@ function renderBatchSummary(summary: ConversationSummary, index: number, canPrev
         </span>
       </label>
       ${canPreview ? `
-        <button type="button" class="ai-chat-helper-export-modal__batch-preview-button" data-index="${index}" data-ai-chat-helper-batch-preview aria-label="查看该对话消息" title="查看该对话消息">${previewIcon}</button>
+        <button type="button" class="ai-chat-helper-export-modal__batch-preview-button" data-index="${index}" data-ai-chat-helper-batch-preview aria-label="查看该对话消息" data-ai-chat-helper-tooltip="查看该对话消息">${previewIcon}</button>
       ` : ""}
     </div>
   `;
@@ -556,7 +559,7 @@ function renderPreviewHeader(summary: ConversationSummary): string {
         <strong>查看对话消息</strong>
         <span>${escapeHtml(summary.platformId)} · ${escapeHtml(summary.title || summary.conversationId)}</span>
       </div>
-      <button type="button" class="ai-chat-helper-export-modal__close" data-ai-chat-helper-batch-preview-close aria-label="关闭" title="关闭">${closeIcon}</button>
+      <button type="button" class="ai-chat-helper-export-modal__close" data-ai-chat-helper-batch-preview-close aria-label="关闭" data-ai-chat-helper-tooltip="关闭">${closeIcon}</button>
     </div>
   `;
 }
@@ -595,7 +598,7 @@ function renderHeader(title: string, meta: string): string {
         <strong>${escapeHtml(title)}</strong>
         <span>${escapeHtml(meta)}</span>
       </div>
-      <button type="button" class="ai-chat-helper-export-modal__close" data-ai-chat-helper-close-export aria-label="关闭" title="关闭">${closeIcon}</button>
+      <button type="button" class="ai-chat-helper-export-modal__close" data-ai-chat-helper-close-export aria-label="关闭" data-ai-chat-helper-tooltip="关闭">${closeIcon}</button>
     </div>
   `;
 }
@@ -816,7 +819,7 @@ function openFullMessagePreview(title: string, bodyHtml: string): void {
           <strong>${escapeHtml(title)}</strong>
           <span>完整消息内容</span>
         </div>
-        <button type="button" class="ai-chat-helper-export-modal__close" data-ai-chat-helper-full-preview-close aria-label="关闭" title="关闭">${closeIcon}</button>
+        <button type="button" class="ai-chat-helper-export-modal__close" data-ai-chat-helper-full-preview-close aria-label="关闭" data-ai-chat-helper-tooltip="关闭">${closeIcon}</button>
       </div>
       <div class="ai-chat-helper-export-modal__full-preview-body">${bodyHtml}</div>
     </div>

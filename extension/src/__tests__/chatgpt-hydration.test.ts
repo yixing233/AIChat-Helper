@@ -1159,6 +1159,260 @@ describe("ChatGPT mapping hydration", () => {
     ]);
   });
 
+  it("keeps ChatGPT image generation tool turns visible across follow-up prompts", () => {
+    document.body.innerHTML = `
+      <div id="image-ae130c25-b10a-4b59-b785-3720f0bfa72a">
+        <img alt="已生成图片：草地上的可爱小熊" src="https://chatgpt.com/backend-api/estuary/content?id=file_00000000dd2c7209a733ee4d36fe1882&ts=494770&p=fs&cid=1&sig=first&v=0">
+      </div>
+      <div id="image-3ae56431-5e0b-477f-9e65-c7e57e339963">
+        <img alt="已生成图片：阳光下的萌熊草地" src="https://chatgpt.com/backend-api/estuary/content?id=file_0000000079a072099ff1fe633cef1428&ts=494770&p=fs&cid=1&sig=second&v=0">
+      </div>
+    `;
+
+    const snapshot = extractChatGPTSnapshotFromConversation({
+      id: "69febc3a-48f8-83e8-985b-3821dd8f4cb3",
+      title: "画面风格调整",
+      current_node: "61fe2f74-3aa1-43e8-bcae-286f5f72bb54",
+      mapping: {
+        root: { id: "root", parent: null, children: ["bbb2111b-b2c1-4f50-b949-287f57194a64"] },
+        "bbb2111b-b2c1-4f50-b949-287f57194a64": {
+          id: "bbb2111b-b2c1-4f50-b949-287f57194a64",
+          parent: "root",
+          children: ["294f676a-6b87-49d7-b85e-7602d57bd2e3"],
+          message: {
+            id: "bbb2111b-b2c1-4f50-b949-287f57194a64",
+            author: { role: "user" },
+            content: {
+              content_type: "multimodal_text",
+              parts: [
+                {
+                  content_type: "image_asset_pointer",
+                  asset_pointer: "sediment://file_0000000042807209aa225073e266cd45",
+                  metadata: {}
+                },
+                "把背景弄的明亮一些，整个画面风格看起来活泼开朗"
+              ]
+            },
+            metadata: {
+              attachments: [{
+                name: "file_0000000042807209aa225073e266cd45",
+                id: "file_0000000042807209aa225073e266cd45",
+                size: 120807,
+                mime_type: "image/jpeg"
+              }]
+            },
+            create_time: 1778302045.644691
+          }
+        },
+        "294f676a-6b87-49d7-b85e-7602d57bd2e3": {
+          id: "294f676a-6b87-49d7-b85e-7602d57bd2e3",
+          parent: "bbb2111b-b2c1-4f50-b949-287f57194a64",
+          children: ["980c52b8-9c0c-4d7f-a0db-ca817095a425"],
+          message: {
+            id: "294f676a-6b87-49d7-b85e-7602d57bd2e3",
+            author: { role: "assistant" },
+            content: { content_type: "model_editable_context", model_set_context: "" },
+            metadata: { can_save: false },
+            end_turn: false,
+            create_time: 1778302045.869828
+          }
+        },
+        "980c52b8-9c0c-4d7f-a0db-ca817095a425": {
+          id: "980c52b8-9c0c-4d7f-a0db-ca817095a425",
+          parent: "294f676a-6b87-49d7-b85e-7602d57bd2e3",
+          children: ["26807c0a-5129-42fa-88db-2e27e91417a2"],
+          message: {
+            id: "980c52b8-9c0c-4d7f-a0db-ca817095a425",
+            author: { role: "assistant" },
+            recipient: "t2uay3k.sj1i4kz",
+            content: { content_type: "code", language: "python3", text: "{\"skipped_mainline\":true}" },
+            metadata: { can_save: false },
+            end_turn: false,
+            create_time: 1778302046.113826
+          }
+        },
+        "26807c0a-5129-42fa-88db-2e27e91417a2": {
+          id: "26807c0a-5129-42fa-88db-2e27e91417a2",
+          parent: "980c52b8-9c0c-4d7f-a0db-ca817095a425",
+          children: ["ae130c25-b10a-4b59-b785-3720f0bfa72a"],
+          message: {
+            id: "26807c0a-5129-42fa-88db-2e27e91417a2",
+            author: { role: "tool", name: "t2uay3k.sj1i4kz" },
+            content: {
+              content_type: "text",
+              parts: ["正在处理图片\n\n目前有很多人在创建图片，因此可能需要一点时间。图片准备好后我们会通知你。"]
+            },
+            metadata: {
+              ui_card: true,
+              image_gen_async: true,
+              is_visually_hidden_from_conversation: true,
+              can_save: false
+            },
+            end_turn: true,
+            create_time: 1778302046.117131
+          }
+        },
+        "ae130c25-b10a-4b59-b785-3720f0bfa72a": {
+          id: "ae130c25-b10a-4b59-b785-3720f0bfa72a",
+          parent: "26807c0a-5129-42fa-88db-2e27e91417a2",
+          children: ["bbb2127e-1ea6-4a60-bb53-8e7538cbf14a"],
+          message: {
+            id: "ae130c25-b10a-4b59-b785-3720f0bfa72a",
+            author: { role: "tool", name: "t2uay3k.sj1i4kz" },
+            content: {
+              content_type: "multimodal_text",
+              parts: [{
+                content_type: "image_asset_pointer",
+                asset_pointer: "sediment://file_00000000dd2c7209a733ee4d36fe1882",
+                metadata: {}
+              }]
+            },
+            metadata: {
+              image_gen_title: "草地上的可爱小熊",
+              can_save: false
+            },
+            create_time: 1778302079.834974
+          }
+        },
+        "bbb2127e-1ea6-4a60-bb53-8e7538cbf14a": {
+          id: "bbb2127e-1ea6-4a60-bb53-8e7538cbf14a",
+          parent: "ae130c25-b10a-4b59-b785-3720f0bfa72a",
+          children: ["8bfd7cae-4c01-4cc3-ad81-53d9b5ec5542"],
+          message: {
+            id: "bbb2127e-1ea6-4a60-bb53-8e7538cbf14a",
+            author: { role: "user" },
+            content: {
+              content_type: "text",
+              parts: ["主题角色也要做好光影配合"]
+            },
+            create_time: 1778302141.361288
+          }
+        },
+        "8bfd7cae-4c01-4cc3-ad81-53d9b5ec5542": {
+          id: "8bfd7cae-4c01-4cc3-ad81-53d9b5ec5542",
+          parent: "bbb2127e-1ea6-4a60-bb53-8e7538cbf14a",
+          children: ["370574a9-badf-4a9f-bbf2-3aed0f496b96"],
+          message: {
+            id: "8bfd7cae-4c01-4cc3-ad81-53d9b5ec5542",
+            author: { role: "assistant" },
+            recipient: "t2uay3k.sj1i4kz",
+            content: { content_type: "code", language: "python3", text: "{\"skipped_mainline\":true}" },
+            metadata: { can_save: false },
+            end_turn: false,
+            create_time: 1778302141.760677
+          }
+        },
+        "370574a9-badf-4a9f-bbf2-3aed0f496b96": {
+          id: "370574a9-badf-4a9f-bbf2-3aed0f496b96",
+          parent: "8bfd7cae-4c01-4cc3-ad81-53d9b5ec5542",
+          children: ["3ae56431-5e0b-477f-9e65-c7e57e339963"],
+          message: {
+            id: "370574a9-badf-4a9f-bbf2-3aed0f496b96",
+            author: { role: "tool", name: "t2uay3k.sj1i4kz" },
+            content: {
+              content_type: "text",
+              parts: ["正在处理图片\n\n目前有很多人在创建图片，因此可能需要一点时间。图片准备好后我们会通知你。"]
+            },
+            metadata: {
+              ui_card: true,
+              image_gen_async: true,
+              is_visually_hidden_from_conversation: true,
+              can_save: false
+            },
+            end_turn: true,
+            create_time: 1778302141.764043
+          }
+        },
+        "3ae56431-5e0b-477f-9e65-c7e57e339963": {
+          id: "3ae56431-5e0b-477f-9e65-c7e57e339963",
+          parent: "370574a9-badf-4a9f-bbf2-3aed0f496b96",
+          children: ["61fe2f74-3aa1-43e8-bcae-286f5f72bb54"],
+          message: {
+            id: "3ae56431-5e0b-477f-9e65-c7e57e339963",
+            author: { role: "tool", name: "t2uay3k.sj1i4kz" },
+            content: {
+              content_type: "multimodal_text",
+              parts: [{
+                content_type: "image_asset_pointer",
+                asset_pointer: "sediment://file_0000000079a072099ff1fe633cef1428",
+                metadata: {}
+              }]
+            },
+            metadata: {
+              image_gen_title: "阳光下的萌熊草地",
+              can_save: false
+            },
+            create_time: 1778302167.677527
+          }
+        },
+        "61fe2f74-3aa1-43e8-bcae-286f5f72bb54": {
+          id: "61fe2f74-3aa1-43e8-bcae-286f5f72bb54",
+          parent: "3ae56431-5e0b-477f-9e65-c7e57e339963",
+          children: [],
+          message: {
+            id: "61fe2f74-3aa1-43e8-bcae-286f5f72bb54",
+            author: { role: "tool", name: "assistant" },
+            content: {
+              content_type: "text",
+              parts: ["GPT-4o returned 1 images. From now on, do not say or show ANYTHING."]
+            },
+            metadata: { can_save: false },
+            create_time: 1778302167.677607
+          }
+        }
+      }
+    });
+
+    expect(snapshot.messages).toEqual([
+      {
+        id: "bbb2111b-b2c1-4f50-b949-287f57194a64",
+        sourceMessageId: "bbb2111b-b2c1-4f50-b949-287f57194a64",
+        role: "user",
+        text: "把背景弄的明亮一些，整个画面风格看起来活泼开朗\n\n[附件1: file_0000000042807209aa225073e266cd45]",
+        createdAt: "1778302045.644691",
+        attachments: [{
+          id: "file_0000000042807209aa225073e266cd45",
+          fileName: "file_0000000042807209aa225073e266cd45",
+          mimeType: "image/jpeg",
+          url: undefined
+        }]
+      },
+      {
+        id: "ae130c25-b10a-4b59-b785-3720f0bfa72a",
+        sourceMessageId: "ae130c25-b10a-4b59-b785-3720f0bfa72a",
+        role: "assistant",
+        text: "",
+        createdAt: "1778302079.834974",
+        attachments: [{
+          id: "ae130c25-b10a-4b59-b785-3720f0bfa72a-image-1",
+          fileName: "草地上的可爱小熊",
+          mimeType: "image/*",
+          url: "https://chatgpt.com/backend-api/estuary/content?id=file_00000000dd2c7209a733ee4d36fe1882&ts=494770&p=fs&cid=1&sig=first&v=0"
+        }]
+      },
+      {
+        id: "bbb2127e-1ea6-4a60-bb53-8e7538cbf14a",
+        sourceMessageId: "bbb2127e-1ea6-4a60-bb53-8e7538cbf14a",
+        role: "user",
+        text: "主题角色也要做好光影配合",
+        createdAt: "1778302141.361288"
+      },
+      {
+        id: "3ae56431-5e0b-477f-9e65-c7e57e339963",
+        sourceMessageId: "3ae56431-5e0b-477f-9e65-c7e57e339963",
+        role: "assistant",
+        text: "",
+        createdAt: "1778302167.677527",
+        attachments: [{
+          id: "3ae56431-5e0b-477f-9e65-c7e57e339963-image-1",
+          fileName: "阳光下的萌熊草地",
+          mimeType: "image/*",
+          url: "https://chatgpt.com/backend-api/estuary/content?id=file_0000000079a072099ff1fe633cef1428&ts=494770&p=fs&cid=1&sig=second&v=0"
+        }]
+      }
+    ]);
+  });
+
   it("replaces ChatGPT content reference spans with readable labels", () => {
     const snapshot = extractChatGPTSnapshotFromConversation({
       id: "conv-reference",

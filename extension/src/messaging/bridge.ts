@@ -25,6 +25,7 @@ export function isContentCommandRequest(value: unknown): value is ContentCommand
       || candidate.command === "check-update"
       || candidate.command === "backup-current-now"
       || candidate.command === "backup-platform-now"
+      || candidate.command === "bootstrap-auto-backup"
     );
 }
 

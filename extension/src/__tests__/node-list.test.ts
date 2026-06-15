@@ -92,7 +92,7 @@ describe("node-list controls", () => {
     expect(buttons[0].textContent?.trim()).toBe("");
     expect(buttons[1].textContent?.trim()).toBe("");
     expect(buttons[0].getAttribute("aria-label")).toBe("Plan Alpha");
-    expect(container.querySelector<HTMLElement>(".ai-chat-helper-node-indicator")?.style.getPropertyValue("--ai-chat-helper-node-indicator-y")).toBe("54px");
+    expect(container.querySelector<HTMLElement>(".ai-chat-helper-node-indicator")?.style.getPropertyValue("--ai-chat-helper-node-indicator-y")).toBe("56px");
   });
 
   it("delegates node clicks to the provided navigation handler", () => {
@@ -114,10 +114,10 @@ describe("node-list controls", () => {
     const buttons = Array.from(container.querySelectorAll<HTMLButtonElement>("button"));
     const indicator = container.querySelector<HTMLElement>(".ai-chat-helper-node-indicator");
     expect(container.style.getPropertyValue("--ai-chat-helper-dot-gap")).toBe("42px");
-    expect(container.style.height).toBe("142px");
-    expect(buttons[0].style.top).toBe("29px");
-    expect(buttons[1].style.top).toBe("71px");
-    expect(buttons[2].style.top).toBe("113px");
+    expect(container.style.height).toBe("146px");
+    expect(buttons[0].style.top).toBe("31px");
+    expect(buttons[1].style.top).toBe("73px");
+    expect(buttons[2].style.top).toBe("115px");
     expect(indicator?.hidden).toBe(true);
   });
 
@@ -135,10 +135,10 @@ describe("node-list controls", () => {
     });
 
     const buttons = Array.from(container.querySelectorAll<HTMLButtonElement>("button"));
-    expect(container.style.height).toBe("142px");
+    expect(container.style.height).toBe("146px");
     expect(buttons).toHaveLength(5);
-    expect(buttons[3].style.top).toBe("155px");
-    expect(buttons[4].style.top).toBe("197px");
+    expect(buttons[3].style.top).toBe("157px");
+    expect(buttons[4].style.top).toBe("199px");
   });
 
   it("uses a separate rail scroll position to reveal the active node when it exceeds the visible limit", () => {
@@ -155,9 +155,9 @@ describe("node-list controls", () => {
       activeNodeId: "5"
     });
 
-    expect(container.style.height).toBe("142px");
+    expect(container.style.height).toBe("146px");
     expect(container.scrollTop).toBeGreaterThan(0);
-    expect(container.querySelector<HTMLElement>(".ai-chat-helper-node-indicator")?.style.getPropertyValue("--ai-chat-helper-node-indicator-y")).toBe("186px");
+    expect(container.querySelector<HTMLElement>(".ai-chat-helper-node-indicator")?.style.getPropertyValue("--ai-chat-helper-node-indicator-y")).toBe("188px");
   });
 
   it("centers a single node in the orbital rail", () => {
@@ -211,6 +211,7 @@ describe("node-list controls", () => {
     expect(tooltip?.classList.contains("is-visible")).toBe(true);
     expect(tooltip?.getAttribute("aria-hidden")).toBe("false");
     expect(button.getAttribute("aria-describedby")).toBe(tooltip?.id);
+    expect(button.getAttribute("title")).toBeNull();
   });
 
   it("renders image attachments inside the node information card", () => {
@@ -237,6 +238,7 @@ describe("node-list controls", () => {
     expect(tooltip?.innerHTML).toContain('<img src="https://assets.example.com/photo.png"');
     expect(tooltip?.textContent).toContain("请参考这张图");
     expect(tooltip?.textContent).not.toContain("[附件1: photo.png]");
+    expect(button.getAttribute("title")).toBeNull();
   });
 
   it("hides the node information card when the dot is no longer hovered", () => {

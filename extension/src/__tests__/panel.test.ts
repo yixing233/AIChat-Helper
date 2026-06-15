@@ -31,6 +31,8 @@ describe("createPanel", () => {
     expect(panel.querySelector("[data-ai-chat-helper-search-status]")).toBeFalsy();
     expect(panel.querySelector(".ai-chat-helper-nav-wrapper__grip")).toBeFalsy();
     expect(panel.querySelector("[data-ai-chat-helper-orbital]")?.getAttribute("data-ai-chat-helper-drag-handle")).toBe("");
+    expect(panel.querySelector("[data-ai-chat-helper-orbital]")?.getAttribute("title")).toBeNull();
+    expect(panel.querySelector("[data-ai-chat-helper-orbital]")?.getAttribute("aria-label")).toBe("拖动导航");
     expect(panel.querySelector("[data-ai-chat-helper-visible-limit]")).toBeFalsy();
     expect(panel.querySelector("[data-ai-chat-helper-reading-line]")).toBeFalsy();
     expect(panel.querySelector("[data-ai-chat-helper-dot-gap]")).toBeFalsy();
@@ -65,7 +67,7 @@ describe("createPanel", () => {
 
     expect(refreshButton).toBeTruthy();
     expect(refreshButton?.getAttribute("aria-label")).toBe("重新获取节点");
-    expect(refreshButton?.getAttribute("title")).toBe("重新获取节点");
+    expect(refreshButton?.getAttribute("title")).toBeNull();
     expect(refreshButton?.querySelector("svg")).toBeTruthy();
     expect(exportButton).toBeFalsy();
     expect(batchButton).toBeFalsy();
@@ -73,6 +75,34 @@ describe("createPanel", () => {
     expect(panel.querySelector("[data-ai-chat-helper-github]")).toBeFalsy();
     expect(panel.querySelector("[data-ai-chat-helper-batch-export]")).toBeFalsy();
     expect(panel.querySelector<HTMLInputElement>("[data-ai-chat-helper-batch-limit]")).toBeFalsy();
+  });
+
+  it("shows the shared custom tooltip for the refresh control", () => {
+    const panel = createPanel({ platformName: "ChatGPT" });
+    document.body.appendChild(panel);
+    const refreshButton = panel.querySelector<HTMLButtonElement>(".ai-chat-helper-panel__action--refresh");
+
+    expect(refreshButton).toBeTruthy();
+    expect(refreshButton?.getAttribute("title")).toBeNull();
+
+    refreshButton!.getBoundingClientRect = () => ({
+      top: 120,
+      left: 1180,
+      right: 1196,
+      bottom: 136,
+      width: 16,
+      height: 16,
+      x: 1180,
+      y: 120,
+      toJSON: () => ({})
+    });
+
+    refreshButton!.dispatchEvent(new MouseEvent("mouseover", { bubbles: true }));
+
+    const tooltip = document.querySelector<HTMLElement>(".ai-chat-helper-node-tooltip");
+    expect(tooltip?.classList.contains("is-visible")).toBe(true);
+    expect(tooltip?.textContent).toBe("重新获取节点");
+    expect(refreshButton?.getAttribute("aria-describedby")).toBe(tooltip?.id);
   });
 
   it("applies saved panel position when provided", () => {

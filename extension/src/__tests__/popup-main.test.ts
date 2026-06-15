@@ -75,4 +75,120 @@ describe("popup main content commands", () => {
     });
     expect(document.querySelector("[data-ai-chat-helper-backup-record]")).toBeFalsy();
   });
+
+  it("shows the current conversation last automatic backup time from backup storage", async () => {
+    document.body.innerHTML = '<div id="ai-chat-helper-popup-root"></div>';
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(null);
+    const storageGet = vi.fn((key: string, callback: (items: Record<string, unknown>) => void) => {
+      if (key === "ai-chat-helper:backup-status:chatgpt:test:last-auto-backup-at") {
+        callback({
+          [key]: "2026-06-11T10:20:30.000Z"
+        });
+        return;
+      }
+      if (key === "ai-chat-helper:backups:records") {
+        callback({
+          [key]: [
+            {
+              id: "claude-old",
+              platformId: "claude",
+              conversationId: "other",
+              title: "Claude Backup",
+              digest: "a",
+              createdAt: "2026-06-10T01:00:00.000Z",
+              files: [],
+              snapshot: {}
+            },
+            {
+              id: "chatgpt-other-auto",
+              platformId: "chatgpt",
+              conversationId: "other",
+              title: "Other ChatGPT Backup",
+              digest: "b",
+              source: "auto",
+              createdAt: "2026-06-11T08:20:30.000Z",
+              files: [],
+              snapshot: {}
+            },
+            {
+              id: "chatgpt-current-manual",
+              platformId: "chatgpt",
+              conversationId: "test",
+              title: "Manual Current ChatGPT Backup",
+              digest: "c",
+              source: "manual",
+              createdAt: "2026-06-11T09:20:30.000Z",
+              files: [],
+              snapshot: {}
+            },
+            {
+              id: "chatgpt-current-auto",
+              platformId: "chatgpt",
+              conversationId: "test",
+              title: "Auto Current ChatGPT Backup",
+              digest: "d",
+              source: "auto",
+              createdAt: "2026-06-11T07:20:30.000Z",
+              files: [],
+              snapshot: {}
+            }
+          ]
+        });
+        return;
+      }
+      callback({});
+    });
+    chrome.storage.local.get = storageGet as unknown as typeof chrome.storage.local.get;
+
+    const { sendContentCommand } = await import("../popup/main");
+    void sendContentCommand;
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const lastBackup = document.querySelector<HTMLElement>("[data-ai-chat-helper-last-backup]");
+    expect(lastBackup?.textContent).toContain("上次自动备份");
+    expect(lastBackup?.textContent).toContain("2026");
+    expect(lastBackup?.textContent).toContain("18:20");
+    expect(lastBackup?.textContent).not.toContain("15:20");
+    expect(lastBackup?.textContent).not.toContain("尚无记录");
+  });
+
+  it("triggers current conversation auto backup bootstrap when no auto backup record exists", async () => {
+    document.body.innerHTML = '<div id="ai-chat-helper-popup-root"></div>';
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(null);
+    const storageGet = vi.fn((key: string, callback: (items: Record<string, unknown>) => void) => {
+      if (key === "ai-chat-helper:settings:autoBackupEnabled") {
+        callback({ [key]: true });
+        return;
+      }
+      if (key === "ai-chat-helper:backup-status:chatgpt:test:last-auto-backup-at") {
+        callback({});
+        return;
+      }
+      if (key === "ai-chat-helper:backups:records") {
+        callback({ [key]: [] });
+        return;
+      }
+      callback({});
+    });
+    chrome.storage.local.get = storageGet as unknown as typeof chrome.storage.local.get;
+
+    await import("../popup/main");
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(chrome.tabs.sendMessage).toHaveBeenCalledWith(
+      7,
+      {
+        type: "ai-chat-helper:content-command",
+        command: "bootstrap-auto-backup"
+      },
+      expect.any(Function)
+    );
+
+    const lastBackup = document.querySelector<HTMLElement>("[data-ai-chat-helper-last-backup]");
+    expect(lastBackup?.textContent).toContain("尚无记录");
+  });
 });

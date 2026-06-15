@@ -58,7 +58,7 @@ describe("settings popup", () => {
     expect(version?.nextElementSibling).toBe(updateButton);
     expect(updateButton?.classList.contains("ai-chat-helper-popup__header-icon")).toBe(true);
     expect(updateButton?.getAttribute("aria-label")).toBe("检查更新");
-    expect(updateButton?.getAttribute("title")).toBe("检查更新");
+    expect(updateButton?.getAttribute("title")).toBeNull();
     expect(updateButton?.querySelector("svg")).toBeTruthy();
     expect(updateButton?.querySelector("path")?.getAttribute("d")).toBe(scriptUpdateIconPath);
     expect(updateButton?.textContent?.trim()).toBe("");
@@ -68,7 +68,7 @@ describe("settings popup", () => {
     expect(githubButton).toBeTruthy();
     expect(githubButton?.classList.contains("ai-chat-helper-popup__header-icon")).toBe(true);
     expect(githubButton?.getAttribute("aria-label")).toBe("GitHub 项目");
-    expect(githubButton?.getAttribute("title")).toBe("GitHub 项目");
+    expect(githubButton?.getAttribute("title")).toBeNull();
     expect(githubButton?.querySelector("svg")).toBeTruthy();
     expect(githubButton?.textContent?.trim()).toBe("");
     expect(root.querySelector<HTMLInputElement>("[data-ai-chat-helper-remove-qwen-ads]")?.checked).toBe(true);
@@ -295,6 +295,21 @@ describe("settings popup", () => {
     }));
   });
 
+  it("shows the last automatic backup time in the backup settings", () => {
+    const root = createSettingsPopup({
+      settings: DEFAULT_EXTENSION_SETTINGS,
+      version: "1.0.0",
+      platformId: "chatgpt",
+      lastBackupAt: "2026-06-11T08:20:30.000Z"
+    });
+
+    const lastBackup = root.querySelector<HTMLElement>("[data-ai-chat-helper-last-backup]");
+    expect(lastBackup).toBeTruthy();
+    expect(lastBackup?.textContent).toContain("上次自动备份");
+    expect(lastBackup?.textContent).toContain("2026");
+    expect(lastBackup?.textContent).not.toContain("尚无记录");
+  });
+
   it("draws the reading-line range with canvas while keeping native range interaction", () => {
     const root = createSettingsPopup({
       settings: {
@@ -402,5 +417,38 @@ describe("settings popup", () => {
     expect(popupCss).toMatch(/\.ai-chat-helper-popup__header-title\s*\{[\s\S]*display:\s*inline-flex;[\s\S]*align-items:\s*baseline;/s);
     expect(popupCss).toMatch(/\.ai-chat-helper-popup__header-icon--inline\s*\{[\s\S]*border:\s*none;[\s\S]*background:\s*transparent;[\s\S]*box-shadow:\s*none;/s);
     expect(popupCss).toMatch(/\.ai-chat-helper-popup__header-icon--inline:hover,\s*\.ai-chat-helper-popup__header-icon--inline:focus-visible\s*\{[\s\S]*border:\s*none;[\s\S]*background:\s*transparent;[\s\S]*box-shadow:\s*none;/s);
+  });
+
+  it("uses the shared custom tooltip for header icon buttons instead of native title", () => {
+    const root = createSettingsPopup({
+      settings: DEFAULT_EXTENSION_SETTINGS,
+      version: "1.0.0",
+      platformId: "chatgpt"
+    });
+    document.body.appendChild(root);
+    bindPopupActions(root, vi.fn());
+
+    const updateButton = root.querySelector<HTMLButtonElement>("[data-ai-chat-helper-popup-action='check-update']");
+    expect(updateButton).toBeTruthy();
+    expect(updateButton?.getAttribute("title")).toBeNull();
+
+    updateButton!.getBoundingClientRect = () => ({
+      top: 80,
+      left: 1180,
+      right: 1194,
+      bottom: 94,
+      width: 14,
+      height: 14,
+      x: 1180,
+      y: 80,
+      toJSON: () => ({})
+    });
+
+    updateButton!.dispatchEvent(new MouseEvent("mouseover", { bubbles: true }));
+
+    const tooltip = document.querySelector<HTMLElement>(".ai-chat-helper-node-tooltip");
+    expect(tooltip?.classList.contains("is-visible")).toBe(true);
+    expect(tooltip?.textContent).toBe("检查更新");
+    expect(updateButton?.getAttribute("aria-describedby")).toBe(tooltip?.id);
   });
 });

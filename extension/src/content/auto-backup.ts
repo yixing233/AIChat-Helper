@@ -2,6 +2,7 @@ import { createConversationBackupRecord, type BackupSaveResult, type Conversatio
 import type { SnapshotExportFormat } from "../exporters/snapshot-export";
 import type { ExtensionSettings } from "../settings/extension-settings";
 import type { ConversationSnapshot, ExportFile } from "../shared/types";
+import type { PreviewImageFetcher } from "../backup/backup-store";
 
 export type AutoBackupTickResult =
   | { status: "disabled" }
@@ -15,9 +16,13 @@ export interface AutoBackupRunner {
 
 export interface AutoBackupRunnerOptions {
   getSettings: () => Pick<ExtensionSettings, "autoBackupEnabled" | "autoBackupIntervalMinutes">;
+  shouldRun?: () => boolean;
+  waitForReady?: () => Promise<void>;
   createSnapshot: () => Promise<ConversationSnapshot>;
+  findExistingRecord?: (snapshot: ConversationSnapshot, format: SnapshotExportFormat) => Promise<ConversationBackupRecord | null>;
   exportSnapshot: (snapshot: ConversationSnapshot, format: SnapshotExportFormat) => Promise<ExportFile[]>;
   saveRecord: (record: ConversationBackupRecord) => Promise<BackupSaveResult>;
+  fetchImage?: PreviewImageFetcher;
   onStart?: () => void;
   now?: () => number;
   createTimestamp?: () => string;
@@ -32,6 +37,7 @@ export function createAutoBackupRunner(options: AutoBackupRunnerOptions): AutoBa
     async tick(force = false): Promise<AutoBackupTickResult> {
       const settings = options.getSettings();
       if (!settings.autoBackupEnabled) return { status: "disabled" };
+      if (options.shouldRun && !options.shouldRun()) return { status: "skipped" };
 
       const currentTime = now();
       const intervalMs = Math.max(5, settings.autoBackupIntervalMinutes || 15) * 60 * 1000;
@@ -40,12 +46,25 @@ export function createAutoBackupRunner(options: AutoBackupRunnerOptions): AutoBa
       }
       lastAttemptAt = currentTime;
 
+      const format: SnapshotExportFormat = "zip";
+      const initialSnapshot = await options.createSnapshot();
+      if (options.findExistingRecord) {
+        const existingRecord = await options.findExistingRecord(initialSnapshot, format);
+        if (existingRecord) {
+          return { status: "unchanged", record: existingRecord };
+        }
+      }
+
       options.onStart?.();
-      const snapshot = await options.createSnapshot();
-      const files = await options.exportSnapshot(snapshot, "zip");
-      const result = await options.saveRecord(await createConversationBackupRecord(snapshot, "zip", files, {
+      if (options.waitForReady) {
+        await options.waitForReady();
+      }
+      const snapshot = options.waitForReady ? await options.createSnapshot() : initialSnapshot;
+      const files = await options.exportSnapshot(snapshot, format);
+      const result = await options.saveRecord(await createConversationBackupRecord(snapshot, format, files, {
         createdAt: createTimestamp(),
-        source: "auto"
+        source: "auto",
+        fetchImage: options.fetchImage
       }));
 
       return result.created

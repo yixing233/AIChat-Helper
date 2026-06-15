@@ -28,7 +28,6 @@ async function bootBackupPage(): Promise<void> {
       },
       async onDelete(id) {
         await backupStore.remove(id);
-        await bootBackupPage();
       }
     });
   } catch (error) {

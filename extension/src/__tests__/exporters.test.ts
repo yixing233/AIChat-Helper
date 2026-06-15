@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { htmlExporter } from "../exporters/html";
+import { htmlExporter, renderMessageMarkdown } from "../exporters/html";
 import { markdownExporter } from "../exporters/markdown";
 import { txtExporter } from "../exporters/txt";
 import { createZip } from "../exporters/zip";
@@ -196,7 +196,7 @@ describe("exporters", () => {
     expect(content).not.toContain("<h1># Section</h1>");
   });
 
-  it("renders markdown math blocks in html exports with MathJax support", async () => {
+  it("renders markdown math blocks as extension-safe html", async () => {
     const [file] = await htmlExporter.export({
       ...snapshot,
       messages: [
@@ -205,8 +205,9 @@ describe("exporters", () => {
     });
     const content = String(file.content);
 
-    expect(content).toContain('<div class="math-display">\\[E = mc^2\\]</div>');
-    expect(content).toContain("tex-mml-chtml.js");
+    expect(content).toContain('<div class="math-display math-rendered" data-latex="E = mc^2">');
+    expect(content).toContain("<sup>2</sup>");
+    expect(content).not.toContain("tex-mml-chtml.js");
   });
 
   it("normalizes ChatGPT triple-escaped math delimiters in html exports", async () => {
@@ -218,7 +219,7 @@ describe("exporters", () => {
     });
     const content = String(file.content);
 
-    expect(content).toContain('<span class="math-inline">\\(x + y\\)</span>');
+    expect(content).toContain('<span class="math-inline math-rendered" data-latex="x + y">');
     expect(content).not.toContain('\\\\\\(x + y\\\\\\)');
   });
 
@@ -231,7 +232,7 @@ describe("exporters", () => {
     });
     const content = String(file.content);
 
-    expect(content).toContain('Formula: <span class="math-inline">\\(a+b\\)</span> stays inline.');
+    expect(content).toContain('Formula: <span class="math-inline math-rendered" data-latex="a+b">');
     expect(content).not.toContain("$a+b$");
   });
 
@@ -253,8 +254,20 @@ describe("exporters", () => {
     const content = String(file.content);
 
     expect(content).toContain("<table");
-    expect(content).toContain('<span class="math-inline">\\(a+b\\)</span>');
+    expect(content).toContain('<span class="math-inline math-rendered" data-latex="a+b">');
     expect(content).not.toContain("$a+b$");
+  });
+
+  it("renders ChatGPT bracket formulas with fractions and symbols", async () => {
+    const html = renderMessageMarkdown("\\[F=\\frac{B^2A}{2\\mu}\\]\n\n\\[F \\propto \\sin\\theta\\]", "chatgpt");
+
+    expect(html).toContain('<div class="math-display math-rendered" data-latex="F=\\frac{B^2A}{2\\mu}">');
+    expect(html).toContain('<span class="math-frac">');
+    expect(html).toContain("<sup>2</sup>");
+    expect(html).toContain("&mu;");
+    expect(html).toContain("&prop;");
+    expect(html).toContain("&theta;");
+    expect(html).not.toContain("\\[F=");
   });
 
   it("exports attachment metadata in html", async () => {

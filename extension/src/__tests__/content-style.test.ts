@@ -19,7 +19,7 @@ describe("content styles", () => {
 
   it("keeps the page rail visible on light chat backgrounds", () => {
     expect(css).toMatch(/--ai-chat-helper-rail-edge:\s*rgba\(37, 99, 235, 0\.24\);/);
-    expect(css).toMatch(/\.ai-chat-helper-orbital > \.ai-chat-helper-orbital__track,\s*\.ai-chat-helper-orbital__nodes > \.ai-chat-helper-orbital__track\s*\{[\s\S]*width:\s*26px;[\s\S]*box-shadow:[\s\S]*var\(--ai-chat-helper-rail-edge\)/s);
+    expect(css).toMatch(/\.ai-chat-helper-orbital > \.ai-chat-helper-orbital__track,\s*\.ai-chat-helper-orbital__nodes > \.ai-chat-helper-orbital__track\s*\{[\s\S]*width:\s*30px;[\s\S]*box-shadow:[\s\S]*var\(--ai-chat-helper-rail-edge\)/s);
   });
 
   it("styles the node hover information card like the userscript tooltip", () => {
@@ -57,7 +57,7 @@ describe("content styles", () => {
   it("mirrors the backup-library node size and movable active ring", () => {
     expect(css).toMatch(/\.ai-chat-helper-node\s*\{[^}]*border:\s*2px solid #fff;/s);
     expect(css).toMatch(/\.ai-chat-helper-node-dot\s*\{[^}]*width:\s*18px;[^}]*height:\s*18px;/s);
-    expect(css).toMatch(/\.ai-chat-helper-orbital > \.ai-chat-helper-orbital__track,\s*\.ai-chat-helper-orbital__nodes > \.ai-chat-helper-orbital__track\s*\{[\s\S]*width:\s*26px;/s);
+    expect(css).toMatch(/\.ai-chat-helper-orbital > \.ai-chat-helper-orbital__track,\s*\.ai-chat-helper-orbital__nodes > \.ai-chat-helper-orbital__track\s*\{[\s\S]*width:\s*30px;/s);
     expect(css).toMatch(/\.ai-chat-helper-node-dot::after\s*\{[^}]*display:\s*none;/s);
     expect(css).toMatch(/\.ai-chat-helper-node-indicator\s*\{[^}]*left:\s*50%;[^}]*width:\s*22px;[^}]*height:\s*22px;[^}]*border:\s*3px solid #0ea5e9;[^}]*transform:\s*translateX\(-50%\) translateY\(var\(--ai-chat-helper-node-indicator-y,\s*0px\)\);/s);
     expect(css).toMatch(/\.ai-chat-helper-node--active\s*\{[^}]*box-shadow:\s*0 1px 3px rgb\(15 23 42 \/ 16%\);/s);

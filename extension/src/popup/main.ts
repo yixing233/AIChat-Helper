@@ -4,8 +4,11 @@ import { getPlatformAdapter } from "../platforms";
 import type { PlatformId } from "../shared/types";
 import { CONTENT_COMMAND_MESSAGE_TYPE, type ContentCommand } from "../messaging/protocol";
 import { bindPopupActions, bindSettingsPopup, createSettingsPopup, type PopupAction } from "./settings-popup";
+import type { ConversationBackupRecord } from "../backup/backup-store";
 
 const settingsStorage = createExtensionStorage("settings");
+const backupStorage = createExtensionStorage("backups");
+const backupStatusStorage = createExtensionStorage("backup-status");
 const PROJECT_REPO_URL = "https://github.com/yixing233/AIChat-Helper";
 const BACKUP_LIBRARY_PAGE = "backup/backup.html";
 
@@ -21,12 +24,17 @@ async function bootPopup(): Promise<void> {
       getActiveTabInfo()
     ]);
     const platform = getActivePlatform(activeTab.url);
+    const lastBackupAt = platform ? await loadLastBackupAt(platform.id, platform.conversationId) : null;
+    if (shouldBootstrapAutoBackup(settings, platform, lastBackupAt)) {
+      void sendContentCommand(activeTab.id, "bootstrap-auto-backup").catch(() => undefined);
+    }
     const popup = createSettingsPopup({
       settings,
       version: getExtensionVersion(),
       platformId: platform?.id || null,
       canExportCurrent: Boolean(platform),
-      canBatchExport: Boolean(platform?.canBatchExport)
+      canBatchExport: Boolean(platform?.canBatchExport),
+      lastBackupAt
     });
     host.replaceChildren(popup);
     bindSettingsPopup(popup, settings, saveSettings);
@@ -52,6 +60,35 @@ async function saveSettings(settings: ExtensionSettings): Promise<void> {
   );
 }
 
+function shouldBootstrapAutoBackup(
+  settings: ExtensionSettings,
+  platform: ActivePlatformInfo | null,
+  lastBackupAt: string | null
+): boolean {
+  return Boolean(
+    settings.autoBackupEnabled
+    && platform
+    && platform.conversationId
+    && platform.conversationId !== "current"
+    && !lastBackupAt
+  );
+}
+
+async function loadLastBackupAt(platformId: PlatformId, conversationId: string): Promise<string | null> {
+  if (!conversationId || conversationId === "current") return null;
+  const statusKey = `${platformId}:${conversationId}:last-auto-backup-at`;
+  const lastTriggeredAt = await backupStatusStorage.get<string | null>(statusKey, null);
+  if (typeof lastTriggeredAt === "string" && lastTriggeredAt.trim()) return lastTriggeredAt;
+  const records = await backupStorage.get<ConversationBackupRecord[]>("records", []);
+  const latest = records
+    .filter((record) => record?.platformId === platformId
+      && record.conversationId === conversationId
+      && record.source === "auto"
+      && typeof record.createdAt === "string")
+    .sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt))[0];
+  return latest?.createdAt || null;
+}
+
 function getExtensionVersion(): string {
   try {
     return chrome.runtime.getManifest().version || "0.0.0";
@@ -68,6 +105,7 @@ interface ActiveTabInfo {
 interface ActivePlatformInfo {
   id: PlatformId;
   canBatchExport: boolean;
+  conversationId: string;
 }
 
 async function getActiveTabInfo(): Promise<ActiveTabInfo> {
@@ -87,9 +125,11 @@ function getActivePlatform(url: string | undefined): ActivePlatformInfo | null {
   try {
     const adapter = getPlatformAdapter(new URL(url));
     if (!adapter) return null;
+    const urlObject = new URL(url);
     return {
       id: adapter.id,
-      canBatchExport: Boolean(adapter.fetchConversationList && adapter.fetchConversationDetail)
+      canBatchExport: Boolean(adapter.fetchConversationList && adapter.fetchConversationDetail),
+      conversationId: adapter.getConversationId(urlObject)
     };
   } catch {
     return null;

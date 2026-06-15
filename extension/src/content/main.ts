@@ -1,6 +1,6 @@
 import { isContentCommandRequest, isInjectedMessage } from "../messaging/bridge";
 import { sendBackgroundRequest } from "../messaging/bridge";
-import { createBackupStore, createConversationBackupRecord, type BackupSaveResult } from "../backup/backup-store";
+import { buildConversationBackupRecord, createBackupStore, createConversationBackupRecord, type BackupSaveResult } from "../backup/backup-store";
 import { getPlatformAdapter } from "../platforms";
 import { DEFAULT_EXTENSION_SETTINGS, LEGACY_SETTING_MIGRATIONS, normalizeExtensionSettings, type ExtensionSettings } from "../settings/extension-settings";
 import { createExtensionStorage, migrateLocalStorageKey } from "../storage/extension-storage";
@@ -39,6 +39,7 @@ function injectPageHooks(): void {
 const adapter = getPlatformAdapter(new URL(window.location.href));
 const capturedEvents = createCapturedEventBuffer();
 const settingsStorage = createExtensionStorage("settings");
+const backupStatusStorage = createExtensionStorage("backup-status");
 const backupStore = createBackupStore(createExtensionStorage("backups"));
 const SCRIPT_UPDATE_URL = "https://raw.githubusercontent.com/yixing233/AIChat-Helper/master/AIChat-Helper.user.js";
 const SCRIPT_CHANGELOG_URL = "https://raw.githubusercontent.com/yixing233/AIChat-Helper/master/update.json";
@@ -55,6 +56,7 @@ let mountedPanelContext: MountedPanelContext | null = null;
 let mountPanelPromise: Promise<MountedPanelContext> | null = null;
 let popupCommandListenerBound = false;
 let immediateBackupInProgress = false;
+let triggerCurrentConversationAutoBackup: (() => void) | null = null;
 
 async function mountPanel(): Promise<MountedPanelContext> {
   if (!adapter) throw new Error("当前页面不支持 AI Chat Helper");
@@ -132,7 +134,22 @@ async function mountPanel(): Promise<MountedPanelContext> {
   };
   const autoBackupRunner = createAutoBackupRunner({
     getSettings: () => currentSettings,
+    shouldRun: () => canAutoBackupCurrentConversation(),
+    waitForReady: () => waitForAutoBackupReady(platformAdapter.id),
     createSnapshot: () => createConversationSnapshot(platformAdapter, capturedEvents.snapshot(), document),
+    findExistingRecord: async (snapshot, format) => {
+      const records = await backupStore.list();
+      const conversationId = snapshot.conversationId || "current";
+      return records.find((record) => {
+        return record.platformId === snapshot.platformId
+          && record.conversationId === conversationId
+          && record.format === format
+          && record.digest === buildConversationBackupRecord(snapshot, format, [], {
+            createdAt: "1970-01-01T00:00:00.000Z",
+            source: "auto"
+          }).digest;
+      }) || null;
+    },
     exportSnapshot,
     saveRecord: (record) => backupStore.save(record),
     onStart: () => {
@@ -334,6 +351,9 @@ async function mountPanel(): Promise<MountedPanelContext> {
   function runAutoBackupTick(force = false): void {
     void autoBackupRunner.tick(force)
       .then((result) => {
+        if (result.status === "created" || result.status === "unchanged") {
+          void saveLastAutoBackupAt(result.record.conversationId, new Date().toISOString());
+        }
         if (result.status === "created") {
           showToast(`已自动备份：${result.record.title}`, {
             id: "auto-backup",
@@ -360,6 +380,100 @@ async function mountPanel(): Promise<MountedPanelContext> {
           tone: "warn"
         });
       });
+  }
+
+  triggerCurrentConversationAutoBackup = () => {
+    if (!canAutoBackupCurrentConversation()) return;
+    runAutoBackupTick(true);
+  };
+
+  function canAutoBackupCurrentConversation(): boolean {
+    const conversationId = String(platformAdapter.getConversationId() || "").trim();
+    return Boolean(conversationId && conversationId !== "current");
+  }
+
+  async function waitForAutoBackupReady(platformId: string): Promise<void> {
+    if (platformId !== "chatgpt") {
+      await waitForDocumentImagesToSettle();
+      return;
+    }
+
+    await waitForCondition(() => {
+      return Boolean(
+        document.querySelector("[data-message-author-role]")
+        || document.querySelector("[data-testid^='conversation-turn-']")
+      );
+    }, 8000, 120);
+
+    await waitForDocumentImagesToSettle();
+  }
+
+  async function waitForDocumentImagesToSettle(): Promise<void> {
+    let stablePasses = 0;
+    let lastSignature = "";
+    await waitForCondition(() => {
+      const images = collectBackupRelevantImages();
+      if (!images.length) {
+        stablePasses += 1;
+        return stablePasses >= 2;
+      }
+
+      const hasPending = images.some((image) => {
+        const src = String(image.currentSrc || image.getAttribute("src") || "").trim();
+        return !image.complete || !src;
+      });
+      const signature = images
+        .map((image) => `${image.currentSrc || image.getAttribute("src") || ""}|${image.complete ? 1 : 0}`)
+        .join("||");
+
+      if (hasPending) {
+        stablePasses = 0;
+        lastSignature = signature;
+        return false;
+      }
+
+      if (signature !== lastSignature) {
+        stablePasses = 1;
+        lastSignature = signature;
+        return false;
+      }
+
+      stablePasses += 1;
+      return stablePasses >= 2;
+    }, 12000, 180);
+  }
+
+  function collectBackupRelevantImages(): HTMLImageElement[] {
+    const candidates = Array.from(document.querySelectorAll<HTMLImageElement>(
+      "[data-message-author-role] img, [data-testid^='conversation-turn-'] img, [id^='image-'] img"
+    ));
+    return candidates.filter((image) => {
+      if (!image.isConnected) return false;
+      const src = String(image.currentSrc || image.getAttribute("src") || "").trim();
+      return Boolean(src) || !image.complete;
+    });
+  }
+
+  async function waitForCondition(
+    predicate: () => boolean,
+    timeoutMs: number,
+    intervalMs: number
+  ): Promise<void> {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      if (predicate()) return;
+      await delay(intervalMs);
+    }
+  }
+
+  function delay(ms: number): Promise<void> {
+    return new Promise((resolve) => window.setTimeout(resolve, ms));
+  }
+
+  function saveLastAutoBackupAt(conversationId: string | undefined, timestamp: string): Promise<void> {
+    const normalizedConversationId = String(conversationId || platformAdapter.getConversationId() || "current").trim();
+    if (!normalizedConversationId || normalizedConversationId === "current") return Promise.resolve();
+    return backupStatusStorage.set(`${platformAdapter.id}:${normalizedConversationId}:last-auto-backup-at`, timestamp);
   }
 
   function jumpToNode(node: ConversationNode): void {
@@ -474,6 +588,10 @@ function bindPopupCommandMessages(): void {
 
 async function handlePopupCommand(command: ContentCommand): Promise<void> {
   const context = await ensureMountedPanel();
+  if (command === "bootstrap-auto-backup") {
+    triggerCurrentConversationAutoBackup?.();
+    return;
+  }
   if (command === "export-current") {
     await openCurrentConversationExportModal(context.panel);
     return;
@@ -769,21 +887,34 @@ function isSnapshotForCurrentConversation(snapshot: ConversationSnapshot, curren
 
 function buildSnapshotConversationNodes(snapshot: ConversationSnapshot): ConversationNode[] {
   return snapshot.messages
-    .filter((message) => message.role === "user" && normalizeNodeText(message.text))
+    .filter((message) => {
+      if (message.role !== "user") return false;
+      const text = normalizeNodeText(message.text);
+      const hasImageAttachment = Array.isArray(message.attachments)
+        && message.attachments.some((attachment) => isImageAttachmentLike(attachment));
+      return Boolean(text || hasImageAttachment);
+    })
     .map((message, index) => {
       const text = normalizeNodeText(message.text);
       const sourceMessageId = String(message.sourceMessageId || message.id || "").trim();
       const id = sourceMessageId || `${snapshot.platformId}-user-${index + 1}`;
       const attachments = message.attachments?.length
-        ? message.attachments.map((attachment) => ({ ...attachment }))
+        ? hydrateContentNodeImageAttachmentsFromDom(
+          message.attachments.map((attachment) => ({ ...attachment })),
+          sourceMessageId || id,
+          message.role
+        )
         : undefined;
+      const title = text
+        ? text.slice(0, 80)
+        : getImageNodeFallbackTitle(attachments, index);
       return {
         id,
         sourceMessageId,
         index,
         sessionIndex: index,
         role: "user",
-        title: text.slice(0, 80) || `Message ${index + 1}`,
+        title,
         text,
         ...(attachments ? { attachments } : {})
       };
@@ -852,6 +983,77 @@ function normalizeNodeText(value: unknown): string {
     .replace(/[\u200B-\u200D\uFEFF]/g, "")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+function isImageAttachmentLike(attachment: { mimeType?: string; fileName?: string; url?: string } | undefined): boolean {
+  const mimeType = String(attachment?.mimeType || "").toLowerCase();
+  if (mimeType.startsWith("image/")) return true;
+  return /\.(?:png|jpe?g|gif|webp|svg|bmp|ico|avif)(?:$|[?#])/i.test(String(attachment?.fileName || attachment?.url || ""));
+}
+
+function getImageNodeFallbackTitle(
+  attachments: Array<{ fileName?: string; id?: string }> | undefined,
+  index: number
+): string {
+  const firstLabel = String(attachments?.[0]?.fileName || attachments?.[0]?.id || "").trim();
+  return firstLabel ? `[图片] ${firstLabel}` : `Message ${index + 1}`;
+}
+
+function hydrateContentNodeImageAttachmentsFromDom(
+  attachments: Array<{ id: string; fileName: string; mimeType: string; url?: string }>,
+  messageId: string,
+  role: string | undefined
+): Array<{ id: string; fileName: string; mimeType: string; url?: string }> {
+  if (!attachments.some((attachment) => isImageAttachmentLike(attachment) && !String(attachment.url || "").trim())) {
+    return attachments;
+  }
+  const urls = getContentNodeImageUrlsFromDom(messageId, role);
+  if (!urls.length) return attachments;
+
+  let imageIndex = 0;
+  return attachments.map((attachment) => {
+    if (!isImageAttachmentLike(attachment) || String(attachment.url || "").trim()) return attachment;
+    const nextUrl = urls[imageIndex] || urls[0] || "";
+    imageIndex += 1;
+    return nextUrl ? { ...attachment, url: nextUrl } : attachment;
+  });
+}
+
+function getContentNodeImageUrlsFromDom(messageId: string, role: string | undefined): string[] {
+  const normalizedId = String(messageId || "").trim();
+  if (!normalizedId) return [];
+
+  let candidates: HTMLImageElement[] = [];
+  const normalizedRole = String(role || "").trim().toLowerCase();
+  if (normalizedRole === "assistant") {
+    const container = document.getElementById(`image-${normalizedId}`);
+    if (!container) return [];
+    const preferred = Array.from(container.querySelectorAll<HTMLImageElement>('img[alt^="已生成图片"]'));
+    const fallback = Array.from(container.querySelectorAll<HTMLImageElement>("img"));
+    candidates = preferred.length ? preferred : fallback;
+  } else if (normalizedRole === "user") {
+    const escapedId = escapeContentNodeCssIdentifier(normalizedId);
+    const container = document.querySelector<HTMLElement>(`[data-message-id="${escapedId}"]`);
+    if (!container) return [];
+    candidates = Array.from(container.querySelectorAll<HTMLImageElement>("img"));
+  } else {
+    return [];
+  }
+
+  const seen = new Set<string>();
+  return candidates
+    .map((image) => String(image.currentSrc || image.getAttribute("src") || "").trim())
+    .filter((src) => src && !/^data:image\/svg/i.test(src))
+    .filter((src) => {
+      if (seen.has(src)) return false;
+      seen.add(src);
+      return true;
+    });
+}
+
+function escapeContentNodeCssIdentifier(value: string): string {
+  if (typeof CSS !== "undefined" && typeof CSS.escape === "function") return CSS.escape(value);
+  return String(value || "").replace(/["\\]/g, "\\$&");
 }
 
 function getNodeSignature(nodes: ConversationNode[]): string {

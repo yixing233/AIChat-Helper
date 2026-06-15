@@ -1,4 +1,5 @@
 import { escapeHtml } from "../ui/shared/escape-html";
+import { bindTextTooltipHandlers } from "../ui/controls/node-tooltip";
 import { isImmediateBackupProgressMessage } from "../messaging/bridge";
 import { DEFAULT_EXTENSION_SETTINGS, normalizeExtensionSettings, type ExtensionSettings } from "../settings/extension-settings";
 import type { ImmediateBackupProgressPayload } from "../messaging/protocol";
@@ -10,6 +11,7 @@ export interface SettingsPopupOptions {
   platformId?: PlatformId | null;
   canExportCurrent?: boolean;
   canBatchExport?: boolean;
+  lastBackupAt?: string | null;
 }
 
 export type SettingsChangeHandler = (settings: ExtensionSettings) => void | Promise<void>;
@@ -99,11 +101,11 @@ export function createSettingsPopup(options: SettingsPopupOptions): HTMLElement 
       <div class="ai-chat-helper-popup__header-title">
         <strong>AI Chat Helper</strong>
         <span>v${escapeHtml(options.version || "0.0.0")}</span>
-        <button type="button" class="ai-chat-helper-popup__header-icon ai-chat-helper-popup__header-icon--inline" title="检查更新" aria-label="检查更新" data-ai-chat-helper-popup-action="check-update">${updateIcon}</button>
+        <button type="button" class="ai-chat-helper-popup__header-icon ai-chat-helper-popup__header-icon--inline" aria-label="检查更新" data-ai-chat-helper-tooltip="检查更新" data-ai-chat-helper-popup-action="check-update">${updateIcon}</button>
       </div>
       <div class="ai-chat-helper-popup__header-actions">
         <small data-ai-chat-helper-popup-status></small>
-        <button type="button" class="ai-chat-helper-popup__header-icon" title="GitHub 项目" aria-label="GitHub 项目" data-ai-chat-helper-popup-action="open-github">${githubIcon}</button>
+        <button type="button" class="ai-chat-helper-popup__header-icon" aria-label="GitHub 项目" data-ai-chat-helper-tooltip="GitHub 项目" data-ai-chat-helper-popup-action="open-github">${githubIcon}</button>
       </div>
     </header>
 
@@ -157,6 +159,7 @@ export function createSettingsPopup(options: SettingsPopupOptions): HTMLElement 
         <p data-ai-chat-helper-backup-progress-detail></p>
       </div>
       ${renderSwitchSetting("自动备份", "data-ai-chat-helper-auto-backup-enabled", settings.autoBackupEnabled)}
+      ${renderLastBackupStatus(options.lastBackupAt)}
       ${renderNumberSetting("备份间隔", "data-ai-chat-helper-auto-backup-interval", settings.autoBackupIntervalMinutes, 5, 1440, 5)}
     </section>
 
@@ -172,6 +175,7 @@ export function createSettingsPopup(options: SettingsPopupOptions): HTMLElement 
 
 export function bindPopupActions(root: HTMLElement, onAction: PopupActionHandler): void {
   const status = root.querySelector<HTMLElement>("[data-ai-chat-helper-popup-status]");
+  bindTextTooltipHandlers(root);
   const progressListener = (message: unknown) => {
     if (!isImmediateBackupProgressMessage(message)) return;
     renderImmediateBackupProgress(root, message.payload);
@@ -463,6 +467,28 @@ function renderSwitchSetting(label: string, dataAttribute: string, checked: bool
       </span>
     </label>
   `;
+}
+
+function renderLastBackupStatus(lastBackupAt: string | null | undefined): string {
+  return `
+    <div class="ai-chat-helper-popup__setting ai-chat-helper-popup__setting--readonly" data-ai-chat-helper-last-backup>
+      <span>上次自动备份</span>
+      <b>${escapeHtml(formatLastBackupAt(lastBackupAt))}</b>
+    </div>
+  `;
+}
+
+function formatLastBackupAt(lastBackupAt: string | null | undefined): string {
+  if (!lastBackupAt) return "尚无记录";
+  const date = new Date(lastBackupAt);
+  if (Number.isNaN(date.getTime())) return "尚无记录";
+  return date.toLocaleString("zh-CN", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit"
+  });
 }
 
 function renderPlatformSettings(platformId: PlatformId | null, settings: ExtensionSettings): string {

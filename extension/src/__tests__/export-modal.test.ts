@@ -308,6 +308,34 @@ describe("createExportModal", () => {
     expect(fullPreview?.textContent).toContain("第四行");
   });
 
+  it("uses the shared custom tooltip for export modal icon buttons instead of native title", () => {
+    const modal = createExportModal(snapshot);
+    document.body.appendChild(modal);
+
+    const closeButton = modal.querySelector<HTMLButtonElement>("[data-ai-chat-helper-close-export]");
+    expect(closeButton).toBeTruthy();
+    expect(closeButton?.getAttribute("title")).toBeNull();
+
+    closeButton!.getBoundingClientRect = () => ({
+      top: 80,
+      left: 1180,
+      right: 1196,
+      bottom: 96,
+      width: 16,
+      height: 16,
+      x: 1180,
+      y: 80,
+      toJSON: () => ({})
+    });
+
+    closeButton!.dispatchEvent(new MouseEvent("mouseover", { bubbles: true }));
+
+    const tooltip = document.querySelector<HTMLElement>(".ai-chat-helper-node-tooltip");
+    expect(tooltip?.classList.contains("is-visible")).toBe(true);
+    expect(tooltip?.textContent).toBe("关闭");
+    expect(closeButton?.getAttribute("aria-describedby")).toBe(tooltip?.id);
+  });
+
   it("closes only the topmost export preview layer with Escape", () => {
     const modal = createExportModal(snapshot);
     document.body.appendChild(modal);

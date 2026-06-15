@@ -1,17 +1,13 @@
-import { getChatGPTImagePreviewModel } from "../../exporters/shared";
 import type { ConversationNode } from "../../shared/types";
-import { escapeHtml } from "../shared/escape-html";
-
-const NODE_TOOLTIP_ID = "ai-chat-helper-node-tooltip";
-const NODE_TOOLTIP_CLASS = "ai-chat-helper-node-tooltip";
-const NODE_TOOLTIP_MAX_LENGTH = 150;
-const TRACK_CAP_RADIUS = 13;
+import { hideNodeTooltip, showNodeTooltip } from "./node-tooltip";
+const TRACK_CAP_RADIUS = 15;
 const TRACK_VERTICAL_PADDING = 16;
 const ACTIVE_RING_SIZE = 22;
 
 export interface NodeListOptions {
   readingLineOffset?: number;
   dotGap?: number;
+  visibleLimit?: number;
   activeNodeId?: string;
   onNodeClick?: (node: ConversationNode) => void | Promise<void>;
 }
@@ -65,11 +61,13 @@ export function renderNodeList(container: HTMLElement, nodes: ConversationNode[]
   track.className = "ai-chat-helper-orbital__track";
   track.setAttribute("aria-hidden", "true");
 
-  const railHeight = (nodes.length - 1) * dotGap + TRACK_VERTICAL_PADDING * 2;
-  const containerHeight = Math.max(96, railHeight);
-  const indicator = createNodeIndicator(nodes, dotGap, options.activeNodeId, containerHeight);
-  container.style.height = `${containerHeight}px`;
-  container.replaceChildren(track, indicator, ...nodes.map((node, index) => createNodeButton(node, index, dotGap, options, containerHeight, nodes.length)));
+  const visibleLimit = normalizeVisibleLimit(options.visibleLimit, nodes.length);
+  const fullHeight = Math.max(96, getRailHeight(nodes.length, dotGap));
+  const viewportHeight = Math.max(96, getRailHeight(visibleLimit, dotGap));
+  const indicator = createNodeIndicator(nodes, dotGap, options.activeNodeId, fullHeight);
+  container.style.height = `${viewportHeight}px`;
+  container.replaceChildren(track, indicator, ...nodes.map((node, index) => createNodeButton(node, index, dotGap, options, fullHeight, nodes.length)));
+  scrollActiveNodeIntoRailViewport(container, nodes, dotGap, options.activeNodeId, viewportHeight);
 }
 
 function createNodeIndicator(
@@ -86,7 +84,7 @@ function createNodeIndicator(
     indicator.hidden = true;
     return indicator;
   }
-  const activeTop = nodes.length === 1 ? Math.round(containerHeight / 2) : TRACK_CAP_RADIUS + activeIndex * dotGap;
+  const activeTop = getNodeCenterTop(nodes.length, activeIndex, dotGap, containerHeight);
   indicator.style.setProperty("--ai-chat-helper-node-indicator-y", `${activeTop - ACTIVE_RING_SIZE / 2}px`);
   indicator.dataset.activeNodeId = activeNodeId || "";
   return indicator;
@@ -109,9 +107,9 @@ function createNodeButton(
     button.classList.add("ai-chat-helper-node--active");
     button.setAttribute("aria-current", "true");
   }
-  button.style.top = `${nodeCount === 1 ? Math.round(containerHeight / 2) : TRACK_CAP_RADIUS + index * dotGap}px`;
+  button.style.top = `${getNodeCenterTop(nodeCount, index, dotGap, containerHeight)}px`;
   button.setAttribute("aria-label", node.title);
-  button.title = node.title;
+  button.dataset.nodeTitle = node.title;
   button.textContent = "";
   button.addEventListener("mouseenter", () => showNodeTooltip(button, node));
   button.addEventListener("mouseleave", () => hideNodeTooltip(button));
@@ -159,94 +157,40 @@ function normalizeDotGap(value: unknown): number {
   return Math.max(20, Math.min(50, Math.round(parsed)));
 }
 
-function showNodeTooltip(dot: HTMLElement, node: ConversationNode): void {
-  const tooltipHtml = getNodeTooltipHtml(node);
-  if (!tooltipHtml) return;
-
-  const tooltip = getOrCreateNodeTooltip();
-  tooltip.innerHTML = tooltipHtml;
-  tooltip.setAttribute("aria-hidden", "false");
-  dot.setAttribute("aria-describedby", tooltip.id);
-
-  const dotRect = dot.getBoundingClientRect();
-  const winWidth = window.innerWidth || document.documentElement.clientWidth || 0;
-  const isOnRightHalf = dotRect.left > winWidth / 2;
-
-  tooltip.classList.remove("is-visible");
-  tooltip.style.transition = "none";
-  tooltip.dataset.side = isOnRightHalf ? "right" : "left";
-  tooltip.style.left = isOnRightHalf ? `${dotRect.left - 15}px` : `${dotRect.right + 15}px`;
-  tooltip.style.top = `${dotRect.top + dotRect.height / 2}px`;
-  tooltip.style.transform = isOnRightHalf
-    ? "translate(calc(-100% + 10px), -50%) scale(0.95)"
-    : "translate(-10px, -50%) scale(0.95)";
-
-  void tooltip.offsetHeight;
-  tooltip.style.transition = "";
-  tooltip.classList.add("is-visible");
-  tooltip.style.transform = isOnRightHalf
-    ? "translate(-100%, -50%) scale(1)"
-    : "translate(0, -50%) scale(1)";
-  keepTooltipInViewport(tooltip);
+function normalizeVisibleLimit(value: unknown, nodeCount: number): number {
+  const parsed = Number(value ?? nodeCount);
+  if (!Number.isFinite(parsed)) return nodeCount;
+  return Math.max(1, Math.min(nodeCount, Math.round(parsed)));
 }
 
-function hideNodeTooltip(dot?: HTMLElement): void {
-  dot?.removeAttribute("aria-describedby");
-
-  const tooltip = document.getElementById(NODE_TOOLTIP_ID);
-  if (!tooltip) return;
-
-  tooltip.classList.remove("is-visible");
-  tooltip.setAttribute("aria-hidden", "true");
-  const side = tooltip.dataset.side || "left";
-  tooltip.style.transform = side === "right"
-    ? "translate(calc(-100% + 10px), -50%) scale(0.95)"
-    : "translate(-10px, -50%) scale(0.95)";
+function getRailHeight(nodeCount: number, dotGap: number): number {
+  return (nodeCount - 1) * dotGap + TRACK_VERTICAL_PADDING * 2 + TRACK_CAP_RADIUS * 2;
 }
 
-function getOrCreateNodeTooltip(): HTMLElement {
-  const existing = document.getElementById(NODE_TOOLTIP_ID);
-  if (existing) return existing;
-
-  const tooltip = document.createElement("div");
-  tooltip.id = NODE_TOOLTIP_ID;
-  tooltip.className = NODE_TOOLTIP_CLASS;
-  tooltip.setAttribute("role", "tooltip");
-  tooltip.setAttribute("aria-hidden", "true");
-  document.body.appendChild(tooltip);
-  return tooltip;
+function getNodeCenterTop(nodeCount: number, index: number, dotGap: number, containerHeight: number): number {
+  return nodeCount === 1
+    ? Math.round(containerHeight / 2)
+    : TRACK_VERTICAL_PADDING + TRACK_CAP_RADIUS + index * dotGap;
 }
 
-function getNodeTooltipHtml(node: ConversationNode): string {
-  const imagePreview = getChatGPTImagePreviewModel(node);
-  if (imagePreview) {
-    const text = imagePreview.text
-      ? `<div class="ai-chat-helper-node-tooltip__text">${escapeHtml(truncateNodeTooltipText(imagePreview.text))}</div>`
-      : "";
-    return `<div class="ai-chat-helper-node-tooltip__media"><img src="${escapeHtml(imagePreview.url)}" alt="${escapeHtml(imagePreview.alt)}" loading="lazy"></div>${text}`;
+function scrollActiveNodeIntoRailViewport(
+  container: HTMLElement,
+  nodes: ConversationNode[],
+  dotGap: number,
+  activeNodeId: string | undefined,
+  viewportHeight: number
+): void {
+  const activeIndex = activeNodeId ? nodes.findIndex((node) => node.id === activeNodeId) : -1;
+  if (activeIndex < 0 || nodes.length <= 1) return;
+
+  const fullHeight = getRailHeight(nodes.length, dotGap);
+  if (fullHeight <= viewportHeight) {
+    container.scrollTop = 0;
+    return;
   }
 
-  const rawText = String(node.text || node.title || "").trim();
-  if (!rawText) return "";
-  return `<div class="ai-chat-helper-node-tooltip__text">${escapeHtml(truncateNodeTooltipText(rawText))}</div>`;
+  const activeTop = getNodeCenterTop(nodes.length, activeIndex, dotGap, fullHeight);
+  const targetScrollTop = activeTop - viewportHeight / 2;
+  container.scrollTop = Math.max(0, Math.min(fullHeight - viewportHeight, Math.round(targetScrollTop)));
 }
 
-function truncateNodeTooltipText(value: string): string {
-  const text = String(value || "").trim();
-  return text.length > NODE_TOOLTIP_MAX_LENGTH
-    ? `${text.slice(0, NODE_TOOLTIP_MAX_LENGTH)}...`
-    : text;
-}
-
-function keepTooltipInViewport(tooltip: HTMLElement): void {
-  const winHeight = window.innerHeight || document.documentElement.clientHeight || 0;
-  if (!winHeight) return;
-
-  const rect = tooltip.getBoundingClientRect();
-  if (rect.bottom > winHeight - 10) {
-    tooltip.style.top = `${winHeight - rect.height - 10 + rect.height / 2}px`;
-  }
-  if (rect.top < 10) {
-    tooltip.style.top = `${10 + rect.height / 2}px`;
-  }
-}

@@ -163,7 +163,7 @@
   top: 16px;
   bottom: 16px;
   left: 50%;
-  width: 26px;
+  width: 30px;
   border-radius: 999px;
   background: var(--ai-chat-helper-rail);
   transform: translateX(-50%);
@@ -1353,6 +1353,58 @@ body.ai-chat-helper-hide-qwen-ads [class*="container-3D4Pp"] {
 .ai-chat-helper-export-modal__message-text .math-display,
 .ai-chat-helper-export-modal__full-preview-body .math-display {
   overflow-x: auto;
+}
+
+.ai-chat-helper-export-modal__message-text .math-rendered,
+.ai-chat-helper-export-modal__full-preview-body .math-rendered {
+  font-family: Cambria, "Times New Roman", Times, serif;
+  color: #172033;
+}
+
+.ai-chat-helper-export-modal__message-text .math-display.math-rendered,
+.ai-chat-helper-export-modal__full-preview-body .math-display.math-rendered {
+  display: block;
+  padding: 4px 0;
+  line-height: 1.8;
+}
+
+.ai-chat-helper-export-modal__message-text .math-inline.math-rendered,
+.ai-chat-helper-export-modal__full-preview-body .math-inline.math-rendered {
+  display: inline-flex;
+  align-items: center;
+  gap: .12em;
+  line-height: 1.35;
+  vertical-align: middle;
+}
+
+.ai-chat-helper-export-modal__message-text .math-frac,
+.ai-chat-helper-export-modal__full-preview-body .math-frac {
+  display: inline-grid;
+  grid-template-rows: auto auto;
+  align-items: center;
+  text-align: center;
+  line-height: 1.15;
+  margin: 0 .15em;
+  vertical-align: middle;
+}
+
+.ai-chat-helper-export-modal__message-text .math-frac__num,
+.ai-chat-helper-export-modal__full-preview-body .math-frac__num {
+  border-bottom: 1px solid currentColor;
+  padding: 0 .2em .08em;
+}
+
+.ai-chat-helper-export-modal__message-text .math-frac__den,
+.ai-chat-helper-export-modal__full-preview-body .math-frac__den {
+  padding: .08em .2em 0;
+}
+
+.ai-chat-helper-export-modal__message-text .math-rendered sup,
+.ai-chat-helper-export-modal__message-text .math-rendered sub,
+.ai-chat-helper-export-modal__full-preview-body .math-rendered sup,
+.ai-chat-helper-export-modal__full-preview-body .math-rendered sub {
+  font-size: .72em;
+  line-height: 0;
 }
 
 .ai-chat-helper-export-modal__message-media {

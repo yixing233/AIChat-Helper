@@ -542,7 +542,7 @@ function extractMessageAttachments(msg: ChatGPTMessage, messageId: string, role:
     });
   });
 
-  collectImagePartAttachments(msg.content, messageId, attachments);
+  collectImagePartAttachments(msg.content, messageId, attachments, 0, msg, role);
   return hydrateChatGPTImageAttachmentsFromDom(uniqueAttachments(attachments), messageId, role);
 }
 
@@ -554,26 +554,40 @@ function isRawChatGPTImageAttachment(attachment: ChatGPTMetadataAttachment): boo
   );
 }
 
-function collectImagePartAttachments(value: unknown, messageId: string, out: ExportAttachment[], depth = 0): void {
+function collectImagePartAttachments(
+  value: unknown,
+  messageId: string,
+  out: ExportAttachment[],
+  depth = 0,
+  msg?: ChatGPTMessage,
+  role?: ConversationMessage["role"]
+): void {
   if (value == null || depth > 6) return;
   if (Array.isArray(value)) {
-    value.forEach((item) => collectImagePartAttachments(item, messageId, out, depth + 1));
+    value.forEach((item) => collectImagePartAttachments(item, messageId, out, depth + 1, msg, role));
     return;
   }
   if (typeof value !== "object") return;
 
   const obj = value as Record<string, unknown>;
-  const attachment = imagePartToAttachment(obj, messageId, out.length + 1);
+  const attachment = imagePartToAttachment(obj, messageId, out.length + 1, msg, role);
   if (attachment) out.push(attachment);
 
   ["parts", "items", "content", "output", "result", "children", "data"].forEach((key) => {
-    collectImagePartAttachments(obj[key], messageId, out, depth + 1);
+    collectImagePartAttachments(obj[key], messageId, out, depth + 1, msg, role);
   });
 }
 
-function imagePartToAttachment(part: Record<string, unknown>, messageId: string, index: number): ExportAttachment | null {
+function imagePartToAttachment(
+  part: Record<string, unknown>,
+  messageId: string,
+  index: number,
+  msg?: ChatGPTMessage,
+  role?: ConversationMessage["role"]
+): ExportAttachment | null {
   const type = String(part.content_type || part.type || "").trim().toLowerCase();
   if (type !== "image_asset_pointer" && type !== "image") return null;
+  if (role === "user" && hasMessageMetadataAttachments(msg)) return null;
 
   const metadata = part.metadata && typeof part.metadata === "object"
     ? part.metadata as Record<string, unknown>
@@ -592,6 +606,7 @@ function imagePartToAttachment(part: Record<string, unknown>, messageId: string,
   const fileName = String(
     metadata.image_gen_title
     || metadata.title
+    || msg?.metadata?.image_gen_title
     || part.name
     || part.file_name
     || part.filename
@@ -605,6 +620,10 @@ function imagePartToAttachment(part: Record<string, unknown>, messageId: string,
     mimeType,
     url: url || undefined
   };
+}
+
+function hasMessageMetadataAttachments(msg: ChatGPTMessage | undefined): boolean {
+  return Array.isArray(msg?.metadata?.attachments) && msg!.metadata!.attachments!.length > 0;
 }
 
 function normalizeChatGPTImageUrl(value: unknown): string {

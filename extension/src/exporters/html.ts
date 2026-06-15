@@ -60,12 +60,10 @@ export const htmlExporter: Exporter = {
       ? `<div class="page"><div class="header"><div class="title">附件</div><div class="platform">${escapeHtml(assistantName)}</div><div class="ver">AI Chat Helper Exporter v1.0.0</div></div><div class="msg assistant"><div class="role-badge">附件</div><div class="text"><ul>${snapshot.attachments.map(formatAttachmentHtml).join("")}</ul></div></div></div>`
       : "";
     const content = [pages, globalAttachments].filter(Boolean).join("\n") || `<div class="page"><div class="header"><div class="title">第 1 轮对话</div><div class="platform">${escapeHtml(assistantName)}</div><div class="ver">AI Chat Helper Exporter v1.0.0</div></div><div class="footer">Exported via AI-Chat-Helper - ${escapeHtml(new Date().toLocaleString())}</div></div>`;
-    const mathScripts = `<script>window.MathJax={tex:{inlineMath:[["\\\\(","\\\\)"],["$","$"]],displayMath:[["\\\\[","\\\\]"],["$$","$$"]]},options:{skipHtmlTags:["script","noscript","style","textarea","pre","code"]}};</script><script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>`;
-
     return [{
       path: `${safeFileName(snapshot.title)}.html`,
       mimeType: "text/html;charset=utf-8",
-      content: `<html><head><meta charset="utf-8"><title>对话记录导出 - ${escapeHtml(assistantName)}</title><style>${printableExportCss()}</style></head><body>${content}${mathScripts}</body></html>`
+      content: `<html><head><meta charset="utf-8"><title>对话记录导出 - ${escapeHtml(assistantName)}</title><style>${printableExportCss()}</style></head><body>${content}</body></html>`
     }];
   }
 };
@@ -184,6 +182,13 @@ function printableExportCss(): string {
     .text a { color: #1d4ed8; text-decoration: underline; }
     .math-inline { white-space: normal; max-width: 100%; }
     .math-display { margin: 8px 0; padding: 0; background: transparent; border-left: none; overflow-x: auto; text-align: left; }
+    .math-rendered { font-family: Cambria, "Times New Roman", Times, serif; color: #172033; }
+    .math-display.math-rendered { display: block; padding: 4px 0; line-height: 1.8; }
+    .math-inline.math-rendered { display: inline-flex; align-items: center; gap: .12em; line-height: 1.35; vertical-align: middle; }
+    .math-frac { display: inline-grid; grid-template-rows: auto auto; align-items: center; text-align: center; line-height: 1.15; margin: 0 .15em; vertical-align: middle; }
+    .math-frac__num { border-bottom: 1px solid currentColor; padding: 0 .2em .08em; }
+    .math-frac__den { padding: .08em .2em 0; }
+    .math-rendered sup, .math-rendered sub { font-size: .72em; line-height: 0; }
     table, .pdf-table { border-collapse: collapse; width: 100%; max-width: 100%; border: 1px solid #e2e8f0; font-size: 13px; table-layout: fixed; }
     th, td { border: 1px solid #e2e8f0; padding: 9px 10px; text-align: left; vertical-align: top; white-space: normal; word-break: break-word; overflow-wrap: anywhere; line-height: 1.55; }
     th { background: #f8fafc; font-weight: 700; }
@@ -260,17 +265,133 @@ function tokenizeMath(text: string, tokens: Array<{ key: string; html: string; b
 
   return String(text || "")
     .replace(/\$\$([\s\S]+?)\$\$/g, (_, expression: string) => {
-      return addToken(`<div class="math-display">\\[${escapeHtml(expression.trim())}\\]</div>`, true);
+      return addToken(renderMathHtml(expression, true), true);
     })
     .replace(/\\\[([\s\S]+?)\\\]/g, (_, expression: string) => {
-      return addToken(`<div class="math-display">\\[${escapeHtml(expression.trim())}\\]</div>`, true);
+      return addToken(renderMathHtml(expression, true), true);
     })
     .replace(/\\\(([\s\S]+?)\\\)/g, (_, expression: string) => {
-      return addToken(`<span class="math-inline">\\(${escapeHtml(expression.trim())}\\)</span>`, false);
+      return addToken(renderMathHtml(expression, false), false);
     })
     .replace(/\$([^$\n]+)\$/g, (_, expression: string) => {
-      return addToken(`<span class="math-inline">\\(${escapeHtml(expression.trim())}\\)</span>`, false);
+      return addToken(renderMathHtml(expression, false), false);
     });
+}
+
+function renderMathHtml(expression: string, block: boolean): string {
+  const latex = String(expression || "").trim();
+  const html = renderLatexHtml(latex);
+  const tag = block ? "div" : "span";
+  const className = block ? "math-display math-rendered" : "math-inline math-rendered";
+  return `<${tag} class="${className}" data-latex="${escapeHtml(latex)}">${html}</${tag}>`;
+}
+
+function renderLatexHtml(expression: string): string {
+  const readGroup = (source: string, start: number): { value: string; end: number } | null => {
+    if (source[start] !== "{") return null;
+    let depth = 0;
+    for (let cursor = start; cursor < source.length; cursor += 1) {
+      const char = source[cursor];
+      if (char === "{" && source[cursor - 1] !== "\\") depth += 1;
+      if (char === "}" && source[cursor - 1] !== "\\") {
+        depth -= 1;
+        if (depth === 0) return { value: source.slice(start + 1, cursor), end: cursor + 1 };
+      }
+    }
+    return null;
+  };
+
+  const readScript = (source: string, start: number): { value: string; end: number } => {
+    const group = readGroup(source, start);
+    if (group) return group;
+    return { value: source[start] || "", end: Math.min(start + 1, source.length) };
+  };
+
+  const renderPart = (source: string): string => {
+    let out = "";
+    let cursor = 0;
+    while (cursor < source.length) {
+      const char = source[cursor];
+      if (char === "\\" && source.startsWith("\\frac", cursor)) {
+        const numerator = readGroup(source, cursor + 5);
+        const denominator = numerator ? readGroup(source, numerator.end) : null;
+        if (numerator && denominator) {
+          out += `<span class="math-frac"><span class="math-frac__num">${renderPart(numerator.value)}</span><span class="math-frac__den">${renderPart(denominator.value)}</span></span>`;
+          cursor = denominator.end;
+          continue;
+        }
+      }
+      if (char === "^" || char === "_") {
+        const script = readScript(source, cursor + 1);
+        const tag = char === "^" ? "sup" : "sub";
+        out += `<${tag}>${renderPart(script.value)}</${tag}>`;
+        cursor = script.end;
+        continue;
+      }
+      if (char === "\\") {
+        const command = source.slice(cursor + 1).match(/^[a-zA-Z]+/);
+        if (command) {
+          out += renderLatexCommand(command[0]);
+          cursor += command[0].length + 1;
+          continue;
+        }
+        out += escapeHtml(source[cursor + 1] || "");
+        cursor += 2;
+        continue;
+      }
+      if (char === "{" || char === "}") {
+        cursor += 1;
+        continue;
+      }
+      out += escapeHtml(char);
+      cursor += 1;
+    }
+    return out.replace(/\s+/g, " ");
+  };
+
+  return renderPart(expression);
+}
+
+function renderLatexCommand(command: string): string {
+  const symbols: Record<string, string> = {
+    alpha: "&alpha;",
+    beta: "&beta;",
+    gamma: "&gamma;",
+    delta: "&delta;",
+    Delta: "&Delta;",
+    epsilon: "&epsilon;",
+    theta: "&theta;",
+    lambda: "&lambda;",
+    mu: "&mu;",
+    pi: "&pi;",
+    rho: "&rho;",
+    sigma: "&sigma;",
+    Sigma: "&Sigma;",
+    phi: "&phi;",
+    omega: "&omega;",
+    Omega: "&Omega;",
+    times: "&times;",
+    cdot: "&middot;",
+    div: "&divide;",
+    pm: "&plusmn;",
+    le: "&le;",
+    leq: "&le;",
+    ge: "&ge;",
+    geq: "&ge;",
+    neq: "&ne;",
+    approx: "&asymp;",
+    propto: "&prop;",
+    infty: "&infin;",
+    sum: "&sum;",
+    int: "&int;",
+    sqrt: "&radic;",
+    sin: "sin",
+    cos: "cos",
+    tan: "tan",
+    log: "log",
+    ln: "ln"
+  };
+  return symbols[command] || escapeHtml(command);
 }
 
 function normalizeNonChatGPTMarkdownForHtml(text: string): string {

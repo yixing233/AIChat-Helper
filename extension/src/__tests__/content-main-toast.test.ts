@@ -15,6 +15,7 @@ describe("content main toast feedback", () => {
     expect(mainSource).toContain('showToast("正在准备立即备份"');
     expect(mainSource).toContain('showToast("正在备份当前对话"');
     expect(mainSource).toContain('showToast("自动备份中，请勿退出当前页面，图片缓存完成后会自动保存。"');
+    expect(mainSource).toContain("saveLastAutoBackupAt(");
     expect(mainSource).toContain('showToast(`自动备份已检查：${result.record.title} 内容未变化`');
     expect(mainSource).toContain('showToast(`正在备份 ${index + 1}/${total}');
     expect(mainSource).toContain('backup-current-now');

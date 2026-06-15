@@ -41,4 +41,10 @@ describe("createExtensionStorage", () => {
     await storage.remove("reading-line");
     await expect(storage.get("reading-line", "0")).resolves.toBe("0");
   });
+
+  it("stores and reads scoped auto-backup timestamps", async () => {
+    const storage = createExtensionStorage("backup-status");
+    await storage.set("chatgpt:test:last-auto-backup-at", "2026-06-11T08:20:30.000Z");
+    await expect(storage.get("chatgpt:test:last-auto-backup-at", null)).resolves.toBe("2026-06-11T08:20:30.000Z");
+  });
 });

@@ -4,7 +4,13 @@ export const INJECTED_MESSAGE_SOURCE = "ai-chat-helper:injected";
 export const CONTENT_COMMAND_MESSAGE_TYPE = "ai-chat-helper:content-command";
 export const IMMEDIATE_BACKUP_PROGRESS_MESSAGE_TYPE = "ai-chat-helper:backup-progress";
 
-export type ContentCommand = "export-current" | "export-batch" | "check-update" | "backup-current-now" | "backup-platform-now";
+export type ContentCommand =
+  | "export-current"
+  | "export-batch"
+  | "check-update"
+  | "backup-current-now"
+  | "backup-platform-now"
+  | "bootstrap-auto-backup";
 
 export interface ContentCommandRequest {
   type: typeof CONTENT_COMMAND_MESSAGE_TYPE;

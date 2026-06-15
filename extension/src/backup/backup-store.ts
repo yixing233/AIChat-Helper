@@ -52,6 +52,7 @@ export interface BuildBackupRecordOptions {
 }
 
 export interface BackupAssetStatus {
+  totalImages: number;
   cachedImages: number;
   failedImages: number;
 }
@@ -246,9 +247,11 @@ async function buildPreviewSnapshot(
   const failedUrls = new Set<string>();
   const cachedImageKeys = new Set<string>();
   const failedImageKeys = new Set<string>();
+  const totalImageKeys = new Set<string>();
 
   const inlineAttachment = (attachment: ExportAttachment, ownerId: string): ExportAttachment => {
     if (!isImageAttachment(attachment)) return { ...attachment };
+    totalImageKeys.add(getTotalImageKey(attachment, ownerId));
     if (isDataUrl(attachment.url)) return { ...attachment };
 
     if (typeof attachment.content === "string" && attachment.content.length > 0) {
@@ -263,6 +266,19 @@ async function buildPreviewSnapshot(
   };
 
   previewSnapshot.attachments = previewSnapshot.attachments.map((attachment) => inlineAttachment(attachment, "global"));
+  const remoteGlobalAttachments = previewSnapshot.attachments.filter((attachment) => {
+    return isImageAttachment(attachment) && isHttpUrl(attachment.url || "") && !isDataUrl(attachment.url);
+  });
+  for (const attachment of remoteGlobalAttachments) {
+    const url = attachment.url || "";
+    const dataUrl = await resolveRemoteImageDataUrl(url, attachment, fetchImage, urlMap, failedUrls);
+    if (dataUrl) {
+      attachment.url = dataUrl;
+      cachedImageKeys.add(`url:${url}`);
+    } else if (failedUrls.has(url)) {
+      failedImageKeys.add(`url:${url}`);
+    }
+  }
 
   for (const message of previewSnapshot.messages) {
     if (message.attachments?.length) {
@@ -285,6 +301,7 @@ async function buildPreviewSnapshot(
 
     const textUrls = collectImageUrlsFromText(message.text);
     for (const url of textUrls) {
+      totalImageKeys.add(`url:${url}`);
       const dataUrl = await resolveRemoteImageDataUrl(url, undefined, fetchImage, urlMap, failedUrls);
       if (dataUrl) {
         cachedImageKeys.add(`url:${url}`);
@@ -298,6 +315,7 @@ async function buildPreviewSnapshot(
   return {
     snapshot: previewSnapshot,
     assetStatus: {
+      totalImages: totalImageKeys.size,
       cachedImages: cachedImageKeys.size,
       failedImages: failedImageKeys.size
     }
@@ -312,6 +330,11 @@ function getPreviewImageKey(kind: string, attachment: ExportAttachment, ownerId:
     attachment.fileName || "",
     attachment.url || ""
   ].join("\u0000");
+}
+
+function getTotalImageKey(attachment: ExportAttachment, ownerId: string): string {
+  if (attachment.url) return `url:${attachment.url}`;
+  return getPreviewImageKey("attachment", attachment, ownerId);
 }
 
 async function resolveRemoteImageDataUrl(
@@ -465,10 +488,6 @@ function createSnapshotDigest(snapshot: ConversationSnapshot): string {
     platformId: snapshot.platformId,
     conversationId: snapshot.conversationId,
     title: snapshot.title,
-    updatedAt: snapshot.updatedAt,
-    updatedAtText: snapshot.updatedAtText,
-    createdAt: snapshot.createdAt,
-    createdAtText: snapshot.createdAtText,
     messages: snapshot.messages.map((message) => ({
       id: message.id,
       role: message.role,
@@ -517,8 +536,9 @@ function isSameBackupRevision(left: ConversationBackupRecord, right: Conversatio
 }
 
 function shouldUpgradeBackupRevision(existing: ConversationBackupRecord, candidate: ConversationBackupRecord): boolean {
-  const existingStatus = existing.assetStatus || { cachedImages: 0, failedImages: 0 };
-  const candidateStatus = candidate.assetStatus || { cachedImages: 0, failedImages: 0 };
+  const existingStatus = existing.assetStatus || { totalImages: 0, cachedImages: 0, failedImages: 0 };
+  const candidateStatus = candidate.assetStatus || { totalImages: 0, cachedImages: 0, failedImages: 0 };
+  if (candidateStatus.totalImages > existingStatus.totalImages) return true;
   if (candidateStatus.cachedImages > existingStatus.cachedImages) return true;
   if (
     candidateStatus.cachedImages === existingStatus.cachedImages

@@ -1,4 +1,5 @@
 import type { PlatformId } from "../../shared/types";
+import { bindTextTooltipHandlers } from "../controls/node-tooltip";
 import { applyPanelPosition, type PanelPosition } from "./drag";
 
 export interface PanelOptions {
@@ -31,13 +32,14 @@ export function createPanel(options: PanelOptions): HTMLElement {
   root.id = "ai-chat-helper-panel";
   root.className = "ai-chat-helper-nav-wrapper";
   root.innerHTML = `
-    <div class="ai-chat-helper-orbital" title="拖动导航" data-ai-chat-helper-orbital data-ai-chat-helper-drag-handle>
+    <div class="ai-chat-helper-orbital" aria-label="拖动导航" data-ai-chat-helper-orbital data-ai-chat-helper-drag-handle>
       <div class="ai-chat-helper-panel__nodes ai-chat-helper-orbital__nodes" data-ai-chat-helper-nodes></div>
     </div>
     <div class="ai-chat-helper-panel__button-host">
-      <button type="button" class="ai-chat-helper-round-button ai-chat-helper-panel__action--refresh" title="重新获取节点" aria-label="重新获取节点" data-ai-chat-helper-refresh>${refreshIcon}</button>
+      <button type="button" class="ai-chat-helper-round-button ai-chat-helper-panel__action--refresh" aria-label="重新获取节点" data-ai-chat-helper-tooltip="重新获取节点" data-ai-chat-helper-refresh>${refreshIcon}</button>
     </div>
   `;
+  bindTextTooltipHandlers(root);
   if (options.panelPosition) {
     applyPanelPosition(root, options.panelPosition);
   }

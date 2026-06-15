@@ -226,6 +226,97 @@ describe("content main node auto refresh", () => {
     expect(renderedNodeTitles()).toEqual(["First API ChatGPT prompt", "Second API ChatGPT prompt"]);
   });
 
+  it("shows ChatGPT user image previews in page rail hover cards from snapshot attachments", async () => {
+    mocks.platformId = "chatgpt";
+    const userMessage = document.createElement("article");
+    userMessage.dataset.chatNode = "visible-dom";
+    userMessage.setAttribute("data-message-id", "gpt-user-image-1");
+    userMessage.setAttribute("data-message-author-role", "user");
+    userMessage.innerHTML = `
+      <p>请参考这张图</p>
+      <img src="https://chatgpt.com/backend-api/files/file_0000000042807209aa225073e266cd45/download?sig=test" alt="上传图片">
+    `;
+    document.body.appendChild(userMessage);
+    mocks.fetchConversationDetail.mockResolvedValue({
+      platformId: "chatgpt",
+      conversationId: "current",
+      title: "ChatGPT image conversation",
+      attachments: [],
+      messages: [
+        {
+          id: "api-user-image-1",
+          sourceMessageId: "gpt-user-image-1",
+          role: "user",
+          text: "请参考这张图\n\n[附件1: photo.png]",
+          attachments: [{
+            id: "file_0000000042807209aa225073e266cd45",
+            fileName: "file_0000000042807209aa225073e266cd45",
+            mimeType: "image/png",
+            url: undefined
+          }]
+        }
+      ]
+    });
+
+    await import("../content/main");
+    await flushMount();
+
+    const button = document.querySelector<HTMLButtonElement>("#ai-chat-helper-panel .ai-chat-helper-node-dot");
+    expect(button?.getAttribute("aria-label")).toBe("请参考这张图 [附件1: photo.png]");
+    expect(button?.getAttribute("title")).toBeNull();
+
+    button?.dispatchEvent(new MouseEvent("mouseenter", { bubbles: true }));
+
+    const tooltip = document.querySelector<HTMLElement>(".ai-chat-helper-node-tooltip");
+    expect(tooltip?.innerHTML).toContain('<img src="https://chatgpt.com/backend-api/files/file_0000000042807209aa225073e266cd45/download?sig=test"');
+    expect(tooltip?.textContent).toContain("请参考这张图");
+    expect(tooltip?.textContent).not.toContain("[附件1: photo.png]");
+  });
+
+  it("keeps image-only ChatGPT user messages in the page rail and shows their preview card", async () => {
+    mocks.platformId = "chatgpt";
+    const userMessage = document.createElement("article");
+    userMessage.dataset.chatNode = "visible-dom-image";
+    userMessage.dataset.messageId = "gpt-user-image-only";
+    userMessage.setAttribute("data-message-id", "gpt-user-image-only");
+    userMessage.setAttribute("data-message-author-role", "user");
+    userMessage.innerHTML = '<img src="https://assets.example.com/only-image.png" alt="only image">';
+    document.body.appendChild(userMessage);
+
+    mocks.fetchConversationDetail.mockResolvedValue({
+      platformId: "chatgpt",
+      conversationId: "current",
+      title: "ChatGPT image-only conversation",
+      attachments: [],
+      messages: [
+        {
+          id: "api-user-image-only",
+          sourceMessageId: "gpt-user-image-only",
+          role: "user",
+          text: "",
+          attachments: [{
+            id: "only-image",
+            fileName: "only-image.png",
+            mimeType: "image/png",
+            url: "https://assets.example.com/only-image.png"
+          }]
+        }
+      ]
+    });
+
+    await import("../content/main");
+    await flushMount();
+
+    const button = document.querySelector<HTMLButtonElement>("#ai-chat-helper-panel .ai-chat-helper-node-dot");
+    expect(button).toBeTruthy();
+    expect(button?.getAttribute("title")).toBeNull();
+
+    button?.dispatchEvent(new MouseEvent("mouseenter", { bubbles: true }));
+
+    const tooltip = document.querySelector<HTMLElement>(".ai-chat-helper-node-tooltip");
+    expect(tooltip?.innerHTML).toContain('<img src="https://assets.example.com/only-image.png"');
+  });
+
   it("ignores stale captured virtual nodes from a previous conversation", async () => {
     mocks.platformId = "qwen";
     mocks.conversationId = "session-current";
@@ -447,11 +538,11 @@ async function flushMount(): Promise<void> {
 
 function renderedNodeTitles(): string[] {
   return Array.from(document.querySelectorAll<HTMLButtonElement>("#ai-chat-helper-panel .ai-chat-helper-node-dot"))
-    .map((button) => button.title);
+    .map((button) => button.getAttribute("aria-label") || "");
 }
 
 function activeNodeTitle(): string {
-  return document.querySelector<HTMLButtonElement>("#ai-chat-helper-panel .ai-chat-helper-node--active")?.title || "";
+  return document.querySelector<HTMLButtonElement>("#ai-chat-helper-panel .ai-chat-helper-node--active")?.getAttribute("aria-label") || "";
 }
 
 function setElementTop(element: HTMLElement, top: number): void {
