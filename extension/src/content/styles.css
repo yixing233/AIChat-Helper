@@ -948,7 +948,7 @@ body.ai-chat-helper-hide-qwen-ads [class*="container-3D4Pp"] {
 
 .ai-chat-helper-export-modal__box--batch {
   width: min(980px, 94vw);
-  height: min(82vh, 860px);
+  height: auto;
   max-height: calc(100vh - 48px);
   border-radius: 16px;
   box-shadow: 0 20px 60px rgb(0 0 0 / 25%);
@@ -1496,7 +1496,7 @@ body.ai-chat-helper-hide-qwen-ads [class*="container-3D4Pp"] {
 .ai-chat-helper-export-modal__batch-list {
   display: grid;
   gap: 0;
-  max-height: 520px;
+  max-height: min(60vh, 600px);
   overflow: auto;
   border: 1px solid #e5e7eb;
   border-radius: 10px;
