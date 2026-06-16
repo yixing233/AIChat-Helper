@@ -1257,4 +1257,20 @@ describe("backup library page", () => {
     const finalButton = root.querySelector<HTMLButtonElement>("[data-ai-chat-helper-backup-refresh]");
     expect(finalButton?.disabled).toBe(false);
   });
+
+  it("renders empty state with details panel folder open icon", () => {
+    const root = createBackupLibraryPopup([]);
+    expect(root.querySelector(".ai-chat-helper-backup-workbench__empty-icon-wrap")).toBeTruthy();
+    expect(root.querySelector(".ai-chat-helper-backup-workbench__empty-icon-wrap .fa-folder-open")).toBeTruthy();
+  });
+
+  it("renders copy actions for conversation and messages", () => {
+    const chatgpt = buildConversationBackupRecord(chatgptSnapshot, "zip", [file], {
+      createdAt: "2026-06-09T10:00:00.000Z",
+      source: "auto"
+    });
+    const root = createBackupLibraryPopup([chatgpt]);
+    expect(root.querySelector("[data-ai-chat-helper-backup-copy-conversation]")).toBeTruthy();
+    expect(root.querySelector("[data-ai-chat-helper-backup-copy-message]")).toBeTruthy();
+  });
 });

@@ -96,7 +96,11 @@ export function bindBackupLibraryPopup(root: HTMLElement, records: ConversationB
   const render = () => {
     hideNodeTooltip();
     root.innerHTML = renderBackupWorkbench(localRecords, state, options);
+    initCodeBlockCopyButtons(root);
   };
+  
+  // Initialize code block copy buttons
+  initCodeBlockCopyButtons(root);
 
   let isRefreshing = false;
   const runRefreshAction = async () => {
@@ -168,6 +172,60 @@ export function bindBackupLibraryPopup(root: HTMLElement, records: ConversationB
   root.addEventListener("click", (event) => {
     const target = event.target;
     if (!(target instanceof Element)) return;
+
+    const copyConversationButton = target.closest<HTMLButtonElement>("[data-ai-chat-helper-backup-copy-conversation]");
+    if (copyConversationButton) {
+      const entry = getCurrentSelectedEntry(localRecords, state);
+      const record = getSelectedVersion(entry, state.selectedVersionId);
+      if (record) {
+        const previewSnapshot = record.previewSnapshot || record.snapshot;
+        const text = previewSnapshot.messages.map((message) => {
+          const roleLabel = message.role === "user" ? "用户" : "助理";
+          return `${roleLabel}:\n${message.text || ""}\n`;
+        }).join("\n");
+        void copyToClipboard(text).then((success) => {
+          if (success) {
+            const icon = copyConversationButton.querySelector("i");
+            if (icon) {
+              icon.className = "fas fa-check";
+              icon.style.color = "#22c55e";
+              copyConversationButton.setAttribute("data-ai-chat-helper-tooltip", "已复制!");
+              window.setTimeout(() => {
+                icon.className = "far fa-copy";
+                icon.style.color = "";
+                copyConversationButton.setAttribute("data-ai-chat-helper-tooltip", "复制会话");
+              }, 2000);
+            }
+          }
+        });
+      }
+      return;
+    }
+
+    const copyMessageButton = target.closest<HTMLButtonElement>("[data-ai-chat-helper-backup-copy-message]");
+    if (copyMessageButton) {
+      const messageIndex = copyMessageButton.dataset.messageIndex || "";
+      const message = getBackupPreviewTooltipNode(localRecords, state, messageIndex);
+      if (message) {
+        const text = message.text || "";
+        void copyToClipboard(text).then((success) => {
+          if (success) {
+            const icon = copyMessageButton.querySelector("i");
+            if (icon) {
+              icon.className = "fas fa-check";
+              icon.style.color = "#22c55e";
+              copyMessageButton.setAttribute("data-ai-chat-helper-tooltip", "已复制!");
+              window.setTimeout(() => {
+                icon.className = "far fa-copy";
+                icon.style.color = "";
+                copyMessageButton.setAttribute("data-ai-chat-helper-tooltip", "复制消息");
+              }, 2000);
+            }
+          }
+        });
+      }
+      return;
+    }
 
     if (target.closest("[data-ai-chat-helper-backup-refresh]")) {
       void runRefreshAction();
@@ -649,6 +707,7 @@ function renderDetailPanel(
           <p>${escapeText(formatFullDate(record.createdAt))} · ${conversationTurnCount} 轮对话 · ${escapeText(formatBytes(estimateRecordSize(record)))}</p>
         </div>
         <div class="ai-chat-helper-backup-detail__actions">
+          <button type="button" aria-label="复制会话" data-ai-chat-helper-tooltip="复制会话" data-backup-id="${escapeText(record.id)}" data-ai-chat-helper-backup-copy-conversation><i class="far fa-copy" aria-hidden="true"></i></button>
           <button type="button" aria-label="版本管理" data-ai-chat-helper-tooltip="版本管理" data-ai-chat-helper-backup-version-manage>${renderVersionManageIcon()}</button>
           ${renderActionIconButton("下载备份", "data-ai-chat-helper-backup-download", record.id, downloadIcon, state.loadingDownloadId === record.id)}
           ${renderActionIconButton("删除备份", "data-ai-chat-helper-backup-delete", record.id, deleteIcon, state.loadingDeleteId === record.id)}
@@ -888,6 +947,9 @@ function renderPreviewMessage(message: ConversationMessage, index: number, platf
   const attachments = getPreviewAttachments(message, platformId);
   return `
     <article class="ai-chat-helper-backup-message ai-chat-helper-backup-message--${escapeText(message.role)}" data-ai-chat-helper-backup-message data-message-index="${index}">
+      <button type="button" class="ai-chat-helper-backup-message-copy" aria-label="复制消息" data-ai-chat-helper-tooltip="复制消息" data-message-index="${index}" data-ai-chat-helper-backup-copy-message>
+        <i class="far fa-copy" aria-hidden="true"></i>
+      </button>
       <div class="ai-chat-helper-backup-message__text">
         ${renderMessageText(message.text || "(空消息)", platformId)}
       </div>
@@ -1032,8 +1094,11 @@ function renderPlatformEmpty(platform: BackupPlatformFilter, showWorkbenchEmpty 
 function renderDetailEmptyState(): string {
   return `
     <div class="ai-chat-helper-backup-workbench__empty">
-      <h2>暂无备份</h2>
-      <p>开启自动备份后，当前对话会按平台保存到这里，并保留可预览的图片消息。</p>
+      <div class="ai-chat-helper-backup-workbench__empty-icon-wrap">
+        <i class="fas fa-folder-open fa-3x" aria-hidden="true"></i>
+      </div>
+      <h2>暂无备份会话</h2>
+      <p>开启自动备份后，当前对话会按平台保存到这里，并支持离线预览历史版本与图片信息。</p>
     </div>
   `;
 }
@@ -1510,4 +1575,56 @@ function escapeText(value: string | number): string {
 
 function escapeAttributeValue(value: string): string {
   return String(value).replace(/\\/g, "\\\\").replace(/"/g, "\\\"");
+}
+
+function copyToClipboard(text: string): Promise<boolean> {
+  return navigator.clipboard.writeText(text)
+    .then(() => true)
+    .catch(() => {
+      const textarea = document.createElement("textarea");
+      textarea.value = text;
+      textarea.style.position = "fixed";
+      textarea.style.opacity = "0";
+      document.body.appendChild(textarea);
+      textarea.select();
+      try {
+        document.execCommand("copy");
+        return true;
+      } catch {
+        return false;
+      } finally {
+        textarea.remove();
+      }
+    });
+}
+
+function initCodeBlockCopyButtons(container: HTMLElement): void {
+  const preBlocks = container.querySelectorAll<HTMLPreElement>(".ai-chat-helper-backup-message__text pre");
+  preBlocks.forEach((pre) => {
+    if (pre.querySelector(".ai-chat-helper-backup-pre-copy")) return;
+
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "ai-chat-helper-backup-pre-copy";
+    button.setAttribute("aria-label", "复制代码");
+    button.setAttribute("data-ai-chat-helper-tooltip", "复制代码");
+    button.innerHTML = '<i class="far fa-copy" aria-hidden="true"></i>';
+
+    button.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const code = pre.querySelector("code")?.textContent || pre.textContent || "";
+      void copyToClipboard(code).then((success) => {
+        if (success) {
+          button.innerHTML = '<i class="fas fa-check" style="color: #22c55e;" aria-hidden="true"></i>';
+          button.setAttribute("data-ai-chat-helper-tooltip", "已复制!");
+          window.setTimeout(() => {
+            button.innerHTML = '<i class="far fa-copy" aria-hidden="true"></i>';
+            button.setAttribute("data-ai-chat-helper-tooltip", "复制代码");
+          }, 2000);
+        }
+      });
+    });
+
+    pre.appendChild(button);
+  });
 }
