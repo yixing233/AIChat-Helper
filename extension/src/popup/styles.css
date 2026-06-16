@@ -870,7 +870,8 @@ input {
 
 .ai-chat-helper-backup-workbench__records {
   min-height: 0;
-  overflow: auto;
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 
 .ai-chat-helper-backup-workbench__records::-webkit-scrollbar {
