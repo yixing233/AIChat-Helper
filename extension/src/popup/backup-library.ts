@@ -34,11 +34,6 @@ interface BackupLibraryState {
   isRefreshing?: boolean;
 }
 
-interface SearchFocusSnapshot {
-  selectionStart: number | null;
-  selectionEnd: number | null;
-}
-
 const platformOrder: PlatformId[] = ["chatgpt", "qwen", "doubao", "deepseek", "claude"];
 const platformIconPaths: Record<PlatformId, string> = {
   chatgpt: "icons/platforms/chatgpt.svg",
@@ -463,10 +458,12 @@ export function bindBackupLibraryPopup(root: HTMLElement, records: ConversationB
     const target = event.target;
     if (!(target instanceof HTMLInputElement)) return;
     if (!target.matches("[data-ai-chat-helper-backup-search]")) return;
-    const searchFocus = captureSearchFocus(target);
+
     state.searchQuery = target.value;
-    const filteredEntries = filterEntries(getConversationEntries(localRecords), state.platform, state.searchQuery);
-    const selectedEntry = getSelectedEntry(getConversationEntries(localRecords), filteredEntries, state.selectedEntryId);
+    const sortedRecords = sortBackupsNewestFirst(localRecords);
+    const entries = groupBackupRecordsByConversation(sortedRecords);
+    const filteredEntries = filterEntries(entries, state.platform, state.searchQuery);
+    const selectedEntry = getSelectedEntry(entries, filteredEntries, state.selectedEntryId);
     state.selectedEntryId = selectedEntry?.id || "";
     state.selectedVersionId = selectedEntry?.latest.id || "";
     state.versionManagerOpen = false;
@@ -474,8 +471,29 @@ export function bindBackupLibraryPopup(root: HTMLElement, records: ConversationB
     state.status = "";
     state.error = "";
     closeVersionDropdown(false);
-    render();
-    restoreSearchFocus(root, searchFocus);
+
+    const bodyEl = root.querySelector(".ai-chat-helper-backup-workbench__body");
+    if (bodyEl) {
+      bodyEl.innerHTML = `
+        ${renderPlatformNav(entries, state.platform, sortedRecords)}
+        <section class="ai-chat-helper-backup-workbench__list-panel" aria-label="备份列表">
+          <div class="ai-chat-helper-backup-workbench__panel-head">
+            <strong>${escapeText(getFilterTitle(state.platform))}</strong>
+            <span>${filteredEntries.length} 个会话</span>
+          </div>
+          <div class="ai-chat-helper-backup-workbench__records" data-ai-chat-helper-backup-list>
+            ${filteredEntries.length ? filteredEntries.map((entry) => renderRecordRow(
+              entry,
+              selectedEntry?.id === entry.id,
+              state.loadingDownloadId === entry.latest.id,
+              state.loadingDeleteId === entry.latest.id
+            )).join("") : renderPlatformEmpty(state.platform, sortedRecords.length === 0)}
+          </div>
+        </section>
+        ${renderDetailPanel(selectedEntry, selectedEntry ? getSelectedVersion(selectedEntry, state.selectedVersionId) : null, state, sortedRecords.length === 0)}
+      `;
+      initCodeBlockCopyButtons(root);
+    }
   });
 
   root.addEventListener("scroll", (event) => {
@@ -1448,21 +1466,6 @@ function getSearchableEntryText(entry: ConversationBackupEntry): string {
     entry.latest.platformName,
     messageText
   ].join("\n").toLowerCase();
-}
-
-function captureSearchFocus(input: HTMLInputElement): SearchFocusSnapshot {
-  return {
-    selectionStart: input.selectionStart,
-    selectionEnd: input.selectionEnd
-  };
-}
-
-function restoreSearchFocus(root: HTMLElement, snapshot: SearchFocusSnapshot): void {
-  const input = root.querySelector<HTMLInputElement>("[data-ai-chat-helper-backup-search]");
-  if (!input) return;
-  input.focus();
-  if (snapshot.selectionStart === null || snapshot.selectionEnd === null) return;
-  input.setSelectionRange(snapshot.selectionStart, snapshot.selectionEnd);
 }
 
 function sortBackupsNewestFirst(records: ConversationBackupRecord[]): ConversationBackupRecord[] {
