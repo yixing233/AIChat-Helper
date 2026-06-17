@@ -590,8 +590,32 @@ function buildBatchConversationPrintableHtml(snapshot: ConversationSnapshot): st
         .msg { border: 1px solid #e2e8f0; border-radius: 10px; padding: 10px 12px; margin: 10px 0; }
         .role { font-size: 12px; font-weight: 700; color: #1e40af; margin-bottom: 6px; }
         .text { font-size: 13px; line-height: 1.7; white-space: normal; word-break: break-word; }
-        .text pre { font-family: "Consolas", "Monaco", "Courier New", monospace; }
-        .text code { font-family: "Consolas", "Monaco", "Courier New", monospace; }
+        .text h1, .text h2, .text h3, .text h4, .text h5, .text h6 { margin: 16px 0 10px; color: #0f172a; line-height: 1.35; }
+        .text h1 { font-size: 20px; }
+        .text h2 { font-size: 18px; }
+        .text h3 { font-size: 16px; }
+        .text h4 { font-size: 15px; }
+        .text h5 { font-size: 14px; }
+        .text h6 { font-size: 13px; }
+        .text hr { border: none; border-top: 1px solid #cbd5e1; margin: 16px 0; }
+        .text a { color: #1d4ed8; text-decoration: underline; }
+        pre, .qk-markdown pre, .markdown-body pre, [class*="code-block"] pre { background: #1e1e1e !important; color: #d4d4d4 !important; padding: 12px 16px; border-radius: 8px; overflow-x: auto; font-family: "Consolas", "Monaco", "Courier New", monospace; margin: 12px 0; border: 1px solid #333; display: block; font-size: 12px; }
+        code { background: #f1f5f9; padding: 2px 5px; border-radius: 4px; font-family: "Consolas", "Monaco", "Courier New", monospace; color: #e11d48; font-size: 12px; }
+        pre code { background: none; padding: 0; color: inherit; font-size: inherit; }
+        .math-inline { white-space: normal; max-width: 100%; }
+        .math-display { margin: 8px 0; padding: 0; background: transparent; border-left: none; overflow-x: auto; text-align: left; }
+        .math-rendered { font-family: Cambria, "Times New Roman", Times, serif; color: #172033; }
+        .math-display.math-rendered { display: block; padding: 4px 0; line-height: 1.8; }
+        .math-inline.math-rendered { display: inline-flex; align-items: center; gap: .12em; line-height: 1.35; vertical-align: middle; }
+        .math-frac { display: inline-grid; grid-template-rows: auto auto; align-items: center; text-align: center; line-height: 1.15; margin: 0 .15em; vertical-align: middle; }
+        .math-frac__num { border-bottom: 1px solid currentColor; padding: 0 .2em .08em; }
+        .math-frac__den { padding: .08em .2em 0; }
+        .math-rendered sup, .math-rendered sub { font-size: .72em; line-height: 0; }
+        table, .pdf-table { border-collapse: collapse; width: 100%; max-width: 100%; border: 1px solid #e2e8f0; font-size: 12px; table-layout: fixed; margin: 12px 0; }
+        th, td { border: 1px solid #e2e8f0; padding: 8px 10px; text-align: left; vertical-align: top; white-space: normal; word-break: break-word; overflow-wrap: anywhere; line-height: 1.5; }
+        th { background: #f8fafc; font-weight: 700; }
+        ul, ol { padding-left: 20px; margin: 8px 0; }
+        p { margin: 8px 0; }
         img { max-width: 100%; height: auto; border-radius: 8px; }
         .m-preview-media img { max-width: 100%; max-height: 320px; width: auto; height: auto; object-fit: contain; }
         .claude-image-block { margin: 14px 0 18px; padding: 12px; border: 1px solid #dbeafe; border-radius: 12px; background: #f8fbff; }

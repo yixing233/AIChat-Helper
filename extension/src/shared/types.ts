@@ -148,5 +148,5 @@ export interface PlatformAdapter {
   getScrollContainer?(root?: ParentNode): HTMLElement | null;
   hydrateFromCapturedApi?(events: CapturedNetworkEvent[]): Promise<ConversationSnapshot>;
   fetchConversationList?(options: BatchListOptions): Promise<ConversationSummary[]>;
-  fetchConversationDetail?(id: string, summary?: ConversationSummary, capturedEvents?: CapturedNetworkEvent[]): Promise<ConversationSnapshot>;
+  fetchConversationDetail?(id: string, summary?: ConversationSummary, capturedEvents?: CapturedNetworkEvent[], options?: { mode?: string }): Promise<ConversationSnapshot>;
 }

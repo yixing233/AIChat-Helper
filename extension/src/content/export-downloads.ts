@@ -5,6 +5,11 @@ export type BackgroundSender = (request: BackgroundRequest) => Promise<Backgroun
 
 export async function downloadExportFiles(files: ExportFile[], send: BackgroundSender): Promise<void> {
   for (const file of files) {
+    if (shouldUseDirectBlobDownload(file)) {
+      downloadFileInPage(file);
+      continue;
+    }
+
     const request: BackgroundRequest = {
       type: "download-file",
       payload: {
@@ -37,6 +42,12 @@ export async function downloadExportFiles(files: ExportFile[], send: BackgroundS
 
 function serializeDownloadContent(content: ExportFile["content"]): string | number[] {
   return content instanceof Uint8Array ? Array.from(content) : content;
+}
+
+function shouldUseDirectBlobDownload(file: ExportFile): boolean {
+  if (file.content instanceof Uint8Array) return file.content.byteLength >= 60 * 1024 * 1024;
+  if (typeof file.content === "string") return file.content.length >= 60 * 1024 * 1024;
+  return false;
 }
 
 function downloadFileInPage(file: ExportFile): void {

@@ -1,0 +1,8 @@
+.playwright-mcp/
+.vscode/
+
+extension/dist/
+extension/node_modules/
+
+remote/
+test/

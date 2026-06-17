@@ -72,4 +72,19 @@ describe("downloadExportFiles", () => {
     await vi.runAllTimersAsync();
     expect(revokeObjectURL).toHaveBeenCalledWith("blob:ai-chat-helper-export");
   });
+
+  it("uses Blob downloads for large binary export files to avoid runtime message size limits", async () => {
+    const largeContent = "x".repeat(61 * 1024 * 1024);
+    const send = vi.fn(async (): Promise<BackgroundResponse> => ({ ok: true, value: { downloadId: 9 } }));
+    Object.defineProperty(URL, "createObjectURL", { configurable: true, value: vi.fn() });
+    Object.defineProperty(URL, "revokeObjectURL", { configurable: true, value: vi.fn() });
+    const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => undefined);
+    const createObjectURL = vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:ai-chat-helper-large-export");
+
+    await downloadExportFiles([{ path: "large.zip", mimeType: "application/zip", content: largeContent }], send);
+
+    expect(send).not.toHaveBeenCalled();
+    expect(createObjectURL).toHaveBeenCalledWith(expect.any(Blob));
+    expect(click).toHaveBeenCalledTimes(1);
+  });
 });

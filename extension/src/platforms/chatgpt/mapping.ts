@@ -489,10 +489,10 @@ function applyChatGPTMathReferences(text: string, msg: ChatGPTMessage): string {
   return output;
 }
 
-function collectChatGPTLatexReferences(msg: ChatGPTMessage): unknown[] {
-  const refs: unknown[] = [];
+function collectChatGPTLatexReferences(msg: ChatGPTMessage): any[] {
+  const refs: any[] = [];
   const seenIndexedRefs = new Map<string, number>();
-  const addRefs = (items: unknown[], replaceIndexedDuplicates: boolean) => {
+  const addRefs = (items: any[], replaceIndexedDuplicates: boolean) => {
     items.forEach((ref) => {
       if (!ref || typeof ref !== "object") {
         refs.push(ref);
