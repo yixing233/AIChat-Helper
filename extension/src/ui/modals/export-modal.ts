@@ -5,15 +5,28 @@ import type { BatchConversationSelection, ConversationSnapshot, ConversationSumm
 import { bindTextTooltipHandlers } from "../controls/node-tooltip";
 import { escapeHtml } from "../shared/escape-html";
 
-type ExportHandlerResult = void | Promise<void>;
-type CurrentExportHandler = (format: SnapshotExportFormat, selectedSnapshot: ConversationSnapshot) => ExportHandlerResult;
-type BatchExportHandler = (format: SnapshotExportFormat, selections: BatchConversationSelection[]) => ExportHandlerResult;
+export interface ExportLoadingState {
+  title: string;
+  detail: string;
+  progressPercent?: number;
+  currentLabel?: string;
+}
+
+export type ExportHandlerResult = void | Promise<void>;
+export type CurrentExportHandler = (format: SnapshotExportFormat, selectedSnapshot: ConversationSnapshot) => ExportHandlerResult;
+export type BatchExportHandler = (
+  format: SnapshotExportFormat,
+  selections: BatchConversationSelection[],
+  updateLoadingState?: (state: ExportLoadingState) => void
+) => ExportHandlerResult;
 type BatchPreviewLoader = (summary: ConversationSummary) => Promise<ConversationSnapshot>;
 
-interface BatchExportModalOptions {
+export interface BatchExportModalOptions {
   onExport?: BatchExportHandler;
   loadSnapshot?: BatchPreviewLoader;
   onPreviewError?: (summary: ConversationSummary, error: Error) => void;
+  batchLimit?: number;
+  onLimitChange?: (newLimit: number) => Promise<ConversationSummary[]>;
 }
 
 const closeIcon = `
@@ -153,7 +166,7 @@ export function createExportModal(
         .filter((message): message is ConversationSnapshot["messages"][number] => Boolean(message));
       if (!selectedMessages.length) return;
       const format = button.dataset.format as SnapshotExportFormat;
-      void runExportWithLoading(modal, format, async () => {
+      void runExportWithLoading(modal, format, async (updateLoadingState) => {
         await onExport?.(format, {
           ...snapshot,
           messages: selectedMessages.map((message) => applyTextWithoutThought(message, textWithoutThoughtMessageIds))
@@ -267,8 +280,8 @@ export function createBatchExportModal(
         .filter((selection): selection is BatchConversationSelection => selection !== null);
       if (!selections.length) return;
       const format = button.dataset.format as SnapshotExportFormat;
-      void runExportWithLoading(modal, format, async () => {
-        await options.onExport?.(format, selections);
+      void runExportWithLoading(modal, format, async (updateLoadingState) => {
+        await options.onExport?.(format, selections, updateLoadingState);
       }, closeModal);
     });
   });
@@ -319,8 +332,18 @@ export function createBatchExportModal(
         </div>
       </div>
     `;
+    const body = modal.querySelector(".ai-chat-helper-export-modal__batch-body");
+    const box = modal.querySelector(".ai-chat-helper-export-modal__box--batch");
     modal.appendChild(preview);
-    const closePreview = registerDismissLayer(preview, () => preview.remove());
+    body?.classList.add("has-preview");
+    box?.classList.add("has-preview");
+    preview.getBoundingClientRect();
+    preview.classList.add("is-active");
+    const closePreview = registerDismissLayer(preview, () => {
+      preview.remove();
+      body?.classList.remove("has-preview");
+      box?.classList.remove("has-preview");
+    });
     bindBatchPreviewClose(preview, closePreview);
   }
 
@@ -362,8 +385,18 @@ export function createBatchExportModal(
         </div>
       </div>
     `;
+    const body = modal.querySelector(".ai-chat-helper-export-modal__batch-body");
+    const box = modal.querySelector(".ai-chat-helper-export-modal__box--batch");
     modal.appendChild(preview);
-    const closePreview = registerDismissLayer(preview, () => preview.remove());
+    body?.classList.add("has-preview");
+    box?.classList.add("has-preview");
+    preview.getBoundingClientRect();
+    preview.classList.add("is-active");
+    const closePreview = registerDismissLayer(preview, () => {
+      preview.remove();
+      body?.classList.remove("has-preview");
+      box?.classList.remove("has-preview");
+    });
     bindBatchPreviewClose(preview, closePreview);
 
     const messageInputs = Array.from(preview.querySelectorAll<HTMLInputElement>("[data-ai-chat-helper-batch-message-item]"));
@@ -373,6 +406,7 @@ export function createBatchExportModal(
     const thoughtButton = preview.querySelector<HTMLButtonElement>("[data-ai-chat-helper-batch-preview-exclude-thought]");
     bindMessageFullPreviewButtons(preview, snapshot, textWithoutThoughtMessageIds, "[data-ai-chat-helper-batch-message-view]");
     bindAttachmentPreviewButtons(preview, snapshot, "[data-ai-chat-helper-attachment-preview]");
+    bindPreviewImageSkeletons(preview);
 
     const persistSelection = () => {
       messageSelectionByConversation.set(
@@ -427,8 +461,9 @@ export function createBatchExportModal(
           textWithoutThoughtMessageIds.add(message.id);
           const textEl = preview.querySelector<HTMLElement>(`[data-ai-chat-helper-batch-message-text][data-index="${input.dataset.index}"]`);
           if (textEl) {
-            textEl.innerHTML = renderMessageMarkdown(message.textWithoutThought || "(空消息)", snapshot.platformId);
-            textEl.classList.remove("ai-chat-helper-export-modal__message-text--media");
+            textEl.outerHTML = renderPreviewMessageTextElement(snapshot, message, Number(input.dataset.index), "data-ai-chat-helper-batch-message-text", textWithoutThoughtMessageIds);
+            const nextTextEl = preview.querySelector<HTMLElement>(`[data-ai-chat-helper-batch-message-text][data-index="${input.dataset.index}"]`);
+            if (nextTextEl) bindPreviewImageSkeletons(nextTextEl);
           }
         }
       });
@@ -459,13 +494,16 @@ export function openBatchExportModal(
 async function runExportWithLoading(
   modal: HTMLElement,
   format: SnapshotExportFormat,
-  action: () => Promise<void>,
+  action: (updateLoadingState: (state: ExportLoadingState) => void) => Promise<void>,
   closeModal: () => void
 ): Promise<void> {
   setExporting(modal, true);
   renderExportLoading(modal, format);
+  const updateLoadingState = (state: ExportLoadingState) => {
+    renderExportLoading(modal, format, "", state);
+  };
   try {
-    await action();
+    await action(updateLoadingState);
     closeModal();
   } catch (error) {
     console.error("[AI Chat Helper] export action failed", error);
@@ -488,7 +526,12 @@ function setExporting(modal: HTMLElement, exporting: boolean): void {
   });
 }
 
-function renderExportLoading(modal: HTMLElement, format: SnapshotExportFormat, errorMessage = ""): void {
+function renderExportLoading(
+  modal: HTMLElement,
+  format: SnapshotExportFormat,
+  errorMessage = "",
+  state?: ExportLoadingState
+): void {
   modal.querySelector("[data-ai-chat-helper-export-loading]")?.remove();
   const layer = document.createElement("div");
   layer.className = "ai-chat-helper-export-modal__export-loading";
@@ -504,11 +547,25 @@ function renderExportLoading(modal: HTMLElement, format: SnapshotExportFormat, e
     `;
     layer.querySelector("[data-ai-chat-helper-export-loading-close]")?.addEventListener("click", () => layer.remove());
   } else {
+    const progressPercent = Math.max(0, Math.min(100, Math.round(state?.progressPercent ?? 8)));
+    const title = state?.title || "正在导出文件...";
+    const detail = state?.detail || `${escapeHtml(formatExportName(format))} 文件正在生成，请稍候`;
+    const currentLabel = state?.currentLabel
+      ? `<span class="ai-chat-helper-export-modal__export-loading-current">${escapeHtml(state.currentLabel)}</span>`
+      : "";
     layer.innerHTML = `
       <div class="ai-chat-helper-export-modal__export-loading-box" role="status" aria-live="polite">
-        <div class="ai-chat-helper-export-modal__spinner" aria-hidden="true"></div>
-        <strong>正在导出文件...</strong>
-        <span>${escapeHtml(formatExportName(format))} 文件正在生成，请稍候</span>
+        <div class="ai-chat-helper-export-modal__export-loading-orbit" aria-hidden="true">
+          <div class="ai-chat-helper-export-modal__export-loading-orbit-ring"></div>
+          <div class="ai-chat-helper-export-modal__export-loading-orbit-core"></div>
+        </div>
+        <strong>${escapeHtml(title)}</strong>
+        <span>${escapeHtml(detail)}</span>
+        ${currentLabel}
+        <div class="ai-chat-helper-export-modal__export-loading-progress" aria-hidden="true">
+          <div class="ai-chat-helper-export-modal__export-loading-progress-bar" style="width: ${progressPercent}%"></div>
+        </div>
+        <span class="ai-chat-helper-export-modal__export-loading-percent">${progressPercent}%</span>
       </div>
     `;
   }
@@ -524,7 +581,7 @@ function formatExportName(format: SnapshotExportFormat): string {
 
 function renderBatchSummary(summary: ConversationSummary, index: number, canPreview: boolean): string {
   const id = `<span>会话ID: ${escapeHtml(summary.conversationId || "-")}</span>`;
-  const count = `<span>消息数: ${typeof summary.messageCount === "number" ? `${summary.messageCount} 条消息` : "-"}</span>`;
+  const count = `<span>对话轮数: ${typeof summary.messageCount === "number" ? `${summary.messageCount} 轮` : "-"}</span>`;
   const updatedAtText = summary.updatedAtText || (summary.updatedAt ? formatDate(summary.updatedAt) : "");
   const createdAtText = summary.createdAtText || (summary.createdAt ? formatDate(summary.createdAt) : "");
   const updatedAt = `<span>更新时间: ${escapeHtml(updatedAtText || "-")}</span>`;
@@ -532,9 +589,14 @@ function renderBatchSummary(summary: ConversationSummary, index: number, canPrev
   const meta = [id, count, updatedAt, createdAt].join("");
 
   return `
-    <div class="ai-chat-helper-export-modal__batch-item">
+    <div class="ai-chat-helper-export-modal__batch-item" style="--i: ${index}">
       <label class="ai-chat-helper-export-modal__batch-select">
         <input type="checkbox" checked data-index="${index}" data-ai-chat-helper-batch-item />
+        <span class="ai-chat-helper-export-modal__checkbox-box">
+          <svg viewBox="0 0 448 512" style="width: 10px; height: 10px; fill: currentColor; display: block;" class="svg-inline--fa fa-check" aria-hidden="true">
+            <path d="M438.6 105.4c12.5 12.5 12.5 32.8 0 45.3l-256 256c-12.5 12.5-32.8 12.5-45.3 0l-128-128c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0L160 338.7 393.4 105.4c12.5-12.5 32.8-12.5 45.3 0z"/>
+          </svg>
+        </span>
         <span>
           <strong>${escapeHtml(summary.title || summary.conversationId)}</strong>
           <small>${meta || escapeHtml(summary.conversationId)}</small>
@@ -575,7 +637,13 @@ function bindBatchPreviewClose(preview: HTMLElement, close: () => void): void {
 function removeBatchPreview(modal: HTMLElement): void {
   const preview = modal.querySelector<HTMLElement>("[data-ai-chat-helper-batch-preview-panel]");
   if (!preview) return;
-  if (!closeDismissLayerForElement(preview)) preview.remove();
+  if (!closeDismissLayerForElement(preview)) {
+    preview.remove();
+  }
+  const body = modal.querySelector(".ai-chat-helper-export-modal__batch-body");
+  const box = modal.querySelector(".ai-chat-helper-export-modal__box--batch");
+  body?.classList.remove("has-preview");
+  box?.classList.remove("has-preview");
 }
 
 function getConversationSelectionKey(summary: ConversationSummary): string {
@@ -838,8 +906,14 @@ function renderFullPreviewMessageHtml(
 ): string {
   const imagePreview = getPreviewMessageImage(snapshot, message, strippedMessageIds);
   const attachmentPreview = renderInlineAttachmentPreviewList(message);
-  if (imagePreview) return `${renderChatGPTPreviewImageHtml(imagePreview, message.role)}${attachmentPreview}`;
-  const text = renderMessageMarkdown(getPreviewMessageText(message, strippedMessageIds), snapshot.platformId);
+  let rawText = getPreviewMessageText(message, strippedMessageIds);
+  if (imagePreview) {
+    rawText = rawText.replace(/\[附件\d+:[^\]]+]/g, "").trim();
+  }
+  let text = renderPreviewMessageText(rawText, snapshot.platformId);
+  if (imagePreview && !text.includes(imagePreview.url)) {
+    text = `${renderChatGPTPreviewImageHtml(imagePreview, message.role)}${text}`;
+  }
   return `${text || "(空消息)"}${attachmentPreview}`;
 }
 
@@ -851,13 +925,43 @@ function renderPreviewMessageTextElement(
   strippedMessageIds: Set<string>
 ): string {
   const preview = getPreviewMessageImage(snapshot, message, strippedMessageIds);
-  const className = preview
+  let rawText = getPreviewMessageText(message, strippedMessageIds);
+  if (preview) {
+    rawText = rawText.replace(/\[附件\d+:[^\]]+]/g, "").trim();
+  }
+  const hasInlineImage = /!\[([^\]]*)]\((data:image\/[^)]+|https?:\/\/[^\s)]+)\)|\[图片([^\]]*)]\s+(data:image\/\S+|https?:\/\/\S+)/gi.test(rawText);
+  const className = (preview || hasInlineImage)
     ? "ai-chat-helper-export-modal__message-text ai-chat-helper-export-modal__message-text--media"
     : "ai-chat-helper-export-modal__message-text";
-  const html = preview
-    ? renderChatGPTPreviewImageHtml(preview, message.role)
-    : renderMessageMarkdown(getPreviewMessageText(message, strippedMessageIds), snapshot.platformId);
+  let html = renderPreviewMessageText(rawText, snapshot.platformId);
+  if (preview && !html.includes(preview.url)) {
+    html = `${renderChatGPTPreviewImageHtml(preview, message.role)}${html}`;
+  }
   return `<div class="${className}" data-index="${index}" ${dataAttribute}>${html}${renderInlineAttachmentPreviewList(message)}</div>`;
+}
+
+function renderPreviewMessageText(text: string, platformId?: PlatformId): string {
+  const pattern = /!\[([^\]]*)]\((data:image\/[^)]+|https?:\/\/[^\s)]+)\)|\[图片([^\]]*)]\s+(data:image\/\S+|https?:\/\/\S+)/gi;
+  const imageTokens: Array<{ key: string; html: string }> = [];
+  const tokenized = String(text || "(空消息)").replace(pattern, (_match, markdownTitle, markdownUrl, plainTitle, plainUrl) => {
+    const title = markdownTitle || plainTitle || "图片";
+    const url = markdownUrl || plainUrl || "";
+    const key = `AI_CHAT_HELPER_EXPORT_IMAGE_${imageTokens.length}`;
+    imageTokens.push({ key, html: renderExportInlineImageHtml(url, title) });
+    return key;
+  });
+  let html = renderMessageMarkdown(tokenized, platformId).trim();
+  imageTokens.forEach((token) => {
+    html = html
+      .replace(new RegExp(`<p>\\s*${token.key}\\s*</p>`, "g"), token.html)
+      .split(token.key)
+      .join(token.html);
+  });
+  return html || `<p>${escapeHtml(text || "(空消息)")}</p>`;
+}
+
+function renderExportInlineImageHtml(url: string, title: string): string {
+  return `<span class="ai-chat-helper-export-modal__message-media" data-image-loading="true"><span class="ai-chat-helper-export-modal__message-media-skeleton" aria-hidden="true"></span><img src="${escapeHtml(url)}" alt="${escapeHtml(title)}" loading="lazy" /></span>`;
 }
 
 function getPreviewMessageImage(
@@ -877,7 +981,24 @@ function renderChatGPTPreviewImageHtml(
   const text = role === "user" && preview.text
     ? `<span class="ai-chat-helper-export-modal__message-media-text">${escapeHtml(preview.text)}</span>`
     : "";
-  return `<span class="ai-chat-helper-export-modal__message-media"><img src="${escapeHtml(preview.url)}" alt="${escapeHtml(preview.alt)}" loading="lazy">${text}</span>`;
+  return `<span class="ai-chat-helper-export-modal__message-media" data-image-loading="true"><span class="ai-chat-helper-export-modal__message-media-skeleton" aria-hidden="true"></span><img src="${escapeHtml(preview.url)}" alt="${escapeHtml(preview.alt)}" loading="lazy">${text}</span>`;
+}
+
+function bindPreviewImageSkeletons(root: ParentNode): void {
+  root.querySelectorAll<HTMLElement>(".ai-chat-helper-export-modal__message-media").forEach((media) => {
+    const image = media.querySelector<HTMLImageElement>("img");
+    if (!image) return;
+    const setLoaded = (loaded: boolean) => {
+      media.dataset.imageLoading = loaded ? "false" : "true";
+    };
+    if (image.complete && image.naturalWidth > 0) {
+      setLoaded(true);
+      return;
+    }
+    setLoaded(false);
+    image.addEventListener("load", () => setLoaded(true), { once: true });
+    image.addEventListener("error", () => setLoaded(true), { once: true });
+  });
 }
 
 function renderInlineAttachmentPreviewList(message: ConversationSnapshot["messages"][number]): string {
@@ -951,3 +1072,5 @@ function formatDate(value: string): string {
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
 }
+
+

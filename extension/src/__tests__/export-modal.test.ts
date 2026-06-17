@@ -259,9 +259,12 @@ describe("createExportModal", () => {
     });
 
     const messageText = modal.querySelector<HTMLElement>("[data-ai-chat-helper-message-text]");
-    expect(messageText?.innerHTML).toContain('<img src="https://assets.example.com/photo.png"');
+    const media = modal.querySelector<HTMLElement>(".ai-chat-helper-export-modal__message-media");
+    expect(messageText?.innerHTML).toContain("<img src=\"https://assets.example.com/photo.png\"");
     expect(messageText?.textContent).toContain("请参考这张图");
     expect(messageText?.textContent).not.toContain("[附件1: photo.png]");
+    expect(media?.dataset.imageLoading).toBe("true");
+    expect(media?.querySelector(".ai-chat-helper-export-modal__message-media-skeleton")).toBeTruthy();
   });
 
   it("renders markdown formatting in current export previews and full message previews", () => {
@@ -425,7 +428,7 @@ describe("createExportModal", () => {
     expect(modal.textContent).toContain("会话ID: conv-1");
     expect(modal.textContent).toContain("更新时间: 更新时间文本");
     expect(modal.textContent).toContain("创建时间: 创建时间文本");
-    expect(modal.textContent).toContain("3 条消息");
+    expect(modal.textContent).toContain("3 轮");
     expect(checkboxes).toHaveLength(2);
     expect(Array.from(checkboxes).every((item) => item.checked)).toBe(true);
 
@@ -436,7 +439,7 @@ describe("createExportModal", () => {
 
     expect(onExport).toHaveBeenCalledWith("html", [
       { summary: summaries[0], selectedMessageIndices: undefined }
-    ]);
+    ], expect.any(Function));
   });
 
   it("shows a loading state while exporting batch conversation files", async () => {
@@ -454,7 +457,7 @@ describe("createExportModal", () => {
 
     expect(onExport).toHaveBeenCalledWith("markdown", [
       { summary: summaries[0], selectedMessageIndices: undefined }
-    ]);
+    ], expect.any(Function));
     expect(modal.querySelector("[data-ai-chat-helper-export-loading]")?.textContent).toContain("正在导出文件");
     expect(modal.querySelector<HTMLButtonElement>("[data-format='markdown']")?.disabled).toBe(true);
     expect(document.getElementById("ai-chat-helper-export-modal")).toBe(modal);
@@ -538,7 +541,7 @@ describe("createExportModal", () => {
     expect(onExport).toHaveBeenCalledWith("markdown", [
       { summary: summaries[0], selectedMessageIndices: [1, 2] },
       { summary: summaries[1], selectedMessageIndices: undefined }
-    ]);
+    ], expect.any(Function));
   });
 
   it("carries DeepSeek textWithoutThought choices from batch preview into export selections", async () => {
@@ -580,7 +583,7 @@ describe("createExportModal", () => {
         selectedMessageIndices: [0, 1],
         textWithoutThoughtMessageIds: ["answer-1"]
       }
-    ]);
+    ], expect.any(Function));
   });
 
   it("keeps a batch preview message selection when the preview is reopened", async () => {
@@ -602,6 +605,40 @@ describe("createExportModal", () => {
 
     messageInputs = modal.querySelectorAll<HTMLInputElement>("[data-ai-chat-helper-batch-message-item]");
     expect(Array.from(messageInputs).map((input) => input.checked)).toEqual([true, true, false]);
+  });
+
+  it("opens a batch preview as a right-side drawer and keeps image skeletons", async () => {
+    const summaries: ConversationSummary[] = [
+      { platformId: "chatgpt", conversationId: "conv-1", title: "First conversation" }
+    ];
+    const batchPreviewSnapshot: ConversationSnapshot = {
+      ...snapshot,
+      messages: [{
+        id: "batch-image",
+        role: "assistant",
+        text: "![生成图](https://assets.example.com/generated.png)",
+        attachments: []
+      }]
+    };
+    const modal = createBatchExportModal(summaries, { loadSnapshot: vi.fn(async () => batchPreviewSnapshot) });
+    document.body.appendChild(modal);
+
+    modal.querySelector<HTMLButtonElement>("[data-ai-chat-helper-batch-preview]")?.click();
+    await flushPreviewLoad();
+
+    const batchBody = modal.querySelector<HTMLElement>(".ai-chat-helper-export-modal__batch-body");
+    const batchBox = modal.querySelector<HTMLElement>(".ai-chat-helper-export-modal__box--batch");
+    const preview = modal.querySelector<HTMLElement>("[data-ai-chat-helper-batch-preview-panel]");
+    const media = preview?.querySelector<HTMLElement>(".ai-chat-helper-export-modal__message-media");
+
+    expect(batchBody?.classList.contains("has-preview")).toBe(true);
+    expect(batchBox?.classList.contains("has-preview")).toBe(true);
+    expect(preview).toBeTruthy();
+    expect(preview?.parentElement).toBe(modal);
+    expect(batchBody?.contains(preview || null)).toBe(false);
+    expect(media?.dataset.imageLoading).toBe("true");
+    expect(media?.querySelector(".ai-chat-helper-export-modal__message-media-skeleton")).toBeTruthy();
+    expect(preview?.innerHTML).toContain("https://assets.example.com/generated.png");
   });
 
   it("opens a full message preview from the batch conversation preview", async () => {
@@ -628,3 +665,6 @@ describe("createExportModal", () => {
     expect(fullPreview?.textContent).toContain("用户第四行");
   });
 });
+
+
+
