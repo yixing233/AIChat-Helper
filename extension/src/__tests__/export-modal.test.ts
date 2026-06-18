@@ -53,20 +53,18 @@ describe("createExportModal", () => {
     expect(modal.querySelector("[data-format='zip']")).toBeFalsy();
   });
 
-  it("places full-preview buttons on the user side and assistant side in current export preview", () => {
+    it("places full-preview buttons inside the message bubbles in current export preview", () => {
     const modal = createExportModal(snapshot);
     const rows = modal.querySelectorAll<HTMLElement>(".ai-chat-helper-export-modal__message-item");
 
-    const userChildren = Array.from(rows[0].children);
-    const assistantChildren = Array.from(rows[1].children);
-    const userButtonIndex = userChildren.findIndex((element) => element.matches("[data-ai-chat-helper-message-view]"));
-    const userBubbleIndex = userChildren.findIndex((element) => element.matches(".ai-chat-helper-export-modal__message-bubble"));
-    const assistantButtonIndex = assistantChildren.findIndex((element) => element.matches("[data-ai-chat-helper-message-view]"));
-    const assistantBubbleIndex = assistantChildren.findIndex((element) => element.matches(".ai-chat-helper-export-modal__message-bubble"));
+    const userButton = rows[0].querySelector("[data-ai-chat-helper-message-view]");
+    const assistantButton = rows[1].querySelector("[data-ai-chat-helper-message-view]");
 
-    expect(userButtonIndex).toBeGreaterThan(-1);
-    expect(userButtonIndex).toBeLessThan(userBubbleIndex);
-    expect(assistantButtonIndex).toBeGreaterThan(assistantBubbleIndex);
+    expect(userButton).toBeTruthy();
+    expect(assistantButton).toBeTruthy();
+
+    expect(rows[0].querySelector(".ai-chat-helper-export-modal__message-bubble")?.contains(userButton)).toBe(true);
+    expect(rows[1].querySelector(".ai-chat-helper-export-modal__message-bubble")?.contains(assistantButton)).toBe(true);
   });
 
   it("exports only selected current conversation messages", () => {
@@ -663,6 +661,40 @@ describe("createExportModal", () => {
     const fullPreview = document.querySelector<HTMLElement>("[data-ai-chat-helper-full-preview]");
     expect(fullPreview?.textContent).toContain("用户问题全文");
     expect(fullPreview?.textContent).toContain("用户第四行");
+  });
+
+  it("allows setting a new batch display limit and refreshes the summary list and count", async () => {
+    const summaries: ConversationSummary[] = [
+      { platformId: "chatgpt", conversationId: "conv-1", title: "First conversation" }
+    ];
+    const newSummaries: ConversationSummary[] = [
+      { platformId: "chatgpt", conversationId: "conv-1", title: "First conversation" },
+      { platformId: "chatgpt", conversationId: "conv-2", title: "Second conversation" }
+    ];
+    const onLimitChange = vi.fn(async (newLimit: number) => {
+      expect(newLimit).toBe(10);
+      return newSummaries;
+    });
+
+    const modal = createBatchExportModal(summaries, {
+      batchLimit: 5,
+      onLimitChange
+    });
+    document.body.appendChild(modal);
+
+    const limitInput = modal.querySelector<HTMLInputElement>("[data-ai-chat-helper-batch-limit-input]");
+    expect(limitInput).toBeTruthy();
+    expect(limitInput?.value).toBe("5");
+
+    limitInput!.value = "10";
+    limitInput!.dispatchEvent(new Event("change", { bubbles: true }));
+
+    await flushPreviewLoad();
+
+    expect(onLimitChange).toHaveBeenCalledWith(10);
+    expect(modal.querySelector(".ai-chat-helper-export-modal__header div span")?.textContent).toContain("2 个对话");
+    expect(modal.querySelectorAll("[data-ai-chat-helper-batch-item]")).toHaveLength(2);
+    expect(modal.textContent).toContain("Second conversation");
   });
 });
 

@@ -1239,9 +1239,20 @@ async function openRecentConversationPicker(panel: HTMLElement, limit: number): 
       return;
     }
     openBatchExportModal(summaries, {
+      batchLimit: limit,
       loadSnapshot: (summary) => adapter.fetchConversationDetail!(summary.conversationId, summary, capturedEvents.snapshot()),
       onExport: (format, selections) => {
         return exportRecentConversations(format, panel, selections);
+      },
+      onLimitChange: async (newLimit) => {
+        await settingsStorage.set("batchLimit", newLimit);
+        if (mountedPanelContext) {
+          mountedPanelContext.batchLimit = newLimit;
+        }
+        return adapter.fetchConversationList!({
+          limit: newLimit,
+          capturedEvents: capturedEvents.snapshot()
+        });
       },
       onPreviewError(summary, error) {
         console.warn("[AI Chat Helper] batch preview failed", summary.conversationId, error);

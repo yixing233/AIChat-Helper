@@ -1,7 +1,7 @@
 import type { SnapshotExportFormat } from "../../exporters/snapshot-export";
 import { renderMessageMarkdown } from "../../exporters/html";
 import { getChatGPTImagePreviewModel } from "../../exporters/shared";
-import type { BatchConversationSelection, ConversationSnapshot, ConversationSummary } from "../../shared/types";
+import type { BatchConversationSelection, ConversationSnapshot, ConversationSummary, PlatformId } from "../../shared/types";
 import { bindTextTooltipHandlers } from "../controls/node-tooltip";
 import { escapeHtml } from "../shared/escape-html";
 
@@ -187,7 +187,7 @@ export function openExportModal(snapshot: ConversationSnapshot, onExport?: Curre
 }
 
 export function createBatchExportModal(
-  summaries: ConversationSummary[],
+  initialSummaries: ConversationSummary[],
   optionsOrHandler?: BatchExportHandler | BatchExportModalOptions
 ): HTMLElement {
   const options = normalizeBatchExportOptions(optionsOrHandler);
@@ -195,6 +195,7 @@ export function createBatchExportModal(
   const messageSelectionByConversation = new Map<string, number[]>();
   const textWithoutThoughtMessageIdsByConversation = new Map<string, string[]>();
   const snapshotCache = new Map<string, ConversationSnapshot>();
+  let summaries = initialSummaries;
 
   modal.id = "ai-chat-helper-export-modal";
   modal.className = "ai-chat-helper-export-modal";
@@ -207,6 +208,11 @@ export function createBatchExportModal(
             <div>
               <strong>历史会话</strong>
               <span data-ai-chat-helper-batch-selection-status>已选 0 条</span>
+              ${options.onLimitChange ? `
+                <span class="ai-chat-helper-export-modal__limit-wrap">
+                  | 数量上限: <input type="number" class="ai-chat-helper-export-modal__limit-input" value="${options.batchLimit ?? summaries.length}" min="1" max="1000" data-ai-chat-helper-batch-limit-input />
+                </span>
+              ` : ""}
             </div>
             <div class="ai-chat-helper-export-modal__batch-actions">
               <button type="button" class="ai-chat-helper-export-modal__button ai-chat-helper-export-modal__button--primary-soft" data-ai-chat-helper-batch-toggle>全选</button>
@@ -223,13 +229,15 @@ export function createBatchExportModal(
     </div>
   `;
 
-  const itemInputs = Array.from(modal.querySelectorAll<HTMLInputElement>("[data-ai-chat-helper-batch-item]"));
+  let itemInputs: HTMLInputElement[] = [];
+  let previewButtons: HTMLButtonElement[] = [];
+
   const formatButtons = Array.from(modal.querySelectorAll<HTMLButtonElement>("[data-format]"));
   const selectionStatus = modal.querySelector<HTMLElement>("[data-ai-chat-helper-batch-selection-status]");
   const toggleButton = modal.querySelector<HTMLButtonElement>("[data-ai-chat-helper-batch-toggle]");
   const exportTrigger = modal.querySelector<HTMLButtonElement>("[data-ai-chat-helper-export-menu-trigger]");
-  const previewButtons = Array.from(modal.querySelectorAll<HTMLButtonElement>("[data-ai-chat-helper-batch-preview]"));
   const closeModal = registerDismissLayer(modal, () => modal.remove());
+
   const updateSelectionState = () => {
     const selectedCount = itemInputs.filter((input) => input.checked).length;
     const hasSelection = selectedCount > 0;
@@ -247,7 +255,21 @@ export function createBatchExportModal(
     }
   };
 
-  itemInputs.forEach((input) => input.addEventListener("change", updateSelectionState));
+  const bindBatchListHandlers = () => {
+    itemInputs = Array.from(modal.querySelectorAll<HTMLInputElement>("[data-ai-chat-helper-batch-item]"));
+    previewButtons = Array.from(modal.querySelectorAll<HTMLButtonElement>("[data-ai-chat-helper-batch-preview]"));
+
+    itemInputs.forEach((input) => input.addEventListener("change", updateSelectionState));
+
+    previewButtons.forEach((button) => {
+      button.addEventListener("click", () => {
+        const summary = summaries[Number(button.dataset.index)];
+        if (!summary) return;
+        void openBatchPreview(summary);
+      });
+    });
+  };
+
   toggleButton?.addEventListener("click", () => {
     const allSelected = itemInputs.length > 0 && itemInputs.every((input) => input.checked);
     itemInputs.forEach((input) => {
@@ -255,13 +277,7 @@ export function createBatchExportModal(
     });
     updateSelectionState();
   });
-  previewButtons.forEach((button) => {
-    button.addEventListener("click", () => {
-      const summary = summaries[Number(button.dataset.index)];
-      if (!summary) return;
-      void openBatchPreview(summary);
-    });
-  });
+
   formatButtons.forEach((button) => {
     button.addEventListener("click", () => {
       if (isExporting(modal)) return;
@@ -285,6 +301,64 @@ export function createBatchExportModal(
       }, closeModal);
     });
   });
+
+  const limitInput = modal.querySelector<HTMLInputElement>("[data-ai-chat-helper-batch-limit-input]");
+  if (limitInput && options.onLimitChange) {
+    let lastValidValue = limitInput.value;
+
+    limitInput.addEventListener("change", async () => {
+      const rawValue = limitInput.value.trim();
+      const newLimit = parseInt(rawValue, 10);
+
+      if (isNaN(newLimit) || newLimit <= 0 || newLimit > 1000) {
+        limitInput.value = lastValidValue;
+        return;
+      }
+
+      lastValidValue = String(newLimit);
+      limitInput.value = lastValidValue;
+
+      limitInput.disabled = true;
+
+      const listContainer = modal.querySelector<HTMLElement>(".ai-chat-helper-export-modal__batch-list");
+      if (listContainer) {
+        listContainer.innerHTML = `
+          <div class="ai-chat-helper-export-modal__spinner" aria-hidden="true" style="margin: 40px auto;"></div>
+          <div style="text-align: center; color: #667085; font-size: 12px; margin-top: 8px;">正在更新会话列表...</div>
+        `;
+      }
+
+      try {
+        const newSummaries = await options.onLimitChange(newLimit);
+        summaries = newSummaries;
+
+        if (listContainer) {
+          listContainer.innerHTML = summaries.length
+            ? summaries.map((summary, index) => renderBatchSummary(summary, index, Boolean(options.loadSnapshot))).join("")
+            : `<div class="ai-chat-helper-export-modal__empty">暂无可导出的历史会话。</div>`;
+        }
+
+        const headerMeta = modal.querySelector<HTMLElement>(".ai-chat-helper-export-modal__header div span");
+        if (headerMeta) {
+          headerMeta.textContent = `${summaries.length} 个对话`;
+        }
+
+        bindBatchListHandlers();
+        updateSelectionState();
+      } catch (error) {
+        console.error("[AI Chat Helper] Failed to change batch limit:", error);
+        if (listContainer) {
+          listContainer.innerHTML = summaries.length
+            ? summaries.map((summary, index) => renderBatchSummary(summary, index, Boolean(options.loadSnapshot))).join("")
+            : `<div class="ai-chat-helper-export-modal__empty">暂无可导出的历史会话。</div>`;
+        }
+      } finally {
+        limitInput.disabled = false;
+      }
+    });
+  }
+
+  bindBatchListHandlers();
   bindExportMenu(modal);
   bindTextTooltipHandlers(modal);
   bindClose(modal, closeModal);
@@ -339,17 +413,28 @@ export function createBatchExportModal(
     box?.classList.add("has-preview");
     preview.getBoundingClientRect();
     preview.classList.add("is-active");
+
+    const onBodyClick = (event: MouseEvent) => {
+      const target = event.target as HTMLElement;
+      if (target.closest("[data-ai-chat-helper-batch-preview]")) return;
+      if (target.closest("input[type='checkbox']") || target.closest(".ai-chat-helper-export-modal__checkbox-box")) return;
+      closePreview();
+    };
+    body?.addEventListener("click", onBodyClick);
+
     const closePreview = registerDismissLayer(preview, () => {
+      body?.removeEventListener("click", onBodyClick);
       preview.remove();
       body?.classList.remove("has-preview");
       box?.classList.remove("has-preview");
     });
     bindBatchPreviewClose(preview, closePreview);
+    (preview as any)._closePreview = closePreview;
   }
 
   function renderBatchPreviewMessages(summary: ConversationSummary, snapshot: ConversationSnapshot): void {
-    removeBatchPreview(modal);
-    const preview = document.createElement("div");
+    let preview = modal.querySelector<HTMLElement>("[data-ai-chat-helper-batch-preview-panel]");
+    let closePreview: (() => void) | undefined;
     const storedSelection = normalizeMessageSelectionIndices(
       getStoredSelection(summary),
       snapshot.messages.length
@@ -357,9 +442,7 @@ export function createBatchExportModal(
     const selectedIndexSet = new Set(storedSelection);
     const textWithoutThoughtMessageIds = new Set(getStoredTextWithoutThoughtMessageIds(summary));
 
-    preview.className = "ai-chat-helper-export-modal__preview";
-    preview.dataset.aiChatHelperBatchPreviewPanel = "true";
-    preview.innerHTML = `
+    const htmlContent = `
       <div class="ai-chat-helper-export-modal__preview-box" role="dialog" aria-modal="true" aria-label="查看对话消息">
         ${renderPreviewHeader(summary)}
         <div class="ai-chat-helper-export-modal__current-toolbar">
@@ -385,19 +468,45 @@ export function createBatchExportModal(
         </div>
       </div>
     `;
-    const body = modal.querySelector(".ai-chat-helper-export-modal__batch-body");
-    const box = modal.querySelector(".ai-chat-helper-export-modal__box--batch");
-    modal.appendChild(preview);
-    body?.classList.add("has-preview");
-    box?.classList.add("has-preview");
-    preview.getBoundingClientRect();
-    preview.classList.add("is-active");
-    const closePreview = registerDismissLayer(preview, () => {
-      preview.remove();
-      body?.classList.remove("has-preview");
-      box?.classList.remove("has-preview");
-    });
-    bindBatchPreviewClose(preview, closePreview);
+
+    if (preview) {
+      preview.innerHTML = htmlContent;
+      closePreview = (preview as any)._closePreview;
+    } else {
+      removeBatchPreview(modal);
+      preview = document.createElement("div");
+      preview.className = "ai-chat-helper-export-modal__preview";
+      preview.dataset.aiChatHelperBatchPreviewPanel = "true";
+      preview.innerHTML = htmlContent;
+
+      const body = modal.querySelector(".ai-chat-helper-export-modal__batch-body");
+      const box = modal.querySelector(".ai-chat-helper-export-modal__box--batch");
+      modal.appendChild(preview);
+      body?.classList.add("has-preview");
+      box?.classList.add("has-preview");
+      preview.getBoundingClientRect();
+      preview.classList.add("is-active");
+
+      const onBodyClick = (event: MouseEvent) => {
+        const target = event.target as HTMLElement;
+        if (target.closest("[data-ai-chat-helper-batch-preview]")) return;
+        if (target.closest("input[type='checkbox']") || target.closest(".ai-chat-helper-export-modal__checkbox-box")) return;
+        closePreview?.();
+      };
+      body?.addEventListener("click", onBodyClick);
+
+      closePreview = registerDismissLayer(preview, () => {
+        body?.removeEventListener("click", onBodyClick);
+        preview!.remove();
+        body?.classList.remove("has-preview");
+        box?.classList.remove("has-preview");
+      });
+      (preview as any)._closePreview = closePreview;
+    }
+
+    if (closePreview) {
+      bindBatchPreviewClose(preview, closePreview);
+    }
 
     const messageInputs = Array.from(preview.querySelectorAll<HTMLInputElement>("[data-ai-chat-helper-batch-message-item]"));
     const status = preview.querySelector<HTMLElement>("[data-ai-chat-helper-batch-preview-selection-status]");
@@ -580,13 +689,23 @@ function formatExportName(format: SnapshotExportFormat): string {
 }
 
 function renderBatchSummary(summary: ConversationSummary, index: number, canPreview: boolean): string {
-  const id = `<span>会话ID: ${escapeHtml(summary.conversationId || "-")}</span>`;
-  const count = `<span>对话轮数: ${typeof summary.messageCount === "number" ? `${summary.messageCount} 轮` : "-"}</span>`;
   const updatedAtText = summary.updatedAtText || (summary.updatedAt ? formatDate(summary.updatedAt) : "");
   const createdAtText = summary.createdAtText || (summary.createdAt ? formatDate(summary.createdAt) : "");
-  const updatedAt = `<span>更新时间: ${escapeHtml(updatedAtText || "-")}</span>`;
-  const createdAt = `<span>创建时间: ${escapeHtml(createdAtText || "-")}</span>`;
-  const meta = [id, count, updatedAt, createdAt].join("");
+
+  const metaTable = `
+    <table class="ai-chat-helper-export-modal__batch-meta-table">
+      <tbody>
+        <tr>
+          <td>会话ID: ${escapeHtml(summary.conversationId || "-")}</td>
+          <td>对话轮数: ${typeof summary.messageCount === "number" ? `${summary.messageCount} 轮` : "-"}</td>
+        </tr>
+        <tr>
+          <td>更新时间: ${escapeHtml(updatedAtText || "-")}</td>
+          <td>创建时间: ${escapeHtml(createdAtText || "-")}</td>
+        </tr>
+      </tbody>
+    </table>
+  `;
 
   return `
     <div class="ai-chat-helper-export-modal__batch-item" style="--i: ${index}">
@@ -599,7 +718,7 @@ function renderBatchSummary(summary: ConversationSummary, index: number, canPrev
         </span>
         <span>
           <strong>${escapeHtml(summary.title || summary.conversationId)}</strong>
-          <small>${meta || escapeHtml(summary.conversationId)}</small>
+          ${metaTable}
         </span>
       </label>
       ${canPreview ? `
@@ -813,6 +932,21 @@ function applyTextWithoutThought(
   };
 }
 
+function getExtensionAssetUrl(path: string): string {
+  if (typeof chrome !== "undefined" && chrome.runtime?.getURL) {
+    return chrome.runtime.getURL(path);
+  }
+  return `chrome-extension://test/${path.replace(/^\/+/, "")}`;
+}
+
+const platformIconPaths: Record<string, string> = {
+  chatgpt: "icons/platforms/chatgpt.svg",
+  qwen: "icons/platforms/qwen.svg",
+  doubao: "icons/platforms/doubao.svg",
+  deepseek: "icons/platforms/deepseek.svg",
+  claude: "icons/platforms/claude.svg"
+};
+
 function getPreviewMessageText(
   message: ConversationSnapshot["messages"][number],
   strippedMessageIds: Set<string>
@@ -839,21 +973,63 @@ function renderSelectablePreviewMessageRow(
     strippedMessageIds: Set<string>;
   }
 ): string {
-  const viewButton = renderMessageViewButton(index, options.viewAttribute);
+  const isUser = message.role === "user";
+  const isThought = Boolean(message.isThought || String(message.fragmentType || "").toUpperCase() === "THINK");
+  const isSearch = Boolean(message.isSearch || String(message.fragmentType || "").toUpperCase() === "SEARCH");
+  
+  // 决定角色图标和类别
+  let avatarIcon = "";
+  let avatarClass = "";
+
+  if (isUser) {
+    avatarIcon = `<svg viewBox="0 0 448 512" class="ai-chat-helper-svg-icon"><path d="M224 256A128 128 0 1 0 224 0a128 128 0 1 0 0 256zm-45.7 48C79.8 304 0 383.8 0 482.3C0 498.7 13.3 512 29.7 512H418.3c16.4 0 29.7-13.3 29.7-29.7C448 383.8 368.2 304 269.7 304H178.3z"/></svg>`;
+    avatarClass = "user";
+  } else if (isThought) {
+    avatarIcon = `<svg viewBox="0 0 512 512" class="ai-chat-helper-svg-icon"><path d="M224 96c0-53 43-96 96-96s96 43 96 96c0 16.1-4 31.2-11 44.5c41.2 16.7 70 57.2 70 104.3c0 16-3.3 31.2-9.2 45c34.8 19.3 58.2 56.4 58.2 99c0 61.9-50.1 112-112 112c-12 0-23.5-1.9-34.4-5.4C301.7 505.7 265.4 512 226 512C101.2 512 0 410.8 0 286c0-41.9 11.4-81.2 31.4-114.9C21.4 157.1 16 141.2 16 124c0-53 43-96 96-96c23.5 0 45 8.5 61.7 22.6c15.1-6.8 32-10.6 49.7-10.6h.6zm80 200c0 13.3 10.7 24 24 24h32c13.3 0 24-10.7 24-24s-10.7-24-24-24h-32c-13.3 0-24 10.7-24 24zm-64-88c0 13.3 10.7 24 24 24h64c13.3 0 24-10.7 24-24s-10.7-24-24-24h-64c-13.3 0-24 10.7-24 24z"/></svg>`;
+    avatarClass = "thought";
+  } else if (isSearch) {
+    avatarIcon = `<svg viewBox="0 0 512 512" class="ai-chat-helper-svg-icon"><path d="M416 208c0 45.9-14.9 88.3-40 122.7L502.6 457.4c12.5 12.5 12.5 32.8 0 45.3s-32.8 12.5-45.3 0L330.7 376c-34.4 25.2-76.8 40-122.7 40C93.1 416 0 322.9 0 208S93.1 0 208 0S416 93.1 416 208zM208 352a144 144 0 1 0 0-288 144 144 0 1 0 0 288z"/></svg>`;
+    avatarClass = "search";
+  } else {
+    // 针对 AI 回答，直接使用备份库中的 SVG 路径通过 img 元素展示
+    const platform = snapshot.platformId || "chatgpt";
+    const iconPath = platformIconPaths[platform] || platformIconPaths.chatgpt;
+    const src = getExtensionAssetUrl(iconPath);
+    
+    avatarIcon = `<img src="${escapeHtml(src)}" alt="${escapeHtml(platform)}" class="ai-chat-helper-export-modal__message-platform-logo" />`;
+    avatarClass = `assistant-${platform}`;
+  }
+
+  // “查看全文”按钮改为精致悬浮图标形式，置于气泡中
+  const viewButton = `<button type="button" class="ai-chat-helper-export-modal__message-view-btn" data-index="${index}" ${options.viewAttribute} aria-label="查看全文" title="查看全文"><svg viewBox="0 0 448 512" class="ai-chat-helper-svg-icon"><path d="M32 32C14.3 32 0 46.3 0 64v96c0 17.7 14.3 32 32 32s32-14.3 32-32V96h64c17.7 0 32-14.3 32-32s-14.3-32-32-32H32zM416 32H320c-17.7 0-32 14.3-32 32s14.3 32 32 32h64v64c0 17.7 14.3 32 32 32s32-14.3 32-32V64c0-17.7-14.3-32-32-32zM32 416H96c17.7 0 32 14.3 32 32s-14.3 32-32 32H32c-17.7 0-32-14.3-32-32V352c0-17.7 14.3-32 32-32s32 14.3 32 32v64zM416 352c0-17.7-14.3-32-32-32s-32 14.3-32 32v64H320c-17.7 0-32 14.3-32 32s14.3 32 32 32h96c17.7 0 32-14.3 32-32V352z"/></svg></button>`;
+
+  const avatar = `<div class="ai-chat-helper-export-modal__message-avatar ai-chat-helper-export-modal__message-avatar--${avatarClass}">${avatarIcon}</div>`;
+
   const bubble = `
-    <div class="ai-chat-helper-export-modal__message-bubble ai-chat-helper-export-modal__message-bubble--${escapeHtml(message.role)}">
-      <small>${escapeHtml(getMessageRoleLabel(snapshot, message))}</small>
-      ${renderPreviewMessageTextElement(snapshot, message, index, options.textAttribute, options.strippedMessageIds)}
+    <div class="ai-chat-helper-export-modal__message-bubble ai-chat-helper-export-modal__message-bubble--${avatarClass}">
+      ${viewButton}
+      <span class="ai-chat-helper-export-modal__message-role-badge" style="display: none !important;">${escapeHtml(getMessageRoleLabel(snapshot, message))}</span>
+      <div class="ai-chat-helper-export-modal__message-text-container">
+        ${renderPreviewMessageTextElement(snapshot, message, index, options.textAttribute, options.strippedMessageIds)}
+      </div>
     </div>
   `;
-  const isUser = message.role === "user";
 
   return `
-    <label class="ai-chat-helper-export-modal__message-item">
+    <label class="ai-chat-helper-export-modal__message-row ai-chat-helper-export-modal__message-item">
       <input type="checkbox" ${options.checked ? "checked" : ""} data-index="${index}" ${options.inputAttribute} />
-      ${isUser ? viewButton : ""}
-      ${bubble}
-      ${isUser ? "" : viewButton}
+      <div class="ai-chat-helper-export-modal__checkbox-box">
+        <svg viewBox="0 0 448 512" class="ai-chat-helper-svg-icon" aria-hidden="true">
+          <path d="M438.6 105.4c12.5 12.5 12.5 32.8 0 45.3l-256 256c-12.5 12.5-32.8 12.5-45.3 0l-128-128c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0L160 338.7 393.4 105.4c12.5-12.5 32.8-12.5 45.3 0z"/>
+        </svg>
+      </div>
+      <div class="ai-chat-helper-export-modal__message-chat-wrapper ai-chat-helper-export-modal__message-chat-wrapper--${isUser ? 'user' : 'ai'}">
+        ${isUser ? "" : avatar}
+        ${isUser ? '<div class="ai-chat-helper-export-modal__message-spacer"></div>' : ""}
+        ${bubble}
+        ${isUser ? avatar : ""}
+        ${isUser ? "" : '<div class="ai-chat-helper-export-modal__message-spacer"></div>'}
+      </div>
     </label>
   `;
 }

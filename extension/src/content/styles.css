@@ -948,11 +948,11 @@ body.ai-chat-helper-hide-qwen-ads [class*="container-3D4Pp"] {
 }
 
 .ai-chat-helper-export-modal__box--batch {
-  width: min(980px, 94vw);
-  height: auto;
-  max-height: calc(100vh - 48px);
+  width: min(680px, 94vw);
   border-radius: 16px;
   box-shadow: 0 20px 60px rgb(0 0 0 / 25%);
+  position: relative;
+  transition: width 0.35s cubic-bezier(0.25, 0.8, 0.25, 1);
 }
 
 .ai-chat-helper-export-modal__header {
@@ -978,10 +978,38 @@ body.ai-chat-helper-hide-qwen-ads [class*="container-3D4Pp"] {
 }
 
 .ai-chat-helper-export-modal__header span,
-.ai-chat-helper-export-modal__batch-item small,
 .ai-chat-helper-export-modal__empty {
   color: #667085;
   font-size: 12px;
+}
+
+.ai-chat-helper-export-modal__batch-meta-table {
+  width: 100% !important;
+  border-collapse: collapse !important;
+  border: none !important;
+  margin-top: 6px !important;
+  table-layout: fixed !important;
+}
+
+.ai-chat-helper-export-modal__batch-meta-table td {
+  padding: 2px 0 !important;
+  border: none !important;
+  color: #667085 !important;
+  font-size: 11px !important;
+  line-height: 1.4 !important;
+  text-align: left !important;
+  white-space: nowrap !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+}
+
+.ai-chat-helper-export-modal__batch-meta-table td:first-child {
+  width: 62% !important;
+  padding-right: 8px !important;
+}
+
+.ai-chat-helper-export-modal__batch-meta-table td:last-child {
+  width: 38% !important;
 }
 
 .ai-chat-helper-export-modal__close {
@@ -1854,7 +1882,22 @@ body.ai-chat-helper-hide-qwen-ads [class*="container-3D4Pp"] {
 }
 
 .ai-chat-helper-export-modal__box--batch.has-preview {
+  width: min(680px, 94vw); /* 保持与无预览一致，无任何变形拉伸 */
+  height: 85vh;
+  max-height: 85vh;
   overflow: hidden;
+}
+
+.ai-chat-helper-export-modal__batch-body {
+  width: 100%;
+  transition: width 0.35s cubic-bezier(0.25, 0.8, 0.25, 1);
+}
+
+.ai-chat-helper-export-modal__box--batch.has-preview .ai-chat-helper-export-modal__batch-body {
+  width: 100%; /* 自适应铺满整个大弹窗的 100% 宽度 */
+  max-width: 100%;
+  flex-shrink: 0;
+  align-self: stretch;
 }
 
 .ai-chat-helper-export-modal__batch-body.has-preview {
@@ -1871,3 +1914,504 @@ body.ai-chat-helper-hide-qwen-ads [class*="container-3D4Pp"] {
 }
 
 
+
+
+/* ==========================================================================
+   Antigravity Premium Export UI & Smooth Animation Styles (Corrected)
+   ========================================================================== */
+
+/* 核心变量与各平台专属视觉补充 */
+:root[data-ai-chat-helper-platform] {
+  --ai-chat-helper-user-bg: linear-gradient(135deg, #eff6ff 0%, #dbeafe 100%);
+  --ai-chat-helper-user-border: #bfdbfe;
+  --ai-chat-helper-user-text: #1e3a8a;
+  
+  /* 平台调色 */
+  --ai-chat-helper-chatgpt-bg: linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%);
+  --ai-chat-helper-chatgpt-border: #bbf7d0;
+  --ai-chat-helper-chatgpt-text: #14532d;
+  
+  --ai-chat-helper-claude-bg: linear-gradient(135deg, #fffbeb 0%, #fef3c7 100%);
+  --ai-chat-helper-claude-border: #fde68a;
+  --ai-chat-helper-claude-text: #78350f;
+  
+  --ai-chat-helper-deepseek-bg: linear-gradient(135deg, #eff6ff 0%, #dbeafe 100%);
+  --ai-chat-helper-deepseek-border: #bfdbfe;
+  --ai-chat-helper-deepseek-text: #1e3a8a;
+  
+  --ai-chat-helper-qwen-bg: linear-gradient(135deg, #faf5ff 0%, #f3e8ff 100%);
+  --ai-chat-helper-qwen-border: #e9d5ff;
+  --ai-chat-helper-qwen-text: #581c87;
+  
+  --ai-chat-helper-doubao-bg: linear-gradient(135deg, #f0fdfa 0%, #ccfbf1 100%);
+  --ai-chat-helper-doubao-border: #99f6e4;
+  --ai-chat-helper-doubao-text: #115e59;
+  
+  --ai-chat-helper-thought-bg: linear-gradient(135deg, #faf5ff 0%, #f3e8ff 100%);
+  --ai-chat-helper-thought-border: #e9d5ff;
+  --ai-chat-helper-thought-text: #581c87;
+  
+  --ai-chat-helper-search-bg: linear-gradient(135deg, #f0fdfa 0%, #ccfbf1 100%);
+  --ai-chat-helper-search-border: #99f6e4;
+  --ai-chat-helper-search-text: #115e59;
+}
+
+/* 高层级自适应布局修复 - 保证在有预览时也可以自由滚动，且列表圆角封口 */
+.ai-chat-helper-export-modal .ai-chat-helper-export-modal__batch-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  box-sizing: border-box;
+}
+
+.ai-chat-helper-export-modal .ai-chat-helper-export-modal__box--batch.has-preview .ai-chat-helper-export-modal__batch-body.has-preview {
+  overflow: hidden !important; /* 彻底移除外层冗余滚动条 */
+}
+
+.ai-chat-helper-export-modal .ai-chat-helper-export-modal__batch-card {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  box-sizing: border-box;
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  padding: 14px;
+}
+
+.ai-chat-helper-export-modal .ai-chat-helper-export-modal__batch-list {
+  flex: 1;
+  min-height: 0;
+  max-height: none;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  background: #fff;
+}
+
+/* 精致右侧抽屉滑入定位与防止挤压重写 (强制定位以抗挤压) */
+.ai-chat-helper-export-modal .ai-chat-helper-export-modal__box--batch {
+  flex-shrink: 0 !important; /* 强力锁死大弹窗尺寸，绝不受 flex 挤压形变 */
+}
+
+.ai-chat-helper-export-modal .ai-chat-helper-export-modal__preview {
+  position: absolute !important; /* 强制脱离 flex 文档流 */
+  top: 40px !important;
+  right: 40px !important;
+  bottom: 40px !important;
+  left: 40px !important;
+  width: auto !important;
+  height: auto !important;
+  pointer-events: none !important; /* 点击可穿透到左半边 */
+  z-index: 10100 !important;
+  display: flex !important;
+  justify-content: flex-end !important;
+  align-items: stretch !important;
+}
+
+.ai-chat-helper-export-modal .ai-chat-helper-export-modal__preview-box {
+  width: min(580px, 100%); /* 限制在最宽 580px 以留出充足的左侧点击穿透空间 */
+  max-width: min(580px, 100%);
+  height: 100%;
+  border-radius: 16px;
+  background: #f8fafc;
+  pointer-events: auto; /* 消息列表交互响应 */
+  box-shadow: -12px 0 36px rgba(15, 23, 42, 0.16), 0 20px 50px rgba(15, 23, 42, 0.12);
+  
+  /* 滑入/滑出过渡 */
+  transform: translateX(100%);
+  opacity: 0;
+  transition: transform 0.35s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.35s ease;
+}
+
+.ai-chat-helper-export-modal .ai-chat-helper-export-modal__preview.is-active .ai-chat-helper-export-modal__preview-box {
+  transform: translateX(0);
+  opacity: 1;
+}
+
+/* 1. 绝对定位悬浮抽屉的高级滑入/滑出动画及圆角优化 */
+.ai-chat-helper-export-modal__preview-box {
+  border-radius: 16px;
+  box-shadow: -12px 0 36px rgba(15, 23, 42, 0.16), 0 20px 50px rgba(15, 23, 42, 0.12);
+  
+  /* 默认滑出至右侧屏幕外 */
+  transform: translateX(100%);
+  opacity: 0;
+  transition: transform 0.35s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.35s ease;
+}
+
+.ai-chat-helper-export-modal__preview.is-active .ai-chat-helper-export-modal__preview-box {
+  transform: translateX(0);
+  opacity: 1;
+}
+
+/* 2. 消息行与聊天气泡重排 */
+.ai-chat-helper-export-modal__message-row {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  padding: 14px 20px;
+  border-bottom: 1px solid #f1f5f9;
+  cursor: pointer;
+  background: #fff;
+  transition: background-color 0.2s ease;
+  min-width: 0;
+}
+
+.ai-chat-helper-export-modal__message-row:hover {
+  background: #f8fafc;
+}
+
+.ai-chat-helper-export-modal__message-row input[type="checkbox"] {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+  pointer-events: none;
+}
+
+/* 复选框美化与位置微调 */
+.ai-chat-helper-export-modal__message-row .ai-chat-helper-export-modal__checkbox-box {
+  width: 18px;
+  height: 18px;
+  border: 1.5px solid #cbd5e1;
+  border-radius: 6px;
+  background: #fff;
+  color: #fff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-top: 11px;
+  transition: background-color 0.15s ease, border-color 0.15s ease;
+  flex-shrink: 0;
+}
+
+.ai-chat-helper-export-modal__message-row input[type="checkbox"]:checked + .ai-chat-helper-export-modal__checkbox-box {
+  background: #2563eb;
+  border-color: #2563eb;
+}
+
+.ai-chat-helper-export-modal__message-row input[type="checkbox"]:checked + .ai-chat-helper-export-modal__checkbox-box svg {
+  opacity: 1;
+  transform: scale(1);
+}
+
+.ai-chat-helper-export-modal__message-row .ai-chat-helper-export-modal__checkbox-box svg {
+  width: 10px;
+  height: 10px;
+  fill: currentColor;
+  opacity: 0;
+  transform: scale(0.6);
+  transition: opacity 0.15s ease, transform 0.15s ease;
+}
+
+/* 3. 对话聊天气泡排列 */
+.ai-chat-helper-export-modal__message-chat-wrapper {
+  display: flex;
+  flex: 1;
+  align-items: flex-start;
+  gap: 12px;
+  min-width: 0;
+}
+
+.ai-chat-helper-export-modal__message-chat-wrapper--user {
+  justify-content: flex-end;
+}
+
+.ai-chat-helper-export-modal__message-chat-wrapper--ai {
+  justify-content: flex-start;
+}
+
+.ai-chat-helper-export-modal__message-spacer {
+  display: none !important;
+}
+
+/* 头像设计 */
+.ai-chat-helper-export-modal__message-avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  margin-top: 4px;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.08);
+}
+
+.ai-chat-helper-export-modal__message-avatar svg {
+  width: 14px;
+  height: 14px;
+  fill: currentColor;
+}
+
+.ai-chat-helper-export-modal__message-platform-logo {
+  width: 20px;
+  height: 20px;
+  object-fit: contain;
+  display: block;
+}
+
+.ai-chat-helper-export-modal__message-role-badge {
+  display: none !important;
+}
+
+/* 平台专属头像背景色 */
+.ai-chat-helper-export-modal__message-avatar--user {
+  background: linear-gradient(135deg, #3b82f6, #1d4ed8);
+  color: #fff;
+}
+
+.ai-chat-helper-export-modal__message-avatar--assistant-chatgpt,
+.ai-chat-helper-export-modal__message-avatar--assistant-claude,
+.ai-chat-helper-export-modal__message-avatar--assistant-deepseek,
+.ai-chat-helper-export-modal__message-avatar--assistant-qwen,
+.ai-chat-helper-export-modal__message-avatar--assistant-doubao {
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  color: #334155;
+}
+
+.ai-chat-helper-export-modal__message-avatar--thought {
+  background: linear-gradient(135deg, #a855f7, #7e22ce);
+  color: #fff;
+}
+
+.ai-chat-helper-export-modal__message-avatar--search {
+  background: linear-gradient(135deg, #06b6d4, #0891b2);
+  color: #fff;
+}
+
+/* 气泡设计 */
+.ai-chat-helper-export-modal__message-bubble {
+  position: /* relative-bubble */ relative;
+  max-width: 75%;
+  min-width: 50px;
+  padding: 12px 16px;
+  border-radius: 14px;
+  font-size: 13px;
+  line-height: 1.6;
+  word-break: break-word;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+  border: 1px solid rgba(0, 0, 0, 0.06);
+  transition: all 0.2s ease;
+}
+
+/* 不同角色气泡调色 */
+.ai-chat-helper-export-modal__message-bubble--user {
+  background: var(--ai-chat-helper-user-bg);
+  border-color: var(--ai-chat-helper-user-border);
+  color: var(--ai-chat-helper-user-text);
+  border-top-right-radius: 4px;
+}
+
+/* 平台专属气泡调色 */
+.ai-chat-helper-export-modal__message-bubble--assistant-chatgpt,
+.ai-chat-helper-export-modal__message-bubble--assistant-claude,
+.ai-chat-helper-export-modal__message-bubble--assistant-deepseek,
+.ai-chat-helper-export-modal__message-bubble--assistant-qwen,
+.ai-chat-helper-export-modal__message-bubble--assistant-doubao {
+  background: #ffffff;
+  border-color: #e2e8f0;
+  color: #1e293b;
+  border-top-left-radius: 4px;
+}
+
+.ai-chat-helper-export-modal__message-bubble--thought {
+  background: var(--ai-chat-helper-thought-bg);
+  border-color: var(--ai-chat-helper-thought-border);
+  color: var(--ai-chat-helper-thought-text);
+  border-top-left-radius: 4px;
+}
+
+.ai-chat-helper-export-modal__message-bubble--search {
+  background: var(--ai-chat-helper-search-bg);
+  border-color: var(--ai-chat-helper-search-border);
+  color: var(--ai-chat-helper-search-text);
+  border-top-left-radius: 4px;
+}
+
+
+
+/* 4. “查看全文”悬浮按钮 */
+.ai-chat-helper-export-modal__message-view-btn {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  background: rgba(255, 255, 255, 0.8);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+  color: #475569;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  opacity: 0;
+  transform: scale(0.9);
+  transition: opacity 0.2s ease, transform 0.2s ease, background-color 0.2s ease, color 0.2s ease;
+  z-index: 2;
+}
+
+.ai-chat-helper-export-modal__message-bubble:hover .ai-chat-helper-export-modal__message-view-btn {
+  opacity: 1;
+  transform: scale(1);
+}
+
+.ai-chat-helper-export-modal__message-view-btn:hover {
+  background: #2563eb;
+  border-color: #2563eb;
+  color: #fff;
+}
+
+.ai-chat-helper-export-modal__message-view-btn svg {
+  width: 10px;
+  height: 10px;
+  fill: currentColor;
+}
+
+/* 5. 选中视觉淡化/高亮动效 */
+.ai-chat-helper-export-modal__message-row input[type="checkbox"]:not(:checked) ~ .ai-chat-helper-export-modal__message-chat-wrapper {
+  opacity: 0.55;
+  filter: grayscale(10%);
+  transition: opacity 0.2s ease, filter 0.2s ease;
+}
+
+.ai-chat-helper-export-modal__message-row input[type="checkbox"]:checked ~ .ai-chat-helper-export-modal__message-chat-wrapper {
+  opacity: 1;
+  filter: none;
+  transition: opacity 0.2s ease, filter 0.2s ease;
+}
+
+.ai-chat-helper-export-modal__message-row input[type="checkbox"]:checked ~ .ai-chat-helper-export-modal__message-chat-wrapper .ai-chat-helper-export-modal__message-bubble {
+  box-shadow: 0 4px 12px rgba(37, 99, 235, 0.08);
+}
+
+.ai-chat-helper-export-modal__message-row input[type="checkbox"]:checked ~ .ai-chat-helper-export-modal__message-chat-wrapper .ai-chat-helper-export-modal__message-bubble--user {
+  border-color: #3b82f6;
+  box-shadow: 0 4px 12px rgba(37, 99, 235, 0.12);
+}
+
+.ai-chat-helper-export-modal__message-row input[type="checkbox"]:checked ~ .ai-chat-helper-export-modal__message-chat-wrapper .ai-chat-helper-export-modal__message-bubble--assistant-chatgpt {
+  border-color: #10a37f;
+  box-shadow: 0 4px 12px rgba(16, 163, 127, 0.12);
+}
+
+.ai-chat-helper-export-modal__message-row input[type="checkbox"]:checked ~ .ai-chat-helper-export-modal__message-chat-wrapper .ai-chat-helper-export-modal__message-bubble--assistant-claude {
+  border-color: #d97706;
+  box-shadow: 0 4px 12px rgba(217, 119, 6, 0.12);
+}
+
+.ai-chat-helper-export-modal__message-row input[type="checkbox"]:checked ~ .ai-chat-helper-export-modal__message-chat-wrapper .ai-chat-helper-export-modal__message-bubble--assistant-deepseek {
+  border-color: #2563eb;
+  box-shadow: 0 4px 12px rgba(37, 99, 235, 0.12);
+}
+
+.ai-chat-helper-export-modal__message-row input[type="checkbox"]:checked ~ .ai-chat-helper-export-modal__message-chat-wrapper .ai-chat-helper-export-modal__message-bubble--assistant-qwen {
+  border-color: #7c3aed;
+  box-shadow: 0 4px 12px rgba(124, 58, 237, 0.12);
+}
+
+.ai-chat-helper-export-modal__message-row input[type="checkbox"]:checked ~ .ai-chat-helper-export-modal__message-chat-wrapper .ai-chat-helper-export-modal__message-bubble--assistant-doubao {
+  border-color: #3b82f6;
+  box-shadow: 0 4px 12px rgba(59, 130, 246, 0.12);
+}
+
+.ai-chat-helper-export-modal__message-row input[type="checkbox"]:checked ~ .ai-chat-helper-export-modal__message-chat-wrapper .ai-chat-helper-export-modal__message-bubble--thought {
+  border-color: #a855f7;
+  box-shadow: 0 4px 12px rgba(168, 85, 247, 0.12);
+}
+
+.ai-chat-helper-export-modal__message-row input[type="checkbox"]:checked ~ .ai-chat-helper-export-modal__message-chat-wrapper .ai-chat-helper-export-modal__message-bubble--search {
+  border-color: #06b6d4;
+  box-shadow: 0 4px 12px rgba(6, 182, 212, 0.12);
+}
+
+/* 6. FontAwesome 图标辅助样式 */
+.ai-chat-helper-svg-icon {
+  display: inline-block;
+  width: 1em;
+  height: 1em;
+  fill: currentColor;
+  vertical-align: -0.125em;
+}
+
+/* 7. 滚动条美化 */
+.ai-chat-helper-export-modal__message-list::-webkit-scrollbar,
+.ai-chat-helper-export-modal__batch-list::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.ai-chat-helper-export-modal__message-list::-webkit-scrollbar-track,
+.ai-chat-helper-export-modal__batch-list::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.ai-chat-helper-export-modal__message-list::-webkit-scrollbar-thumb,
+.ai-chat-helper-export-modal__batch-list::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 3px;
+}
+
+.ai-chat-helper-export-modal__message-list::-webkit-scrollbar-thumb:hover,
+.ai-chat-helper-export-modal__batch-list::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
+}
+
+/* 8. Markdown 代码块宽度撑爆气泡修复 */
+.ai-chat-helper-export-modal .ai-chat-helper-export-modal__message-bubble,
+.ai-chat-helper-export-modal .ai-chat-helper-export-modal__message-text-container,
+.ai-chat-helper-export-modal .ai-chat-helper-export-modal__message-text {
+  min-width: 0 !important; /* 解除 Grid/Flex 容器 min-width: auto 对宽度的无限撑大 */
+}
+
+.ai-chat-helper-export-modal pre {
+  max-width: 100% !important; /* 强制锁定代码块宽度在容器范围内 */
+  box-sizing: border-box !important;
+  overflow-x: auto !important; /* 开启代码块在气泡内的局内横向滚动 */
+}
+
+/* 9. 批量导出最大显示数量限制修改 */
+.ai-chat-helper-export-modal__limit-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #667085;
+  font-size: 12px;
+  margin-left: 8px;
+}
+
+.ai-chat-helper-export-modal__limit-input {
+  width: 58px;
+  height: 22px;
+  padding: 0 6px;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  font-size: 11px;
+  color: #1e293b;
+  text-align: center;
+  background: #fff;
+  transition: border-color .15s ease, box-shadow .15s ease;
+}
+
+.ai-chat-helper-export-modal__limit-input:focus {
+  border-color: #2563eb;
+  box-shadow: 0 0 0 2px rgb(37 99 235 / 15%);
+  outline: none;
+}
+
+.ai-chat-helper-export-modal__limit-input:disabled {
+  background: #f1f5f9;
+  color: #94a3b8;
+  cursor: not-allowed;
+}

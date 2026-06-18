@@ -33,7 +33,7 @@ describe("settings popup", () => {
     expect(root.textContent).not.toContain("单页数量");
     expect(root.querySelector<HTMLInputElement>("[data-ai-chat-helper-dot-gap]")?.value).toBe("42");
     expect(root.querySelector<HTMLInputElement>("[data-ai-chat-helper-reading-line]")?.value).toBe("180");
-    expect(root.querySelector<HTMLInputElement>("[data-ai-chat-helper-batch-limit]")?.value).toBe("40");
+
     expect(root.querySelector<HTMLInputElement>("[data-ai-chat-helper-auto-update-check]")?.checked).toBe(false);
     expect(root.querySelector<HTMLInputElement>("[data-ai-chat-helper-auto-backup-enabled]")?.checked).toBe(false);
     expect(root.querySelector<HTMLInputElement>("[data-ai-chat-helper-auto-backup-interval]")?.value).toBe("15");

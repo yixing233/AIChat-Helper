@@ -51,7 +51,10 @@
   ],
   "web_accessible_resources": [
     {
-      "resources": ["injected/page-hooks.js"],
+      "resources": [
+        "injected/page-hooks.js",
+        "icons/platforms/*.svg"
+      ],
       "matches": [
         "https://chatgpt.com/*",
         "https://www.qianwen.com/*",

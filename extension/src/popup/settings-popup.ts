@@ -134,10 +134,7 @@ export function createSettingsPopup(options: SettingsPopupOptions): HTMLElement 
       </label>
     </section>
 
-    <section class="ai-chat-helper-popup__section">
-      <h2>导出</h2>
-      ${renderNumberSetting("批量上限", "data-ai-chat-helper-batch-limit", settings.batchLimit, 1, 100, 1)}
-    </section>
+
 
     <section class="ai-chat-helper-popup__section">
       <h2>备份</h2>
@@ -426,7 +423,7 @@ function readSettingsFromPopup(root: HTMLElement, previousSettings: ExtensionSet
     ...DEFAULT_EXTENSION_SETTINGS,
     panelPosition: previousSettings.panelPosition,
     visibleLimit: readInputValue(root, "[data-ai-chat-helper-visible-limit]"),
-    batchLimit: readInputValue(root, "[data-ai-chat-helper-batch-limit]"),
+    batchLimit: previousSettings.batchLimit,
     readingLineOffset: readInputValue(root, "[data-ai-chat-helper-reading-line]"),
     dotGap: readInputValue(root, "[data-ai-chat-helper-dot-gap]"),
     autoUpdateCheck: readChecked(root, "[data-ai-chat-helper-auto-update-check]", previousSettings.autoUpdateCheck),
@@ -440,7 +437,6 @@ function readSettingsFromPopup(root: HTMLElement, previousSettings: ExtensionSet
 
 function writeSettingsToPopup(root: HTMLElement, settings: ExtensionSettings): void {
   writeInputValue(root, "[data-ai-chat-helper-visible-limit]", settings.visibleLimit);
-  writeInputValue(root, "[data-ai-chat-helper-batch-limit]", settings.batchLimit);
   writeInputValue(root, "[data-ai-chat-helper-reading-line]", settings.readingLineOffset);
   writeInputValue(root, "[data-ai-chat-helper-dot-gap]", settings.dotGap);
   writeChecked(root, "[data-ai-chat-helper-auto-update-check]", settings.autoUpdateCheck);
