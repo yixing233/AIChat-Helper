@@ -11433,8 +11433,64 @@
             `.trim();
         }
 
+        function buildBatchConversationPrintableHtmlDark(platform, conversation, assistantLabel) {
+            const rows = (Array.isArray(conversation.messages) ? conversation.messages : [])
+                .map((m) => buildMessageExportSnapshot(m))
+                .map((m, idx) => `
+                <div class="msg">
+                    <div class="role">${idx + 1}. ${m.role === 'user' ? '用户' : assistantLabel}</div>
+                    <div class="text">${isClaude ? renderClaudePartsToStaticHtml(m.parts, m.__displayText) : m.__html}</div>
+                </div>
+            `).join('');
+            return `
+                <html>
+                <head>
+                    <meta charset="utf-8">
+                    <title>${escapeHtml(conversation.title || `会话 ${conversation.conversationId || '-'}`)}</title>
+                    <style>
+                        @page { size: A4; margin: 14mm; }
+                        body { font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; color:#E5E7EB; margin:0; padding:0; background:#17171A; }
+                        .head { margin-bottom: 14px; border-bottom: 2px solid #3B82F6; padding-bottom: 8px; }
+                        .platform { font-size: 12px; color: #93C5FD; margin-bottom: 6px; }
+                        .title { font-size: 18px; font-weight: 700; color:#F3F4F6; }
+                        .meta { margin-top: 6px; color: #8A8F98; font-size: 12px; line-height: 1.6; }
+                        .msg { border: 1px solid #303038; border-radius: 10px; padding: 10px 12px; margin: 10px 0; background:#232329; }
+                        .role { font-size: 12px; font-weight: 700; color: #60A5FA; margin-bottom: 6px; }
+                        .text { font-size: 13px; line-height: 1.7; white-space: normal; word-break: break-word; color:#D1D5DB; }
+                        .text pre { font-family: "Consolas", "Monaco", "Courier New", monospace; background:#1E1E24 !important; color:#E5E7EB !important; border:1px solid #303038; padding:12px; border-radius:8px; }
+                        .text code { font-family: "Consolas", "Monaco", "Courier New", monospace; background:#303038; color:#FB7185; padding:2px 5px; border-radius:4px; }
+                        .text pre code { background: none; padding: 0; color: inherit; }
+                        .text h1, .text h2, .text h3, .text h4, .text h5, .text h6 { color:#F3F4F6; }
+                        .text a { color:#60A5FA; }
+                        .text hr { border-top:1px solid #303038; }
+                        .text blockquote { background:rgba(139,92,246,0.08); border:1px dashed #8B5CF6; color:#D1D5DB; }
+                        .text th { background:#303038; color:#F3F4F6; border-color:#303038; }
+                        .text td { background:#232329; border-color:#303038; color:#D1D5DB; }
+                        .claude-image-block { background:rgba(59,130,246,0.08); border:1px solid #2563EB; }
+                        .claude-image-block img { background:#17171A; border:1px solid #303038; }
+                        .claude-inline-svg { background:#232329; border:1px solid #303038; }
+                    </style>
+                </head>
+                <body>
+                    <section class="conv">
+                        <div class="head">
+                            <div class="platform">${escapeHtml(platform)} 批量导出 (暗黑模式)</div>
+                            <div class="title">${escapeHtml(conversation.title || `会话 ${conversation.conversationId || '-'}`)}</div>
+                            <div class="meta">
+                                会话ID: ${escapeHtml(conversation.conversationId || '-')}<br>
+                                更新时间: ${escapeHtml(conversation.updatedAtText || '-')}<br>
+                                消息数: ${escapeHtml(String(conversation.messageCount || 0))}
+                            </div>
+                        </div>
+                        ${rows || '<div class="meta">该会话暂无可导出的消息内容。</div>'}
+                    </section>
+                </body>
+                </html>
+            `.trim();
+        }
+
         async function exportBatchConversationsAsZip(platform, conversations, format, assistantLabel) {
-            if (!['md', 'txt', 'html'].includes(String(format || '').trim())) {
+            if (!['md', 'txt', 'html', 'html-dark'].includes(String(format || '').trim())) {
                 throw new Error(`不支持的导出类型: ${format || '-'}`);
             }
             const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '_');
@@ -11463,6 +11519,13 @@
                     entries.push({
                         name: getUniqueBatchFileName(titleBase, 'html', usedNames),
                         data: buildBatchConversationPrintableHtml(platform, { ...conversation, messages: preparedMessages }, assistantLabel)
+                    });
+                    return;
+                }
+                if (format === 'html-dark') {
+                    entries.push({
+                        name: getUniqueBatchFileName(titleBase, 'html', usedNames),
+                        data: buildBatchConversationPrintableHtmlDark(platform, { ...conversation, messages: preparedMessages }, assistantLabel)
                     });
                     return;
                 }
@@ -15880,9 +15943,10 @@
                         <button id="m-export-menu-trigger" style="border:1px solid #2563eb;background:#fff;color:#2563eb;border-radius:8px;font-size:12px;padding:7px 12px;cursor:pointer;font-weight:700;display:flex;align-items:center;gap:6px;">
                             <span>导出</span><span id="m-export-menu-icon" style="opacity:.9;display:inline-flex;transition:transform .2s ease;transform:rotate(0deg);"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg></span>
                         </button>
-                        <div id="m-export-menu" style="position:absolute;right:0;top:36px;width:100px;background:rgba(255, 255, 255, 0.2);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);border:1px solid rgba(255,255,255,0.35);border-radius:10px;box-shadow:0 10px 30px rgba(15,23,42,.15);padding:0;z-index:7;opacity:0;pointer-events:none;transform:translateY(-8px) scale(0.96);transition:opacity .22s cubic-bezier(0.22,0.61,0.36,1), transform .22s cubic-bezier(0.22,0.61,0.36,1);">
+                        <div id="m-export-menu" style="position:absolute;right:0;top:36px;width:120px;background:rgba(255, 255, 255, 0.2);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);border:1px solid rgba(255,255,255,0.35);border-radius:10px;box-shadow:0 10px 30px rgba(15,23,42,.15);padding:0;z-index:7;opacity:0;pointer-events:none;transform:translateY(-8px) scale(0.96);transition:opacity .22s cubic-bezier(0.22,0.61,0.36,1), transform .22s cubic-bezier(0.22,0.61,0.36,1);">
                             <button class="m-export-item" data-f="md" style="display:block;width:100%;margin:0;text-align:center;background:transparent;color:#2563eb;border-radius:0;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;transition:border-color .18s ease, box-shadow .18s ease, background-color .18s ease;border:none;">Markdown</button>
                             <button class="m-export-item" data-f="html" style="display:block;width:100%;margin:0;text-align:center;background:transparent;color:#2563eb;border-radius:0;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;transition:border-color .18s ease, box-shadow .18s ease, background-color .18s ease;border:none;">HTML</button>
+                            <button class="m-export-item" data-f="html-dark" style="display:block;width:100%;margin:0;text-align:center;background:transparent;color:#2563eb;border-radius:0;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;transition:border-color .18s ease, box-shadow .18s ease, background-color .18s ease;border:none;">HTML(暗黑)</button>
                             <button class="m-export-item" data-f="txt" style="display:block;width:100%;margin:0;text-align:center;background:transparent;color:#2563eb;border-radius:0;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;transition:border-color .18s ease, box-shadow .18s ease, background-color .18s ease;border:none;">TXT</button>
                         </div>
                     </div>
@@ -16281,10 +16345,11 @@
                                 <button id="gpt-batch-export-menu-trigger" style="border:1px solid #2563eb;background:#fff;color:#2563eb;border-radius:8px;font-size:12px;padding:7px 12px;cursor:pointer;font-weight:700;display:flex;align-items:center;gap:6px;">
                                     <span>导出</span><span id="gpt-batch-export-menu-icon" style="opacity:.9;display:inline-flex;transition:transform .2s ease;transform:rotate(0deg);"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg></span>
                                 </button>
-                                <div id="gpt-batch-export-menu" style="position:absolute;right:0;top:36px;width:100px;background:rgba(255, 255, 255, 0.2);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);border:1px solid rgba(255,255,255,0.35);border-radius:10px;box-shadow:0 10px 30px rgba(15,23,42,.15);padding:0;z-index:7;opacity:0;pointer-events:none;transform:translateY(-8px) scale(0.96);transition:opacity .22s cubic-bezier(0.22,0.61,0.36,1), transform .22s cubic-bezier(0.22,0.61,0.36,1);">
+                                <div id="gpt-batch-export-menu" style="position:absolute;right:0;top:36px;width:120px;background:rgba(255, 255, 255, 0.2);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);border:1px solid rgba(255,255,255,0.35);border-radius:10px;box-shadow:0 10px 30px rgba(15,23,42,.15);padding:0;z-index:7;opacity:0;pointer-events:none;transform:translateY(-8px) scale(0.96);transition:opacity .22s cubic-bezier(0.22,0.61,0.36,1), transform .22s cubic-bezier(0.22,0.61,0.36,1);">
                                     <button class="gpt-batch-export-item" data-format="md" style="display:block;width:100%;margin:0;text-align:center;background:transparent;color:#2563eb;border-radius:0;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;transition:border-color .18s ease, box-shadow .18s ease, background-color .18s ease;border:none;">Markdown</button>
                                     <button class="gpt-batch-export-item" data-format="txt" style="display:block;width:100%;margin:0;text-align:center;background:transparent;color:#2563eb;border-radius:0;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;transition:border-color .18s ease, box-shadow .18s ease, background-color .18s ease;border:none;">TXT</button>
                                     <button class="gpt-batch-export-item" data-format="html" style="display:block;width:100%;margin:0;text-align:center;background:transparent;color:#2563eb;border-radius:0;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;transition:border-color .18s ease, box-shadow .18s ease, background-color .18s ease;border:none;">HTML</button>
+                                    <button class="gpt-batch-export-item" data-format="html-dark" style="display:block;width:100%;margin:0;text-align:center;background:transparent;color:#2563eb;border-radius:0;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;transition:border-color .18s ease, box-shadow .18s ease, background-color .18s ease;border:none;">HTML(暗黑)</button>
                                 </div>
                             </div>
                         </div>
@@ -16523,10 +16588,11 @@
                             <div style="display:flex;align-items:center;gap:8px;"><button id="cl-batch-toggle-select" style="border:1px solid #93c5fd;background:#eff6ff;border-radius:8px;font-size:12px;padding:8px 12px;cursor:pointer;color:#1d4ed8;font-weight:600;">全选</button></div>
                             <div style="position:relative;display:flex;justify-content:flex-end;align-items:center;">
                                 <button id="cl-batch-export-menu-trigger" style="border:1px solid #2563eb;background:#fff;color:#2563eb;border-radius:8px;font-size:12px;padding:7px 12px;cursor:pointer;font-weight:700;display:flex;align-items:center;gap:6px;"><span>导出</span><span id="cl-batch-export-menu-icon" style="opacity:.9;display:inline-flex;transition:transform .2s ease;transform:rotate(0deg);"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg></span></button>
-                                <div id="cl-batch-export-menu" style="position:absolute;right:0;top:36px;width:100px;background:rgba(255, 255, 255, 0.2);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);border:1px solid rgba(255,255,255,0.35);border-radius:10px;box-shadow:0 10px 30px rgba(15,23,42,.15);padding:0;z-index:7;opacity:0;pointer-events:none;transform:translateY(-8px) scale(0.96);transition:opacity .22s cubic-bezier(0.22,0.61,0.36,1), transform .22s cubic-bezier(0.22,0.61,0.36,1);">
+                                <div id="cl-batch-export-menu" style="position:absolute;right:0;top:36px;width:120px;background:rgba(255, 255, 255, 0.2);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);border:1px solid rgba(255,255,255,0.35);border-radius:10px;box-shadow:0 10px 30px rgba(15,23,42,.15);padding:0;z-index:7;opacity:0;pointer-events:none;transform:translateY(-8px) scale(0.96);transition:opacity .22s cubic-bezier(0.22,0.61,0.36,1), transform .22s cubic-bezier(0.22,0.61,0.36,1);">
                                     <button class="cl-batch-export-item" data-format="md" style="display:block;width:100%;margin:0;text-align:center;background:transparent;color:#2563eb;border-radius:0;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;border:none;">Markdown</button>
                                     <button class="cl-batch-export-item" data-format="txt" style="display:block;width:100%;margin:0;text-align:center;background:transparent;color:#2563eb;border-radius:0;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;border:none;">TXT</button>
                                     <button class="cl-batch-export-item" data-format="html" style="display:block;width:100%;margin:0;text-align:center;background:transparent;color:#2563eb;border-radius:0;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;border:none;">HTML</button>
+                                    <button class="cl-batch-export-item" data-format="html-dark" style="display:block;width:100%;margin:0;text-align:center;background:transparent;color:#2563eb;border-radius:0;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;border:none;">HTML(暗黑)</button>
                                 </div>
                             </div>
                         </div>
@@ -16954,10 +17020,11 @@
                                 <button id="ds-batch-export-menu-trigger" style="border:1px solid #2563eb;background:#fff;color:#2563eb;border-radius:8px;font-size:12px;padding:7px 12px;cursor:pointer;font-weight:700;display:flex;align-items:center;gap:6px;">
                                     <span>导出</span><span id="ds-batch-export-menu-icon" style="opacity:.9;display:inline-flex;transition:transform .2s ease;transform:rotate(0deg);"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg></span>
                                 </button>
-                                <div id="ds-batch-export-menu" style="position:absolute;right:0;top:36px;width:100px;background:rgba(255, 255, 255, 0.2);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);border:1px solid rgba(255,255,255,0.35);border-radius:10px;box-shadow:0 10px 30px rgba(15,23,42,.15);padding:0;z-index:7;opacity:0;pointer-events:none;transform:translateY(-8px) scale(0.96);transition:opacity .22s cubic-bezier(0.22,0.61,0.36,1), transform .22s cubic-bezier(0.22,0.61,0.36,1);">
+                                <div id="ds-batch-export-menu" style="position:absolute;right:0;top:36px;width:120px;background:rgba(255, 255, 255, 0.2);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);border:1px solid rgba(255,255,255,0.35);border-radius:10px;box-shadow:0 10px 30px rgba(15,23,42,.15);padding:0;z-index:7;opacity:0;pointer-events:none;transform:translateY(-8px) scale(0.96);transition:opacity .22s cubic-bezier(0.22,0.61,0.36,1), transform .22s cubic-bezier(0.22,0.61,0.36,1);">
                                     <button class="ds-batch-export-item" data-format="md" style="display:block;width:100%;margin:0;text-align:center;background:transparent;color:#2563eb;border-radius:0;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;transition:border-color .18s ease, box-shadow .18s ease, background-color .18s ease;border:none;">Markdown</button>
                                     <button class="ds-batch-export-item" data-format="txt" style="display:block;width:100%;margin:0;text-align:center;background:transparent;color:#2563eb;border-radius:0;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;transition:border-color .18s ease, box-shadow .18s ease, background-color .18s ease;border:none;">TXT</button>
                                     <button class="ds-batch-export-item" data-format="html" style="display:block;width:100%;margin:0;text-align:center;background:transparent;color:#2563eb;border-radius:0;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;transition:border-color .18s ease, box-shadow .18s ease, background-color .18s ease;border:none;">HTML</button>
+                                    <button class="ds-batch-export-item" data-format="html-dark" style="display:block;width:100%;margin:0;text-align:center;background:transparent;color:#2563eb;border-radius:0;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;transition:border-color .18s ease, box-shadow .18s ease, background-color .18s ease;border:none;">HTML(暗黑)</button>
                                 </div>
                             </div>
                         </div>
@@ -17272,10 +17339,11 @@
                                 <button id="db-batch-export-menu-trigger" style="border:1px solid #2563eb;background:#fff;color:#2563eb;border-radius:8px;font-size:12px;padding:7px 12px;cursor:pointer;font-weight:700;display:flex;align-items:center;gap:6px;">
                                     <span>导出</span><span id="db-batch-export-menu-icon" style="opacity:.9;display:inline-flex;transition:transform .2s ease;transform:rotate(0deg);"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg></span>
                                 </button>
-                                <div id="db-batch-export-menu" style="position:absolute;right:0;top:36px;width:100px;background:rgba(255, 255, 255, 0.2);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);border:1px solid rgba(255,255,255,0.35);border-radius:10px;box-shadow:0 10px 30px rgba(15,23,42,.15);padding:0;z-index:7;opacity:0;pointer-events:none;transform:translateY(-8px) scale(0.96);transition:opacity .22s cubic-bezier(0.22,0.61,0.36,1), transform .22s cubic-bezier(0.22,0.61,0.36,1);">
+                                <div id="db-batch-export-menu" style="position:absolute;right:0;top:36px;width:120px;background:rgba(255, 255, 255, 0.2);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);border:1px solid rgba(255,255,255,0.35);border-radius:10px;box-shadow:0 10px 30px rgba(15,23,42,.15);padding:0;z-index:7;opacity:0;pointer-events:none;transform:translateY(-8px) scale(0.96);transition:opacity .22s cubic-bezier(0.22,0.61,0.36,1), transform .22s cubic-bezier(0.22,0.61,0.36,1);">
                                     <button class="db-batch-export-item" data-format="md" style="display:block;width:100%;margin:0;text-align:center;background:transparent;color:#2563eb;border-radius:0;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;transition:border-color .18s ease, box-shadow .18s ease, background-color .18s ease;border:none;">Markdown</button>
                                     <button class="db-batch-export-item" data-format="txt" style="display:block;width:100%;margin:0;text-align:center;background:transparent;color:#2563eb;border-radius:0;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;transition:border-color .18s ease, box-shadow .18s ease, background-color .18s ease;border:none;">TXT</button>
                                     <button class="db-batch-export-item" data-format="html" style="display:block;width:100%;margin:0;text-align:center;background:transparent;color:#2563eb;border-radius:0;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;transition:border-color .18s ease, box-shadow .18s ease, background-color .18s ease;border:none;">HTML</button>
+                                    <button class="db-batch-export-item" data-format="html-dark" style="display:block;width:100%;margin:0;text-align:center;background:transparent;color:#2563eb;border-radius:0;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;transition:border-color .18s ease, box-shadow .18s ease, background-color .18s ease;border:none;">HTML(暗黑)</button>
                                 </div>
                             </div>
                         </div>
@@ -17556,6 +17624,7 @@
                                     <button class="qw-batch-export-item" data-format="md" style="display:block;width:100%;margin:0;text-align:center;background:#ffffff;color:#2563eb;border-radius:0;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;transition:border-color .18s ease, box-shadow .18s ease, background-color .18s ease;border:none;">Markdown</button>
                                     <button class="qw-batch-export-item" data-format="txt" style="display:block;width:100%;margin:0;text-align:center;background:#ffffff;color:#2563eb;border-radius:0;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;transition:border-color .18s ease, box-shadow .18s ease, background-color .18s ease;border:none;">TXT</button>
                                     <button class="qw-batch-export-item" data-format="html" style="display:block;width:100%;margin:0;text-align:center;background:#ffffff;color:#2563eb;border-radius:0;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;transition:border-color .18s ease, box-shadow .18s ease, background-color .18s ease;border:none;">HTML</button>
+                                    <button class="qw-batch-export-item" data-format="html-dark" style="display:block;width:100%;margin:0;text-align:center;background:#ffffff;color:#2563eb;border-radius:0;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;transition:border-color .18s ease, box-shadow .18s ease, background-color .18s ease;border:none;">HTML(暗黑)</button>
                                 </div>
                             </div>
                         </div>
@@ -17876,12 +17945,32 @@
             return { messages: normalized, source };
         }
 
+        function getCurrentConversationTitle() {
+            if (isDeepSeek && deepseekLastSessionMeta?.chatSession?.title) {
+                return String(deepseekLastSessionMeta.chatSession.title).trim();
+            }
+            const pageTitle = String(document.title || '').trim();
+            if (pageTitle) {
+                const cleaned = pageTitle
+                    .replace(/\s*[-–—|]\s*(ChatGPT|DeepSeek|Claude|豆包|通义千问|Qwen|Doubao).*$/i, '')
+                    .replace(/^(ChatGPT|DeepSeek|Claude|豆包|通义千问|Qwen|Doubao)\s*[-–—|]\s*/i, '')
+                    .trim();
+                return cleaned || pageTitle;
+            }
+            return '';
+        }
+
         // 处理文件保存逻辑
         async function handleExport(data, format) {
-            if (!['md', 'txt', 'html'].includes(String(format || '').trim())) {
+            if (!['md', 'txt', 'html', 'html-dark'].includes(String(format || '').trim())) {
                 throw new Error(`不支持的导出类型: ${format || '-'}`);
             }
-            const fileName = `${AI_NAME}_Export_${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '_')}`;
+            const conversationTitle = getCurrentConversationTitle();
+            const timestamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '_');
+            const rawName = conversationTitle
+                ? `${conversationTitle}_${AI_NAME}_Export_${timestamp}`
+                : `${AI_NAME}_Export_${timestamp}`;
+            const fileName = sanitizeExportFileName(rawName);
             let content = '';
             let type = 'text/plain;charset=utf-8';
             let ext = format;
@@ -18569,6 +18658,331 @@
                             </div>
                             ${deepSeekExportMeta && idx === 0 ? `
                                 <div style="margin:-12px 0 20px;padding:12px 14px;border:1px solid #dbeafe;border-radius:10px;background:#eff6ff;font-size:12px;color:#1e3a8a;line-height:1.7;">
+                                    <div style="font-weight:700;margin-bottom:6px;">DeepSeek 对话信息</div>
+                                    <div>会话ID: ${escapeHtml(deepSeekExportMeta.sessionId || '-')}</div>
+                                    <div>标题: ${escapeHtml(deepSeekExportMeta.title || '-')}</div>
+                                    <div>已置顶: ${deepSeekExportMeta.pinned ? '是' : '否'} | 深度思考: ${deepSeekExportMeta.thinkingEnabled ? '开启' : '关闭'} | 智能搜索: ${deepSeekExportMeta.searchEnabled ? '开启' : '关闭'}</div>
+                                    <div>创建时间: ${escapeHtml(deepSeekExportMeta.createdAt || '-')} | 更新时间: ${escapeHtml(deepSeekExportMeta.updatedAt || '-')}</div>
+                                </div>
+                            ` : ''}
+                            <div style="flex:1;">
+                                ${group.map(m => `
+                                    <div class="msg ${m.role}">
+                                        <div class="role-badge">
+                                            ${m.role === 'user' ? '🧑 USER QUESTION' : '🤖 ' + AI_NAME.toUpperCase() + ' RESPONSE'}
+                                        </div>
+                                        <div class="text">${isClaude ? renderClaudePartsToHtmlForPdf(m.parts, m.__displayText) : m.__html}</div>
+                                    </div>
+                                `).join('')}
+                            </div>
+                            <div class="footer">Exported via AI-Chat-Helper • ${new Date().toLocaleString()}</div>
+                        </div>
+                    `).join('')}
+                    <script>
+                        window.MathJax = {
+                            tex: { inlineMath: [['\\\\(', '\\\\)'], ['$', '$']], displayMath: [['\\\\[', '\\\\]'], ['$$', '$$']] },
+                            chtml: {},
+                            svg: {},
+                            options: { skipHtmlTags: ['script', 'noscript', 'style', 'textarea', 'pre', 'code'] }
+                        };
+                    </script>
+                    <script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+                </body></html>`;
+                content = html;
+                type = 'text/html;charset=utf-8';
+                ext = 'html';
+            } else if (format === 'html-dark') {
+                const groups = [];
+                for (let i = 0; i < preparedExportData.length; i++) {
+                    const turn = [preparedExportData[i]];
+                    if (preparedExportData[i].role === 'user') {
+                        while (i + 1 < preparedExportData.length && preparedExportData[i + 1].role === 'assistant') {
+                            turn.push(preparedExportData[i + 1]);
+                            i++;
+                        }
+                    }
+                    groups.push(turn);
+                }
+
+                const darkCss = `
+                    body {
+                        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+                        padding: 0;
+                        margin: 0;
+                        color: #E5E7EB;
+                        background: #17171A;
+                    }
+                    .page {
+                        padding: 50px 60px;
+                        page-break-after: always;
+                        min-height: 90vh;
+                        display: flex;
+                        flex-direction: column;
+                        max-width: 900px;
+                        margin: 0 auto;
+                        background: #232329;
+                        box-shadow: 0 0 40px rgba(0,0,0,0.4);
+                    }
+                    .page:last-child { page-break-after: auto; }
+                    .header {
+                        border-bottom: 3px solid #3B82F6;
+                        padding-bottom: 16px;
+                        margin-bottom: 40px;
+                        color: #93C5FD;
+                        display: grid;
+                        grid-template-columns: 1fr auto 1fr;
+                        align-items: end;
+                        column-gap: 12px;
+                    }
+                    .header .title {
+                        font-size: 24px;
+                        font-weight: 800;
+                        letter-spacing: -0.5px;
+                    }
+                    .header .platform {
+                        justify-self: center;
+                        font-size: 12px;
+                        font-weight: 700;
+                        color: #93C5FD;
+                        letter-spacing: 0.4px;
+                        padding: 4px 10px;
+                        border-radius: 999px;
+                        background: rgba(59, 130, 246, 0.15);
+                        border: 1px solid #2563EB;
+                        white-space: nowrap;
+                    }
+                    .header .ver {
+                        justify-self: end;
+                        font-size:12px;
+                        color:#8A8F98;
+                        font-weight:500;
+                        text-align: right;
+                    }
+                    .msg {
+                        margin-bottom: 25px;
+                        padding: 24px;
+                        border-radius: 16px;
+                        line-height: 1.6;
+                        position: relative;
+                        border: 1px solid #303038;
+                        transition: transform 0.2s;
+                    }
+                    .user {
+                        background: #2A3443;
+                        border-color: #2563EB;
+                    }
+                    .assistant {
+                        background: #282830;
+                        border-color: #303038;
+                        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.25);
+                    }
+                    .role-badge {
+                        display: flex;
+                        align-items: center;
+                        gap: 8px;
+                        font-size: 13px;
+                        font-weight: 700;
+                        margin-bottom: 14px;
+                        text-transform: uppercase;
+                        color: #8A8F98;
+                    }
+                    .user .role-badge { color: #60A5FA; }
+                    .assistant .role-badge { color: #D1D5DB; }
+                    .text {
+                        font-size: 14px;
+                        color: #D1D5DB;
+                        line-height: 1.7;
+                        word-break: break-word;
+                    }
+                    .text h1, .text h2, .text h3, .text h4, .text h5, .text h6 {
+                        margin: 16px 0 10px;
+                        color: #F3F4F6;
+                        line-height: 1.35;
+                    }
+                    .text h1 { font-size: 22px; }
+                    .text h2 { font-size: 20px; }
+                    .text h3 { font-size: 18px; }
+                    .text h4 { font-size: 16px; }
+                    .text h5 { font-size: 15px; }
+                    .text h6 { font-size: 14px; }
+                    .text hr {
+                        border: none;
+                        border-top: 1px solid #303038;
+                        margin: 16px 0;
+                    }
+                    pre, .qk-markdown pre, .markdown-body pre, [class*="code-block"] pre {
+                        background: #1E1E24 !important;
+                        color: #E5E7EB !important;
+                        padding: 16px;
+                        border-radius: 10px;
+                        overflow-x: auto;
+                        font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+                        margin: 15px 0;
+                        border: 1px solid #303038;
+                        display: block;
+                        font-size: 13px;
+                    }
+                    code {
+                        background: #303038;
+                        padding: 2px 5px;
+                        border-radius: 4px;
+                        font-family: "Consolas", "Monaco", "Courier New", monospace;
+                        color: #FB7185;
+                    }
+                    pre code { background: none; padding: 0; color: inherit; }
+                    .text a { color: #60A5FA; text-decoration: underline; }
+                    .claude-image-block {
+                        margin: 14px 0 18px;
+                        padding: 12px;
+                        border: 1px solid #2563EB;
+                        border-radius: 12px;
+                        background: rgba(59,130,246,0.08);
+                    }
+                    .claude-image-block img {
+                        display: block;
+                        max-width: 100%;
+                        max-height: 480px;
+                        width: auto;
+                        height: auto;
+                        margin: 0 auto;
+                        border-radius: 8px;
+                        border: 1px solid #303038;
+                        background: #17171A;
+                        object-fit: contain;
+                    }
+                    .claude-image-block figcaption {
+                        margin-top: 8px;
+                        font-size: 12px;
+                        color: #8A8F98;
+                        text-align: center;
+                    }
+                    .claude-inline-svg {
+                        display:flex;
+                        justify-content:center;
+                        align-items:center;
+                        padding:8px;
+                        border:1px solid #303038;
+                        border-radius:10px;
+                        background:#232329;
+                        overflow:auto;
+                    }
+                    .claude-inline-svg > svg { display:block; max-width:100%; height:auto; margin:0 auto; }
+                    .math-inline { white-space: normal; max-width: 100%; }
+                    .math-display {
+                        margin: 8px 0;
+                        padding: 0;
+                        background: transparent;
+                        border-left: none;
+                        overflow-x: auto;
+                        text-align: left;
+                    }
+                    td .math-display, th .math-display { margin: 4px 0; padding: 0; }
+                    td .math-inline mjx-container, th .math-inline mjx-container,
+                    td mjx-container[display="false"], th mjx-container[display="false"] {
+                        white-space: normal !important;
+                        max-width: 100%;
+                        overflow-wrap: anywhere;
+                    }
+                    td mjx-container[display="true"], th mjx-container[display="true"] {
+                        max-width: 100%;
+                        overflow-x: auto;
+                        overflow-y: hidden;
+                    }
+                    td mjx-container, th mjx-container {
+                        font-size: 0.94em !important;
+                    }
+                    .thought-process, blockquote {
+                        background: rgba(139, 92, 246, 0.08);
+                        border-radius: 12px;
+                        padding: 18px;
+                        margin: 15px 0;
+                        border: 1px dashed #8B5CF6;
+                        color: #D1D5DB;
+                        font-size: 13px;
+                        font-style: italic;
+                    }
+                    .thought-process::before {
+                        content: "✦ 深度思考过程";
+                        display: block;
+                        font-weight: 700;
+                        color: #A78BFA;
+                        margin-bottom: 8px;
+                        font-style: normal;
+                        font-size: 11px;
+                        text-transform: uppercase;
+                    }
+                    .table-wrap { width: 100%; overflow: hidden; margin: 15px 0; }
+                    table, .pdf-table {
+                        border-collapse: collapse;
+                        width: 100%;
+                        max-width: 100%;
+                        border: 1px solid #303038;
+                        font-size: 13px;
+                        table-layout: fixed;
+                    }
+                    thead { display: table-header-group; }
+                    tbody { display: table-row-group; }
+                    tr { break-inside: avoid; page-break-inside: avoid; }
+                    th, td {
+                        border: 1px solid #303038;
+                        padding: 9px 10px;
+                        text-align: left;
+                        vertical-align: top;
+                        white-space: normal;
+                        word-break: break-word;
+                        overflow-wrap: anywhere;
+                        line-height: 1.55;
+                    }
+                    th { background: #303038; font-weight: 700; color: #F3F4F6; }
+                    td { background: #232329; }
+                    ul, ol { padding-left: 24px; margin: 10px 0; }
+                    p { margin: 12px 0; }
+                    img { max-width: 100%; height: auto; border-radius: 8px; }
+                    .footer {
+                        margin-top: auto;
+                        padding-top: 20px;
+                        border-top: 1px solid #303038;
+                        text-align: right;
+                        font-size: 11px;
+                        color: #8A8F98;
+                    }
+                    @page { margin: 10mm; }
+                    @media print {
+                        html, body { background: #fff; color:#1a202c; margin: 0; padding: 0; }
+                        .page { background:#fff; box-shadow: none; padding: 24px; margin: 0 auto; width: 100%; max-width: 185mm; }
+                        .header { border-bottom:3px solid #3b82f6; color:#1e40af; }
+                        .header .platform { background:#eff6ff; border:1px solid #bfdbfe; color:#1d4ed8; }
+                        .user { background:#f0f9ff; border-color:#bae6fd; }
+                        .assistant { background:#fff; border-color:#f1f5f9; box-shadow:0 4px 6px -1px rgba(0,0,0,0.05); }
+                        .text { color:#334155; }
+                        .text h1,.text h2,.text h3,.text h4,.text h5,.text h6 { color:#0f172a; }
+                        .text hr { border-top:1px solid #cbd5e1; }
+                        code { background:#f1f5f9; color:#e11d48; }
+                        .text a { color:#1d4ed8; }
+                        .claude-image-block { background:#f8fbff; border:1px solid #dbeafe; }
+                        .claude-image-block img { background:#fff; border:1px solid #dbeafe; }
+                        .claude-inline-svg { background:#fff; border:1px solid #dbeafe; }
+                        .thought-process, blockquote { background:#f8fcfb; border:1px dashed #9333ea; color:#4b5563; }
+                        table, .pdf-table { border:1px solid #e2e8f0; }
+                        th { background:#f8fafc; color:#1a202c; }
+                        td { background:#fff; }
+                        .footer { border-top:1px solid #f1f5f9; color:#94a3b8; }
+                        .table-wrap { overflow: hidden; }
+                        table, .pdf-table { width: 100%; min-width: 0; max-width: 100%; table-layout: fixed; font-size: 12px; }
+                    }
+                `;
+
+                const html = `<html><head><title>对话记录导出 - ${AI_NAME} (暗黑模式)</title>
+                <style>${darkCss}</style></head><body>
+                    ${groups.map((group, idx) => `
+                        <div class="page">
+                            <div class="header">
+                                <div class="title">第 ${idx + 1} 轮对话</div>
+                                <div class="platform">${AI_NAME}</div>
+                                <div class="ver">AI Chat Helper Exporter v2.0.15</div>
+                            </div>
+                            ${deepSeekExportMeta && idx === 0 ? `
+                                <div style="margin:-12px 0 20px;padding:12px 14px;border:1px solid #2563EB;border-radius:10px;background:rgba(59,130,246,0.08);font-size:12px;color:#93C5FD;line-height:1.7;">
                                     <div style="font-weight:700;margin-bottom:6px;">DeepSeek 对话信息</div>
                                     <div>会话ID: ${escapeHtml(deepSeekExportMeta.sessionId || '-')}</div>
                                     <div>标题: ${escapeHtml(deepSeekExportMeta.title || '-')}</div>
