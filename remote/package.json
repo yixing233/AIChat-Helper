@@ -11,6 +11,12 @@
     "check": "pnpm run typecheck && pnpm run test"
   },
   "pnpm": {
-    "onlyBuiltDependencies": ["better-sqlite3", "esbuild"]
+    "onlyBuiltDependencies": [
+      "better-sqlite3",
+      "esbuild"
+    ],
+    "overrides": {
+      "fast-uri": "4.1.3"
+    }
   }
 }
