@@ -58,4 +58,4 @@ git checkout archive
 
 ## License
 
-旧代码（`archive` 等分支）沿用 [GPL-3.0](./LICENSE)。新仓库 GPTCraber 使用 MIT 协议。
+旧代码（`archive` 等分支）沿用 [GPL-3.0](./LICENSE)，新仓库 GPTCraber 同样使用 GPL-3.0。
