@@ -1,83 +1,61 @@
-# AI-Chat-Helper
+# AI-Chat-Helper（已迁移归档）
 
-一个用于主流 AI 聊天网站的用户脚本，提供对话节点导航、阅读定位、搜索与对话导出能力。
+> **本仓库已停止维护，请前往新仓库：[yixing233/GPTCraber](https://github.com/yixing233/GPTCraber)**
 
-## 功能简介
+`master` 分支现已清空为指引页，历史代码保留在 [归档分支](#旧代码在哪里) 中。
 
-- 对话节点导航（快速定位问答轮次）
-- 对话导出（HTML / Markdown / TXT）
-- 批量导出历史会话，按会话标题打包为 ZIP
-- 自动检查更新，并在更新弹窗中查看版本日志
-- 支持多平台页面适配：ChatGPT、通义千问、豆包、DeepSeek、Claude
+## 新仓库：GPTCraber 🦀
 
-## 导出说明
+**地址：<https://github.com/yixing233/GPTCraber>**
 
-当前导出格式统一为：
+GPTCraber 是一组按平台拆分的 Tampermonkey / Violentmonkey 用户脚本，把 AI 对话导出为结构化 Markdown，图片与上传文档尽量保存到本地。各平台脚本相互独立，按需安装即可。
 
-- HTML：直接生成可打开的 `.html` 文件，不再通过浏览器打印模拟 PDF。
-- Markdown：适合归档、二次编辑或放入知识库。
-- TXT：纯文本备份。
+### 脚本列表
 
-Claude 导出已做专项适配：
+| 脚本 | 平台 | 匹配域名 |
+| --- | --- | --- |
+| [chatgpt-md-exporter.user.js](https://github.com/yixing233/GPTCraber/blob/main/chatgpt-md-exporter.user.js) | ChatGPT | `chatgpt.com`、`chat.openai.com` |
+| [chatgpt-latex-smart-fix.user.js](https://github.com/yixing233/GPTCraber/blob/main/chatgpt-latex-smart-fix.user.js) | ChatGPT 公式渲染 | `chatgpt.com`、`chat.openai.com` |
+| [doubao-md-exporter.user.js](https://github.com/yixing233/GPTCraber/blob/main/doubao-md-exporter.user.js) | 豆包 | `www.doubao.com` |
+| [deepseek-md-exporter.user.js](https://github.com/yixing233/GPTCraber/blob/main/deepseek-md-exporter.user.js) | DeepSeek | `chat.deepseek.com` |
+| [tongyi-md-exporter.user.js](https://github.com/yixing233/GPTCraber/blob/main/tongyi-md-exporter.user.js) | 通义千问 | `www.qianwen.com`、`www.tongyi.com`、`tongyi.aliyun.com` |
+| [gemini-md-exporter.user.js](https://github.com/yixing233/GPTCraber/blob/main/gemini-md-exporter.user.js) | Gemini | `gemini.google.com` |
 
-- 支持从 Claude API 消息结构中提取文本、图片、工具调用和文件附件。
-- 支持 `visualize:show_widget` 这类 HTML Widget 的静态快照导出。
-- Markdown 导出会尽量内嵌 Widget 快照，同时保留 HTML 附件链接。
-- ZIP 导出中，Markdown 对 HTML 附件使用 `files/xxx.html` 相对路径。
-- 导出前会移除 Claude 建议提示词按钮，例如 `sendPrompt(...)` 触发的快捷提问按钮。
+安装步骤、功能对照表与常见问题详见新仓库的 [README](https://github.com/yixing233/GPTCraber#readme)。
 
-## 安装教程（Tampermonkey）
+### 主要能力
 
-### 1. 安装 Tampermonkey 扩展
+- 勾选回合导出当前会话，导出前可预览渲染后的 Markdown
+- 多会话批量导出并打包为 ZIP，支持近 7 / 15 / 30 天与自定义日期区间筛选
+- 图片、上传文档本地化，联网引用来源保留
+- 思考过程可选导出（豆包 / DeepSeek / 通义千问）
+- 单条回复快捷导出（回复栏 🦀 按钮）
+- 全部处理在本地浏览器完成，不上传第三方
 
-1. 通过对应浏览器商店安装 Tampermonkey：
-   - <img src="./assets/microsoft-edge.svg" alt="Microsoft Edge" width="18" /> [![Microsoft Edge | 安装 Tampermonkey](https://img.shields.io/badge/Microsoft%20Edge%C2%A0-%E5%AE%89%E8%A3%85%20Tampermonkey-0078D4?style=for-the-badge)](https://microsoftedge.microsoft.com/addons/detail/%E7%AF%A1%E6%94%B9%E7%8C%B4/iikmkjmpaadaobahmlepeloendndfphd?hl=zh-CN)
-   - <img src="./assets/google-chrome.svg" alt="Google Chrome" width="18" /> [![Google Chrome | 安装 Tampermonkey](https://img.shields.io/badge/Google%20Chrome%C2%A0%C2%A0-%E5%AE%89%E8%A3%85%20Tampermonkey-4285F4?style=for-the-badge)](https://chromewebstore.google.com/detail/tampermonkey/dhdgffkkebhmkfjojejmpbldmpobfkfo?hl=zh-CN&utm_source=ext_sidebar)
-   - <img src="./assets/mozilla-firefox.svg" alt="Mozilla Firefox" width="18" /> [![Mozilla Firefox | 安装 Tampermonkey](https://img.shields.io/badge/Mozilla%20Firefox-%E5%AE%89%E8%A3%85%20Tampermonkey-FF7139?style=for-the-badge)](https://addons.mozilla.org/zh-CN/firefox/addon/tampermonkey/?utm_source=addons.mozilla.org&utm_medium=referral&utm_content=search)
+## 旧代码在哪里
 
-2. 安装完成后，在扩展管理页面确认 Tampermonkey 已启用。
+原 `master` 分支的完整内容已迁移至 `archive` 分支，历史提交与文件均保留。另有两个方向分支：
 
-### 2. 在 Edge / Chrome 中开启开发者模式（重要）
+| 分支 | 内容 |
+| --- | --- |
+| [`archive`](https://github.com/yixing233/AIChat-Helper/tree/archive) | 原 `master` 快照：`AIChat-Helper.user.js`（v2.0.15 用户脚本）、`extension/`（MV3 扩展）、`remote/`（同步服务）、`assets/`、`docs/` |
+| [`tampermonkey-script`](https://github.com/yixing233/AIChat-Helper/tree/tampermonkey-script) | 用户脚本方向的开发分支 |
+| [`browser-extension`](https://github.com/yixing233/AIChat-Helper/tree/browser-extension) | 浏览器扩展方向的开发分支 |
 
-Tampermonkey 在 Microsoft Edge 和 Chrome 中要正常生效，通常需要在浏览器扩展页启用 **开发者模式**：
+查阅旧实现时检出归档分支即可：
 
-1. Microsoft Edge：打开 `edge://extensions/`，开启页面中的 **开发人员模式** 开关。
-2. Google Chrome：打开 `chrome://extensions/`，开启页面中的 **开发者模式** 开关。
+```bash
+git clone https://github.com/yixing233/AIChat-Helper.git
+cd AIChat-Helper
+git checkout archive
+```
 
-### 3. 启用“允许用户脚本”（重要）
+注意：原脚本 `AIChat-Helper.user.js` 的 `@updateURL` 指向本仓库 `master` 分支，该文件已不在 `master` 中，**已安装的旧脚本不会再收到更新**，请改用 GPTCraber 中的对应脚本。
 
-在 Edge 扩展管理中，找到 Tampermonkey，并启用“允许用户脚本”。
+## 为什么迁移
 
-请注意以下风险提示（请原文阅读）：
+原 `AIChat-Helper.user.js` 由单个文件同时承担五个平台的适配，体积与维护成本持续上升；浏览器扩展与同步服务两条路线也未能落地为稳定的发布形态。GPTCraber 改为按平台拆分独立脚本，任一平台改版时只影响对应脚本，更易维护与验证。
 
-> 此扩展能运行未经 Microsoft Edge 评审的代码，可能会使你的设备或数据面临风险。仅在你完全信任此扩展的情况下启用此扩展。
+## License
 
-### 4. 安装本脚本
-
-1. 安装并启用 Tampermonkey 后，直接访问：
-
-   [![安装 AI-Chat-Helper 脚本](https://img.shields.io/badge/GitHub-一键安装%20AI--Chat--Helper-1E80FF?style=for-the-badge&logo=github&logoColor=white)](https://github.com/yixing233/AIChat-Helper/raw/master/AIChat-Helper.user.js)
-
-2. 浏览器会自动唤起 Tampermonkey 安装页面，点击“安装”即可。
-3. 刷新目标 AI 聊天页面，确认脚本已生效。
-
-## 常见问题
-
-- 脚本未生效：
-  - 检查 Tampermonkey 扩展是否启用。
-  - 检查 Edge 是否已开启开发者模式。
-  - 检查 Tampermonkey 是否已开启“允许用户脚本”。
-  - 检查脚本匹配站点（`@match`）是否包含当前页面。
-
-- Claude 流程图或交互演示没有出现在导出内容中：
-  - 优先刷新页面后重新导出，确保脚本能重新读取 Claude API 消息。
-  - 如果 Widget 只以 HTML 附件形式存在，脚本会尝试从附件 URL 或近期下载缓存恢复内容。
-  - 跨域 iframe 内容无法直接读取时，导出会优先使用 API 中的 `widget_code` 或已缓存 HTML。
-
-- 为什么不再提供 PDF / JSON / CSV：
-  - 原 PDF 入口实际是可打印 HTML，现已改为直接导出 HTML。
-  - JSON / CSV 已移除，避免平台差异导致结构丢失或内容不可读。
-
-## 免责声明
-
-本项目仅供学习与效率提升使用。请遵守目标网站服务条款与相关法律法规。
+旧代码（`archive` 等分支）沿用 [GPL-3.0](./LICENSE)。新仓库 GPTCraber 使用 MIT 协议。
